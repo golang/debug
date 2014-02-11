@@ -4,8 +4,13 @@
 
 // Package probe is imported by programs to provide (possibly remote)
 // access to a separate debugger program.
-package main
+package probe
 
+import (
+	"unsafe"
+)
+
+// Defined in assembler.
 func base() uintptr
 func etext() uintptr
 func edata() uintptr
@@ -49,4 +54,30 @@ func validWrite(p uintptr, size int) bool {
 		return heapStart() <= p && p <= heapUsed()
 	}
 	return false
+}
+
+// read copies into the argument buffer the contents of memory starting at address p.
+// Its boolean return tells whether it succeeded. If it fails, no bytes were copied.
+func read(p uintptr, buf []byte) bool {
+	if !validRead(p, len(buf)) {
+		return false
+	}
+	for i := range buf {
+		buf[i] = *(*byte)(unsafe.Pointer(p))
+		p++
+	}
+	return true
+}
+
+// write copies the argument buffer to memory starting at address p.
+// Its boolean return tells whether it succeeded. If it fails, no bytes were copied.
+func write(p uintptr, buf []byte) bool {
+	if !validWrite(p, len(buf)) {
+		return false
+	}
+	for i := range buf {
+		*(*byte)(unsafe.Pointer(p)) = buf[i]
+		p++
+	}
+	return true
 }
