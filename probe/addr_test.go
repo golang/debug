@@ -24,6 +24,13 @@ func addr(p interface{}) uintptr {
 	}
 }
 
+func TestHeapRange(t *testing.T) {
+	p := addr(new(int)) // On the heap.
+	if p < heapStart() || heapUsed() <= p {
+		t.Fatalf("%#x is not in [%#x, %#x)", p, heapStart(), heapUsed())
+	}
+}
+
 func TestGoodReadAddresses(t *testing.T) {
 	addrs := []uintptr{
 		base(),
