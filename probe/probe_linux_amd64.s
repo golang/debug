@@ -40,9 +40,9 @@ TEXT ·end(SB), NOSPLIT, $0
 
 // These are offsets of critical fields of runtime.mheap.
 // TODO: Very susceptible to change! They (or something equivalent) need to be published by runtime.
-#define arena_start_offset 28840
-#define arena_used_offset 28848
-#define arena_end_offset 28856
+#define arena_start_offset 14504
+#define arena_used_offset 14512
+#define arena_end_offset 14520
 
 // start of heap.
 TEXT ·heapStart(SB), NOSPLIT, $0
