@@ -90,6 +90,7 @@ type span struct {
 
 func TestReadAddressSpan(t *testing.T) {
 	spans := []span{
+		{base(), 0, true},
 		{base(), 1, true},
 		{base(), 4096, true},
 		{base(), int(heapStart() - base()), false},
@@ -107,6 +108,7 @@ func TestReadAddressSpan(t *testing.T) {
 
 func TestWriteAddressSpan(t *testing.T) {
 	spans := []span{
+		{etext(), 0, true},
 		{etext(), 1, true},
 		{etext(), 4096, true},
 		{etext(), int(heapStart() - base()), false},

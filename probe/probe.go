@@ -22,7 +22,7 @@ func heapEnd() uintptr
 
 // validRead reports whether a read of the specified size can be done at address p.
 func validRead(p uintptr, size int) bool {
-	if size <= 0 {
+	if size < 0 {
 		return false
 	}
 	// The read must be in a single contiguous valid region.
@@ -40,7 +40,7 @@ func validRead(p uintptr, size int) bool {
 
 // validWrite reports whether a write of the specified size can be done at address p.
 func validWrite(p uintptr, size int) bool {
-	if size <= 0 {
+	if size < 0 {
 		return false
 	}
 	// The write must be in a single contiguous valid region.
