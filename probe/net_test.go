@@ -8,8 +8,11 @@ import (
 	"bufio"
 	"io"
 	"net"
+	"os"
 	"testing"
 	"unsafe"
+
+	"code.google.com/p/ogle/socket"
 )
 
 // traceThisFunction turns on tracing and returns a function to turn it off.
@@ -36,7 +39,8 @@ func (c *Conn) close() {
 // newConn makes a connection.
 func newConn(t *testing.T) *Conn {
 	// defer traceThisFunction()()
-	conn, err := net.Dial("tcp", "localhost"+port)
+	<-listening
+	conn, err := socket.Dial(os.Getuid(), os.Getpid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,4 +223,11 @@ func TestBigRead(t *testing.T) {
 			t.Fatalf("at offset %d expected %#x; got %#x", i, c, tmp[i])
 		}
 	}
+}
+
+// TestCollectGarbage doesn't actually test anything, but it does collect any
+// garbage sockets that are no longer used. It is a courtesy for computers that
+// run this test suite often.
+func TestCollectGarbage(t *testing.T) {
+	socket.CollectGarbage()
 }

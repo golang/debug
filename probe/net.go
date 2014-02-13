@@ -10,14 +10,16 @@ import (
 	"errors"
 	"io" // Used only for the definitions of the various interfaces and errors.
 	"net"
+
+	"code.google.com/p/ogle/socket"
 )
 
 var (
-	port    = ":54321" // TODO: how to choose port number?
-	tracing = false
+	tracing   = false
+	listening = make(chan struct{})
 )
 
-// init starts a network listener and leaves it in the background waiting for connections.
+// init starts a listener and leaves it in the background waiting for connections.
 func init() {
 	go demon()
 }
@@ -26,7 +28,8 @@ func init() {
 // The server runs in the same goroutine as the demon, so a new connection cannot be
 // established until the previous one is completed.
 func demon() {
-	listener, err := net.Listen("tcp", port)
+	listener, err := socket.Listen()
+	close(listening)
 	if err != nil {
 		trace("listen:", err)
 		return
