@@ -174,7 +174,7 @@ func TestBigRead(t *testing.T) {
 	conn := newConn(t)
 	defer conn.close()
 
-	// A big array.
+	// A big slice.
 	data := make([]byte, 3*len(pipe{}.buf))
 	noise := 17
 	for i := range data {
@@ -183,13 +183,13 @@ func TestBigRead(t *testing.T) {
 	}
 	// TODO: To be righteous we should put a memory barrier here.
 
-	// Read the elements in pseudo-random order.
+	// Read the elements in one big call.
 	tmp := make([]byte, len(data))
 	conn.output.WriteByte('r')
 	// Address.
 	n := putUvarint(tmp[:], uint64(addr(&data[0])))
 	conn.output.Write(tmp[:n])
-	// Length
+	// Length.
 	n = putUvarint(tmp[:], uint64(len(data)))
 	conn.output.Write(tmp[:n])
 	// Send it.
