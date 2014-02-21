@@ -73,7 +73,7 @@ func TestReadBadAddress(t *testing.T) {
 	// Request a read of a bad address.
 	conn.output.WriteByte('r')
 	// Address.
-	n := putUvarint(tmp[:], uint64(base()-8))
+	n := putUvarint(tmp[:], 0)
 	conn.output.Write(tmp[:n])
 	// Length. Any length will do.
 	n = putUvarint(tmp[:], 8)

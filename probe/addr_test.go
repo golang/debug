@@ -9,6 +9,12 @@ import (
 	"testing"
 )
 
+// Defined in assembler.
+func base() uintptr
+func etext() uintptr
+func edata() uintptr
+func end() uintptr
+
 var dataItem = 3
 var bssItem [100]int
 
@@ -24,20 +30,12 @@ func addr(p interface{}) uintptr {
 	}
 }
 
-func TestHeapRange(t *testing.T) {
-	p := addr(new(int)) // On the heap.
-	if p < heapStart() || heapUsed() <= p {
-		t.Fatalf("%#x is not in [%#x, %#x)", p, heapStart(), heapUsed())
-	}
-}
-
 func TestGoodReadAddresses(t *testing.T) {
 	addrs := []uintptr{
 		base(),
 		addr(&t),        // On the stack.
 		addr(&dataItem), // In data.
 		addr(&bssItem),  // In bss.
-		heapUsed() - 1,
 	}
 	for _, a := range addrs {
 		if !validRead(a, 1) {
@@ -49,8 +47,7 @@ func TestGoodReadAddresses(t *testing.T) {
 func TestBadReadAddresses(t *testing.T) {
 	addrs := []uintptr{
 		0,
-		base() - 1,
-		heapUsed() + 1,
+		base()/2 - 1, // Pull well down below; the Mac only unmaps up to 0x1000.
 		^uintptr(0),
 	}
 	for _, a := range addrs {
@@ -65,7 +62,6 @@ func TestGoodWriteAddresses(t *testing.T) {
 		addr(&t),        // On the stack.
 		addr(&dataItem), // In data.
 		addr(&bssItem),  // In bss.
-		heapUsed() - 1,
 	}
 	for _, a := range addrs {
 		if !validWrite(a, 1) {
@@ -79,54 +75,11 @@ func TestBadWriteAddresses(t *testing.T) {
 		0,
 		base(), // In the text segment.
 		base() - 1,
-		heapUsed(),
 		^uintptr(0),
 	}
 	for _, a := range addrs {
 		if validWrite(a, 1) {
 			t.Errorf("%#x is valid; should be invalid", a)
-		}
-	}
-}
-
-type span struct {
-	p    uintptr
-	size int
-	ok   bool
-}
-
-func TestReadAddressSpan(t *testing.T) {
-	spans := []span{
-		{base(), 0, true},
-		{base(), 1, true},
-		{base(), 4096, true},
-		{base(), int(heapStart() - base()), false},
-		{base(), 1e9, false},
-		{heapStart(), 1, true},
-		{heapStart(), 4096, true},
-		{heapStart(), 1e9, false},
-	}
-	for _, s := range spans {
-		if validRead(s.p, s.size) != s.ok {
-			t.Errorf("(%#x,%d) should be %t; is %t", s.p, s.size, s.ok, !s.ok)
-		}
-	}
-}
-
-func TestWriteAddressSpan(t *testing.T) {
-	spans := []span{
-		{etext(), 0, true},
-		{etext(), 1, true},
-		{etext(), 4096, true},
-		{etext(), int(heapStart() - base()), false},
-		{etext(), 1e9, false},
-		{heapStart(), 1, true},
-		{heapStart(), 4096, true},
-		{heapStart(), 1e9, false},
-	}
-	for _, s := range spans {
-		if validWrite(s.p, s.size) != s.ok {
-			t.Errorf("(%#x,%d) should be %t; is %t", s.p, s.size, s.ok, !s.ok)
 		}
 	}
 }

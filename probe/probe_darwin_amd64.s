@@ -36,27 +36,3 @@ TEXT ·end(SB), NOSPLIT, $0
 	LEAQ	end+0(SB), BX
 	MOVQ	BX, ret+0(FP)
 	RET
-
-// These are offsets of critical fields of runtime.mheap.
-// TODO: Very susceptible to change! They (or something equivalent) need to be published by runtime.
-#define arena_start_offset 14504
-#define arena_used_offset 14512
-#define arena_end_offset 14520
-
-// start of heap.
-TEXT ·heapStart(SB), NOSPLIT, $0
-	MOVQ	runtime·mheap+arena_start_offset(SB), BX
-	MOVQ	BX, ret+0(FP)
-	RET
-
-// end of active region of heap.
-TEXT ·heapUsed(SB), NOSPLIT, $0
-	MOVQ	runtime·mheap+arena_used_offset(SB), BX
-	MOVQ	BX, ret+0(FP)
-	RET
-
-// end of all of heap.
-TEXT ·heapEnd(SB), NOSPLIT, $0
-	MOVQ	runtime·mheap+arena_end_offset(SB), BX
-	MOVQ	BX, ret+0(FP)
-	RET

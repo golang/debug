@@ -7,63 +7,58 @@
 package probe
 
 import (
+	"runtime/debug"
 	"unsafe"
 )
 
-// Defined in assembler.
-func base() uintptr
-func etext() uintptr
-func edata() uintptr
-func end() uintptr
-
-func heapStart() uintptr
-func heapUsed() uintptr
-func heapEnd() uintptr
+// catchFault is used by the read and write routines to turn a panic into an error return.
+func catchFault(ok *bool) {
+	if e := recover(); e != nil {
+		*ok = false
+	}
+}
 
 // validRead reports whether a read of the specified size can be done at address p.
-func validRead(p uintptr, size int) bool {
+// TODO: It does this by actually doing the read and seeing if it succeeds. Do better.
+func validRead(p uintptr, size int) (ok bool) {
 	// Check for negative size and for (p + size) overflow.
 	if size < 0 || uint64(^uintptr(0)-p) < uint64(size) {
 		return false
 	}
-	// The read must be in a single contiguous valid region.
-	switch {
-	case base() <= p && p < end():
-		// Assumes text is before data, but ld's binaries always satisfy that constraint.
-		p += uintptr(size)
-		return base() <= p && p <= end()
-	case heapStart() <= p && p < heapUsed(): // Don't allow reads past the used part of the heap.
-		p += uintptr(size)
-		return heapStart() <= p && p <= heapUsed()
+	defer catchFault(&ok)
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
+	ep := p + uintptr(size)
+	var b byte
+	for p < ep {
+		b = *(*byte)(unsafe.Pointer(p))
+		_ = b
+		p++
 	}
-	return false
+	return true
 }
 
 // validWrite reports whether a write of the specified size can be done at address p.
-func validWrite(p uintptr, size int) bool {
+// TODO: It does this by actually doing a write and seeing if it succeeds. Do better.
+func validWrite(p uintptr, size int) (ok bool) {
 	// Check for negative size and for (p + size) overflow.
 	if size < 0 || uint64(^uintptr(0)-p) < uint64(size) {
 		return false
 	}
-	// The write must be in a single contiguous valid region.
-	switch {
-	case etext() <= p && p < end():
-		// Assumes text is before data, but ld's binaries always satisfy that constraint.
-		p += uintptr(size)
-		return etext() <= p && p <= end()
-	case heapStart() <= p && p < heapUsed(): // Don't allow writes past the used part of the heap.
-		p += uintptr(size)
-		return heapStart() <= p && p <= heapUsed()
+	defer catchFault(&ok)
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
+	ep := p + uintptr(size)
+	for p < ep {
+		*(*byte)(unsafe.Pointer(p)) = *(*byte)(unsafe.Pointer(p))
+		p++
 	}
-	return false
+	return true
 }
 
 // read copies into the argument buffer the contents of memory starting at address p.
 // Its boolean return tells whether it succeeded. If it fails, no bytes were copied.
-func read(p uintptr, buf []byte) bool {
-	if !validRead(p, len(buf)) {
-		return false
-	}
+func read(p uintptr, buf []byte) (ok bool) {
+	defer catchFault(&ok)
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
 	for i := range buf {
 		buf[i] = *(*byte)(unsafe.Pointer(p))
 		p++
@@ -73,10 +68,9 @@ func read(p uintptr, buf []byte) bool {
 
 // write copies the argument buffer to memory starting at address p.
 // Its boolean return tells whether it succeeded. If it fails, no bytes were copied.
-func write(p uintptr, buf []byte) bool {
-	if !validWrite(p, len(buf)) {
-		return false
-	}
+func write(p uintptr, buf []byte) (ok bool) {
+	defer catchFault(&ok)
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
 	for i := range buf {
 		*(*byte)(unsafe.Pointer(p)) = buf[i]
 		p++
