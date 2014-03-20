@@ -63,12 +63,16 @@ type Program interface {
 	//	"main.main"  Start of function
 	//	"main.go:23" Line number
 	//	(more to follow; may want an expression grammar)
-	// It is an OK if two breakpoints evaluate to the same PC. (TODO: verify.)
+	// It is OK if two breakpoints evaluate to the same PC. (TODO: verify.)
 	Breakpoint(address string) error
 
 	// DeleteBreakpoint removes the breakpoint at the specified
 	// address.
 	DeleteBreakpoint(address string) error
+
+	// Eval evaluates the expression (typically an address) and returns
+	// its string representation.
+	Eval(expr string) (string, error)
 }
 
 // The File interface provides access to file-like resources in the program.

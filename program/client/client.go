@@ -182,6 +182,15 @@ func (p *Program) DeleteBreakpoint(address string) error {
 	panic("unimplemented")
 }
 
+func (p *Program) Eval(expr string) (string, error) {
+	req := proxyrpc.EvalRequest{
+		Expr: expr,
+	}
+	var resp proxyrpc.EvalResponse
+	err := p.client.Call("Server.Eval", &req, &resp)
+	return resp.Result, err
+}
+
 // File implements the program.File interface, providing access
 // to file-like resources associated with the target program.
 type File struct {

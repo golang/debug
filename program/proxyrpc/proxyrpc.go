@@ -48,3 +48,11 @@ type OpenRequest struct {
 type OpenResponse struct {
 	FD int
 }
+
+type EvalRequest struct {
+	Expr string
+}
+
+type EvalResponse struct {
+	Result string
+}

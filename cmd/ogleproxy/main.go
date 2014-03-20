@@ -29,15 +29,14 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	fd, err := os.Open(*textFlag)
+	s, err := server.New(*textFlag)
 	if err != nil {
-		fmt.Printf("OGLE BAD\n%s\n", err)
+		fmt.Println("OGLE BAD\n%s\n", err)
 		os.Exit(2)
 	}
-	fd.Close()
-	err = rpc.Register(&server.Server{})
+	err = rpc.Register(s)
 	if err != nil {
-		fmt.Printf("OGLE BAD\n%s\n", err)
+		fmt.Println("OGLE BAD\n%s\n", err)
 		os.Exit(2)
 	}
 	fmt.Println("OGLE OK")

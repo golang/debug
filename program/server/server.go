@@ -10,13 +10,104 @@ import (
 	"fmt"
 	"os"
 
+	"debug/elf"
+	"debug/macho"
+	"debug/pe"
+
+	"code.google.com/p/ogle/gosym"
 	"code.google.com/p/ogle/program"
 	"code.google.com/p/ogle/program/proxyrpc"
 )
 
 type Server struct {
+	executable string // Name of executable.
+	lines      *gosym.LineTable
+	symbols    *gosym.Table
 	// TODO: Needs mutex.
 	files []*file // Index == file descriptor.
+}
+
+// New parses the executable and builds local data structures for answering requests.
+// It returns a Server ready to serve requests about the executable.
+func New(executable string) (*Server, error) {
+	fd, err := os.Open(executable)
+	if err != nil {
+		return nil, err
+	}
+	defer fd.Close()
+	textStart, symtab, pclntab, err := loadTables(fd)
+	if err != nil {
+		return nil, err
+	}
+	lines := gosym.NewLineTable(pclntab, textStart)
+	symbols, err := gosym.NewTable(symtab, lines)
+	if err != nil {
+		return nil, err
+	}
+	srv := &Server{
+		executable: executable,
+		lines:      lines,
+		symbols:    symbols,
+	}
+	return srv, nil
+}
+
+// This function is copied from $GOROOT/src/cmd/addr2line/main.go.
+// TODO: Make this architecture-defined? Push into gosym?
+// TODO: Why is the .gosymtab always empty?
+func loadTables(f *os.File) (textStart uint64, symtab, pclntab []byte, err error) {
+	if obj, err := elf.NewFile(f); err == nil {
+		if sect := obj.Section(".text"); sect != nil {
+			textStart = sect.Addr
+		}
+		if sect := obj.Section(".gosymtab"); sect != nil {
+			if symtab, err = sect.Data(); err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		if sect := obj.Section(".gopclntab"); sect != nil {
+			if pclntab, err = sect.Data(); err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		return textStart, symtab, pclntab, nil
+	}
+
+	if obj, err := macho.NewFile(f); err == nil {
+		if sect := obj.Section("__text"); sect != nil {
+			textStart = sect.Addr
+		}
+		if sect := obj.Section("__gosymtab"); sect != nil {
+			if symtab, err = sect.Data(); err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		if sect := obj.Section("__gopclntab"); sect != nil {
+			if pclntab, err = sect.Data(); err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		return textStart, symtab, pclntab, nil
+	}
+
+	if obj, err := pe.NewFile(f); err == nil {
+		if sect := obj.Section(".text"); sect != nil {
+			textStart = uint64(sect.VirtualAddress)
+		}
+		if sect := obj.Section(".gosymtab"); sect != nil {
+			if symtab, err = sect.Data(); err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		if sect := obj.Section(".gopclntab"); sect != nil {
+			if pclntab, err = sect.Data(); err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		return textStart, symtab, pclntab, nil
+	}
+
+	return 0, nil, nil, fmt.Errorf("unrecognized binary format")
 }
 
 type file struct {
@@ -80,5 +171,16 @@ func (s *Server) Close(req *proxyrpc.CloseRequest, resp *proxyrpc.CloseResponse)
 	// Remove it regardless
 	s.files[fd] = nil
 	return err
+}
 
+func (s *Server) Eval(req *proxyrpc.EvalRequest, resp *proxyrpc.EvalResponse) error {
+	expr := req.Expr
+	// Simple version: Turn symbol into address. Must be function.
+	// TODO: Why is Table.Syms always empty?
+	sym := s.symbols.LookupFunc(expr)
+	if sym == nil {
+		return fmt.Errorf("symbol %q not found")
+	}
+	resp.Result = fmt.Sprintf("%#x", sym.Value)
+	return nil
 }
