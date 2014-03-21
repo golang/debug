@@ -6,6 +6,8 @@
 // used to the ogleproxy.
 package proxyrpc
 
+import "code.google.com/p/ogle/program"
+
 // For regularity, each method has a unique Request and a Response type even
 // when not strictly necessary.
 
@@ -47,6 +49,28 @@ type OpenRequest struct {
 
 type OpenResponse struct {
 	FD int
+}
+
+type RunRequest struct {
+	Start bool
+}
+
+type RunResponse struct {
+	Status program.Status
+}
+
+type ResumeRequest struct {
+}
+
+type ResumeResponse struct {
+	Status program.Status
+}
+
+type BreakpointRequest struct {
+	Address string
+}
+
+type BreakpointResponse struct {
 }
 
 type EvalRequest struct {

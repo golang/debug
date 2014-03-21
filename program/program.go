@@ -87,5 +87,5 @@ type File interface {
 }
 
 type Status struct {
-	// TBD
+	PC, SP uint64
 }

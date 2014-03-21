@@ -159,7 +159,15 @@ func (p *Program) SetArguments(args ...string) {
 }
 
 func (p *Program) Run(start bool) (program.Status, error) {
-	panic("unimplemented")
+	req := proxyrpc.RunRequest{
+		Start: start,
+	}
+	var resp proxyrpc.RunResponse
+	err := p.client.Call("Server.Run", &req, &resp)
+	if err != nil {
+		return program.Status{}, err
+	}
+	return resp.Status, nil
 }
 
 func (p *Program) Stop() (program.Status, error) {
@@ -167,7 +175,13 @@ func (p *Program) Stop() (program.Status, error) {
 }
 
 func (p *Program) Resume() (program.Status, error) {
-	panic("unimplemented")
+	req := proxyrpc.ResumeRequest{}
+	var resp proxyrpc.ResumeResponse
+	err := p.client.Call("Server.Resume", &req, &resp)
+	if err != nil {
+		return program.Status{}, err
+	}
+	return resp.Status, nil
 }
 
 func (p *Program) Kill() (program.Status, error) {
@@ -175,7 +189,11 @@ func (p *Program) Kill() (program.Status, error) {
 }
 
 func (p *Program) Breakpoint(address string) error {
-	panic("unimplemented")
+	req := proxyrpc.BreakpointRequest{
+		Address: address,
+	}
+	var resp proxyrpc.BreakpointResponse
+	return p.client.Call("Server.Breakpoint", &req, &resp)
 }
 
 func (p *Program) DeleteBreakpoint(address string) error {
