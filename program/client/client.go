@@ -200,7 +200,7 @@ func (p *Program) DeleteBreakpoint(address string) error {
 	panic("unimplemented")
 }
 
-func (p *Program) Eval(expr string) (string, error) {
+func (p *Program) Eval(expr string) ([]string, error) {
 	req := proxyrpc.EvalRequest{
 		Expr: expr,
 	}

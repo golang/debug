@@ -50,6 +50,13 @@ func (s *Server) ptraceGetRegs(pid int, regsout *syscall.PtraceRegs) (err error)
 	return <-s.ec
 }
 
+func (s *Server) ptraceSetRegs(pid int, regs *syscall.PtraceRegs) (err error) {
+	s.fc <- func() error {
+		return syscall.PtraceSetRegs(pid, regs)
+	}
+	return <-s.ec
+}
+
 func (s *Server) ptracePeek(pid int, addr uintptr, out []byte) (err error) {
 	s.fc <- func() error {
 		n, err := syscall.PtracePeekText(pid, addr, out)

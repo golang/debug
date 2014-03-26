@@ -59,20 +59,28 @@ type Program interface {
 	// When the target binary is re-run, breakpoints are
 	// automatically re-established in the new process by
 	// re-evaluating the address.
-	// Address syntax:
-	//	"main.main"  Start of function
-	//	"main.go:23" Line number
-	//	(more to follow; may want an expression grammar)
-	// It is OK if two breakpoints evaluate to the same PC. (TODO: verify.)
+	// The address is the same mini-language accepted by Eval,
+	// which permits setting multiple breakpoints using a regular
+	// expression to match a set of symbols.
 	Breakpoint(address string) error
 
-	// DeleteBreakpoint removes the breakpoint at the specified
-	// address.
+	// DeleteBreakpoint removes the breakpoint at to the specified
+	// address. TODO: Probably the wrong interface.
 	DeleteBreakpoint(address string) error
 
 	// Eval evaluates the expression (typically an address) and returns
-	// its string representation.
-	Eval(expr string) (string, error)
+	// its string representation(s). Multivalued expressions such as
+	// matches for regular expressions return multiple values.
+	// Syntax:
+	//	re:regexp
+	//		Returns a list of symbol names that match the expression
+	//	sym:symbol
+	//		Returns a one-element list holding the hexadecimal
+	//		("0x1234") value of the address of the symbol
+	//	0x1234, 01234, 467
+	//		Returns a one-element list holding the name of the
+	//		symbol ("main.foo") at that address (hex, octal, decimal).
+	Eval(expr string) ([]string, error)
 }
 
 // The File interface provides access to file-like resources in the program.

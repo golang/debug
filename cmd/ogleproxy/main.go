@@ -25,18 +25,18 @@ func main() {
 	log.SetPrefix("ogleproxy: ")
 	flag.Parse()
 	if *textFlag == "" {
-		fmt.Println("OGLE BAD\nUsage")
+		fmt.Printf("OGLE BAD\nUsage")
 		flag.Usage()
 		os.Exit(2)
 	}
 	s, err := server.New(*textFlag)
 	if err != nil {
-		fmt.Println("OGLE BAD\n%s\n", err)
+		fmt.Printf("OGLE BAD\n%s\n", err)
 		os.Exit(2)
 	}
 	err = rpc.Register(s)
 	if err != nil {
-		fmt.Println("OGLE BAD\n%s\n", err)
+		fmt.Printf("OGLE BAD\n%s\n", err)
 		os.Exit(2)
 	}
 	fmt.Println("OGLE OK")

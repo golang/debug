@@ -9,7 +9,9 @@ package server
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -254,7 +256,7 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 	resp.Status.SP = regs.Rsp
 
 	// If we're stopped on a breakpoint, restore the original code,
-	// step through a single instruction, and reset the breakpoint.
+	// back up the PC, step through a single instruction, and reset the breakpoint.
 	// TODO: should this happen here or just before the ptraceCont call?
 	bp, ok := s.breakpoints[regs.Rip-1] // TODO: -1 because on amd64, INT 3 is 1 byte (0xcc).
 	if ok {
@@ -262,6 +264,12 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 		err := s.ptracePoke(s.proc.Pid, pc, []byte{bp.origInstr})
 		if err != nil {
 			return fmt.Errorf("ptracePoke: %v", err)
+		}
+
+		regs.Rip-- // TODO: depends on length of trap.
+		err = s.ptraceSetRegs(s.proc.Pid, &regs)
+		if err != nil {
+			return fmt.Errorf("ptraceSetRegs: %v", err)
 		}
 
 		err = s.ptraceSingleStep(s.proc.Pid)
@@ -284,27 +292,32 @@ func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.Brea
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	addr, err := s.eval(req.Address)
+	addrs, err := s.eval(req.Address)
 	if err != nil {
-		return fmt.Errorf("could not parse %q: %v", req.Address, err)
+		return err
 	}
-	pc, err := strconv.ParseUint(addr, 0, 0)
-	if err != nil {
-		return fmt.Errorf("ParseUint: %v", err)
-	}
+	for _, addr := range addrs {
+		pc, err := s.evalAddress(addr)
+		if err != nil {
+			return err
+		}
+		if _, alreadySet := s.breakpoints[pc]; alreadySet {
+			return fmt.Errorf("breakpoint already set at %#x (TODO)", pc)
+		}
 
-	buf := make([]byte, 1)
-	err = s.ptracePeek(s.proc.Pid, uintptr(pc), buf)
-	if err != nil {
-		return fmt.Errorf("ptracePoke: %v", err)
-	}
+		var buf [1]byte
+		err = s.ptracePeek(s.proc.Pid, uintptr(pc), buf[:])
+		if err != nil {
+			return fmt.Errorf("ptracePoke: %v", err)
+		}
 
-	s.breakpoints[pc] = breakpoint{pc: pc, origInstr: buf[0]}
+		s.breakpoints[pc] = breakpoint{pc: pc, origInstr: buf[0]}
 
-	buf[0] = 0xcc // INT 3 instruction on x86.
-	err = s.ptracePoke(s.proc.Pid, uintptr(pc), buf)
-	if err != nil {
-		return fmt.Errorf("ptracePoke: %v", err)
+		buf[0] = 0xcc // INT 3 instruction on x86.
+		err = s.ptracePoke(s.proc.Pid, uintptr(pc), buf[:])
+		if err != nil {
+			return fmt.Errorf("ptracePoke: %v", err)
+		}
 	}
 
 	return nil
@@ -318,22 +331,65 @@ func (s *Server) Eval(req *proxyrpc.EvalRequest, resp *proxyrpc.EvalResponse) (e
 	return err
 }
 
-func (s *Server) eval(expr string) (string, error) {
-	// Simple version: Turn symbol into address. Must be function.
-	// TODO: Why is Table.Syms always empty?
+// eval evaluates an expression.
+// TODO: very weak.
+func (s *Server) eval(expr string) ([]string, error) {
+	switch {
+	case strings.HasPrefix(expr, "re:"):
+		// Regular expression. Return list of symbols.
+		expr = expr[3:]
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return nil, err
+		}
+		strs := make([]string, 0, 100)
+		for _, f := range s.symbols.Funcs {
+			if re.MatchString(f.Sym.Name) {
+				strs = append(strs, f.Sym.Name)
+			}
+		}
+		return strs, nil
+
+	case strings.HasPrefix(expr, "sym:"):
+		// Symbol lookup. Return address.
+		expr = expr[4:]
+		sym := s.symbols.LookupFunc(expr)
+		if sym == nil {
+			return nil, fmt.Errorf("symbol %q not found", expr)
+		}
+		return []string{fmt.Sprintf("%#x", sym.Value)}, nil
+
+	case len(expr) > 0 && '0' <= expr[0] && expr[0] <= '9':
+		// Numerical address. Return symbol.
+		addr, err := strconv.ParseUint(expr, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		fun := s.symbols.PCToFunc(addr)
+		if fun == nil {
+			return nil, fmt.Errorf("address %q has no func", expr)
+		}
+		return []string{fun.Sym.Name}, nil
+	}
+
+	return nil, fmt.Errorf("bad expression syntax: %q", expr)
+}
+
+// evalAddress takes a simple expression, either a symbol or hex value,
+// and evaluates it as an address.
+func (s *Server) evalAddress(expr string) (uint64, error) {
+	// Might be a symbol.
 	sym := s.symbols.LookupFunc(expr)
 	if sym != nil {
-		return fmt.Sprintf("%#x", sym.Value), nil
+		return sym.Value, nil
 	}
 
+	// Must be a number.
 	addr, err := strconv.ParseUint(expr, 0, 0)
 	if err != nil {
-		return "", fmt.Errorf("address %q not found: %v", expr, err)
+		return 0, fmt.Errorf("eval: %q is neither symbol nor number", expr)
 	}
 
-	fun := s.symbols.PCToFunc(addr)
-	if fun == nil {
-		return "", fmt.Errorf("address %q has no func", expr)
-	}
-	return fun.Sym.Name, nil
+	return addr, nil
+
 }

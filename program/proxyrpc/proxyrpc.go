@@ -78,5 +78,5 @@ type EvalRequest struct {
 }
 
 type EvalResponse struct {
-	Result string
+	Result []string
 }
