@@ -35,7 +35,11 @@ func New(host string, textFile string, args ...string) (*Program, error) {
 // It is similar to New except that the program is allowed to run.
 func Run(host string, textFile string, args ...string) (*Program, error) {
 	// TODO: add args.
-	cmd := exec.Command("/usr/bin/ssh", host, "ogleproxy", "-text", textFile)
+	cmdStrs := []string{"/usr/bin/ssh", host, "ogleproxy", "-text", textFile}
+	if host == "localhost" {
+		cmdStrs = cmdStrs[2:]
+	}
+	cmd := exec.Command(cmdStrs[0], cmdStrs[1:]...)
 	stdin, toStdin, err := os.Pipe()
 	if err != nil {
 		return nil, err
