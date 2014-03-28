@@ -478,8 +478,8 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 					// TODO: Should have original compilation
 					// unit here, not unknownFormat.
 					b := makeBuf(d, unknownFormat{}, "location", 0, loc)
-					if b.uint8() != opPlusUconst {
-						err = DecodeError{name, kid.Offset, "unexpected opcode"}
+					if x := b.uint8(); x != opPlusUconst {
+						err = DecodeError{name, kid.Offset, "unexpected opcode 0x" + strconv.FormatUint(uint64(x), 16)}
 						goto Error
 					}
 					f.ByteOffset = int64(b.uint())
