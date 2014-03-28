@@ -15,11 +15,10 @@ import (
 	"sync"
 	"syscall"
 
-	"debug/elf"
-	"debug/macho"
-	"debug/pe"
+	"code.google.com/p/ogle/debug/dwarf"
+	"code.google.com/p/ogle/debug/elf"
+	"code.google.com/p/ogle/debug/macho"
 
-	"code.google.com/p/ogle/gosym"
 	"code.google.com/p/ogle/program"
 	"code.google.com/p/ogle/program/proxyrpc"
 )
@@ -31,8 +30,7 @@ type breakpoint struct {
 
 type Server struct {
 	executable string // Name of executable.
-	lines      *gosym.LineTable
-	symbols    *gosym.Table
+	dwarfData  *dwarf.Data
 
 	mu sync.Mutex
 
@@ -52,19 +50,13 @@ func New(executable string) (*Server, error) {
 		return nil, err
 	}
 	defer fd.Close()
-	textStart, symtab, pclntab, err := loadTables(fd)
-	if err != nil {
-		return nil, err
-	}
-	lines := gosym.NewLineTable(pclntab, textStart)
-	symbols, err := gosym.NewTable(symtab, lines)
+	dwarfData, err := loadDwarfData(fd)
 	if err != nil {
 		return nil, err
 	}
 	srv := &Server{
 		executable:  executable,
-		lines:       lines,
-		symbols:     symbols,
+		dwarfData:   dwarfData,
 		fc:          make(chan func() error),
 		ec:          make(chan error),
 		breakpoints: make(map[uint64]breakpoint),
@@ -73,62 +65,14 @@ func New(executable string) (*Server, error) {
 	return srv, nil
 }
 
-// This function is copied from $GOROOT/src/cmd/addr2line/main.go.
-// TODO: Make this architecture-defined? Push into gosym?
-// TODO: Why is the .gosymtab always empty?
-func loadTables(f *os.File) (textStart uint64, symtab, pclntab []byte, err error) {
+func loadDwarfData(f *os.File) (*dwarf.Data, error) {
 	if obj, err := elf.NewFile(f); err == nil {
-		if sect := obj.Section(".text"); sect != nil {
-			textStart = sect.Addr
-		}
-		if sect := obj.Section(".gosymtab"); sect != nil {
-			if symtab, err = sect.Data(); err != nil {
-				return 0, nil, nil, err
-			}
-		}
-		if sect := obj.Section(".gopclntab"); sect != nil {
-			if pclntab, err = sect.Data(); err != nil {
-				return 0, nil, nil, err
-			}
-		}
-		return textStart, symtab, pclntab, nil
+		return obj.DWARF()
 	}
-
 	if obj, err := macho.NewFile(f); err == nil {
-		if sect := obj.Section("__text"); sect != nil {
-			textStart = sect.Addr
-		}
-		if sect := obj.Section("__gosymtab"); sect != nil {
-			if symtab, err = sect.Data(); err != nil {
-				return 0, nil, nil, err
-			}
-		}
-		if sect := obj.Section("__gopclntab"); sect != nil {
-			if pclntab, err = sect.Data(); err != nil {
-				return 0, nil, nil, err
-			}
-		}
-		return textStart, symtab, pclntab, nil
+		return obj.DWARF()
 	}
-
-	if obj, err := pe.NewFile(f); err == nil {
-		if sect := obj.Section(".text"); sect != nil {
-			textStart = uint64(sect.VirtualAddress)
-		}
-		if sect := obj.Section(".gosymtab"); sect != nil {
-			if symtab, err = sect.Data(); err != nil {
-				return 0, nil, nil, err
-			}
-		}
-		if sect := obj.Section(".gopclntab"); sect != nil {
-			if pclntab, err = sect.Data(); err != nil {
-				return 0, nil, nil, err
-			}
-		}
-		return textStart, symtab, pclntab, nil
-	}
-
-	return 0, nil, nil, fmt.Errorf("unrecognized binary format")
+	return nil, fmt.Errorf("unrecognized binary format")
 }
 
 type file struct {
@@ -337,27 +281,19 @@ func (s *Server) eval(expr string) ([]string, error) {
 	switch {
 	case strings.HasPrefix(expr, "re:"):
 		// Regular expression. Return list of symbols.
-		expr = expr[3:]
-		re, err := regexp.Compile(expr)
+		re, err := regexp.Compile(expr[3:])
 		if err != nil {
 			return nil, err
 		}
-		strs := make([]string, 0, 100)
-		for _, f := range s.symbols.Funcs {
-			if re.MatchString(f.Sym.Name) {
-				strs = append(strs, f.Sym.Name)
-			}
-		}
-		return strs, nil
+		return s.lookupRE(re)
 
 	case strings.HasPrefix(expr, "sym:"):
 		// Symbol lookup. Return address.
-		expr = expr[4:]
-		sym := s.symbols.LookupFunc(expr)
-		if sym == nil {
-			return nil, fmt.Errorf("symbol %q not found", expr)
+		addr, err := s.lookupSym(expr[4:])
+		if err != nil {
+			return nil, err
 		}
-		return []string{fmt.Sprintf("%#x", sym.Value)}, nil
+		return []string{fmt.Sprintf("%#x", addr)}, nil
 
 	case len(expr) > 0 && '0' <= expr[0] && expr[0] <= '9':
 		// Numerical address. Return symbol.
@@ -365,11 +301,11 @@ func (s *Server) eval(expr string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		fun := s.symbols.PCToFunc(addr)
-		if fun == nil {
-			return nil, fmt.Errorf("address %q has no func", expr)
+		funcName, err := s.lookupPC(addr)
+		if err != nil {
+			return nil, err
 		}
-		return []string{fun.Sym.Name}, nil
+		return []string{funcName}, nil
 	}
 
 	return nil, fmt.Errorf("bad expression syntax: %q", expr)
@@ -379,17 +315,16 @@ func (s *Server) eval(expr string) ([]string, error) {
 // and evaluates it as an address.
 func (s *Server) evalAddress(expr string) (uint64, error) {
 	// Might be a symbol.
-	sym := s.symbols.LookupFunc(expr)
-	if sym != nil {
-		return sym.Value, nil
+	addr, err := s.lookupSym(expr)
+	if err == nil {
+		return addr, nil
 	}
 
 	// Must be a number.
-	addr, err := strconv.ParseUint(expr, 0, 0)
+	addr, err = strconv.ParseUint(expr, 0, 0)
 	if err != nil {
 		return 0, fmt.Errorf("eval: %q is neither symbol nor number", expr)
 	}
 
 	return addr, nil
-
 }
