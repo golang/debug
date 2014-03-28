@@ -213,6 +213,15 @@ func (p *Program) Eval(expr string) ([]string, error) {
 	return resp.Result, err
 }
 
+func (p *Program) Frames(count int) ([]program.Frame, error) {
+	req := proxyrpc.FramesRequest{
+		Count: count,
+	}
+	var resp proxyrpc.FramesResponse
+	err := p.client.Call("Server.Frames", &req, &resp)
+	return resp.Frames, err
+}
+
 // File implements the program.File interface, providing access
 // to file-like resources associated with the target program.
 type File struct {

@@ -81,6 +81,10 @@ type Program interface {
 	//		Returns a one-element list holding the name of the
 	//		symbol ("main.foo") at that address (hex, octal, decimal).
 	Eval(expr string) ([]string, error)
+
+	// Frames returns up to count stack frames from where the program
+	// is currently stopped.
+	Frames(count int) ([]Frame, error)
 }
 
 // The File interface provides access to file-like resources in the program.
@@ -96,4 +100,8 @@ type File interface {
 
 type Status struct {
 	PC, SP uint64
+}
+
+type Frame struct {
+	S string
 }

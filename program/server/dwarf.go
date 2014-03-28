@@ -75,11 +75,28 @@ func (s *Server) lookupSym(name string) (uint64, error) {
 }
 
 func (s *Server) lookupPC(pc uint64) (string, error) {
+	entry, err := s.entryForPC(pc)
+	if err != nil {
+		return "", err
+	}
+	nameAttr := lookupAttr(entry, dwarf.AttrName)
+	if nameAttr == nil {
+		// TODO: this shouldn't be possible.
+		return "", fmt.Errorf("TODO")
+	}
+	name, ok := nameAttr.(string)
+	if !ok {
+		return "", fmt.Errorf("name for PC %#x is not a string", pc)
+	}
+	return name, nil
+}
+
+func (s *Server) entryForPC(pc uint64) (*dwarf.Entry, error) {
 	r := s.dwarfData.Reader()
 	for {
 		entry, err := r.Next()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if entry == nil {
 			// TODO: why don't we get an error here.
@@ -93,18 +110,9 @@ func (s *Server) lookupPC(pc uint64) (string, error) {
 		if !lok || !hok || pc < lowpc || highpc <= pc {
 			continue
 		}
-		nameAttr := lookupAttr(entry, dwarf.AttrName)
-		if nameAttr == nil {
-			// TODO: this shouldn't be possible.
-			continue
-		}
-		name, ok := nameAttr.(string)
-		if !ok {
-			return "", fmt.Errorf("name for PC %#x is not a string", pc)
-		}
-		return name, nil
+		return entry, nil
 	}
-	return "", fmt.Errorf("PC %#x not found", pc)
+	return nil, fmt.Errorf("PC %#x not found", pc)
 }
 
 func lookupAttr(e *dwarf.Entry, a dwarf.Attr) interface{} {
@@ -116,21 +124,22 @@ func lookupAttr(e *dwarf.Entry, a dwarf.Attr) interface{} {
 	return nil
 }
 
-func evalLocation(v []uint8) string {
+// TODO: signedness? Return (x int64, ok bool)??
+func evalLocation(v []uint8) int64 {
 	if len(v) == 0 {
-		return "<nil>"
+		return 0
 	}
 	if v[0] != 0x9C { // DW_OP_call_frame_cfa
-		return "UNK0"
+		return 0
 	}
 	if len(v) == 1 {
-		return "0"
+		return 0
 	}
 	v = v[1:]
 	if v[0] != 0x11 { // DW_OP_consts
-		return "UNK1"
+		return 0
 	}
-	return fmt.Sprintf("%x", sleb128(v[1:]))
+	return sleb128(v[1:])
 }
 
 func uleb128(v []uint8) (u uint64) {

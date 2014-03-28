@@ -80,3 +80,11 @@ type EvalRequest struct {
 type EvalResponse struct {
 	Result []string
 }
+
+type FramesRequest struct {
+	Count int
+}
+
+type FramesResponse struct {
+	Frames []program.Frame
+}

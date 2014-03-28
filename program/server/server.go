@@ -7,6 +7,7 @@
 package server
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"regexp"
@@ -327,4 +328,83 @@ func (s *Server) evalAddress(expr string) (uint64, error) {
 	}
 
 	return addr, nil
+}
+
+func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesResponse) error {
+	// TODO: verify that we're stopped.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if req.Count != 1 {
+		// TODO: implement.
+		return fmt.Errorf("Frames.Count != 1 is not implemented")
+	}
+
+	// TODO: we're assuming we're at a function's entry point (LowPC).
+
+	regs := syscall.PtraceRegs{}
+	err := s.ptraceGetRegs(s.proc.Pid, &regs)
+	if err != nil {
+		return err
+	}
+	fp := regs.Rsp + 8 // TODO: 8 for the return address is amd64 specific.
+
+	// TODO: the -1 on the next line backs up the INT3 breakpoint. Should it be there?
+	entry, err := s.entryForPC(regs.Rip - 1)
+	if err != nil {
+		return err
+	}
+
+	var buf [8]byte
+	frame := program.Frame{}
+	r := s.dwarfData.Reader()
+	r.Seek(entry.Offset)
+	for {
+		entry, err := r.Next()
+		if err != nil {
+			return err
+		}
+		if entry.Tag == 0 {
+			break
+		}
+		if entry.Tag != dwarf.TagFormalParameter {
+			continue
+		}
+		if entry.Children {
+			// TODO: handle this??
+			return fmt.Errorf("FormalParameter has children, expected none")
+		}
+		// TODO: the returned frame should be structured instead of a hacked up string.
+		location := uintptr(0)
+		for _, f := range entry.Field {
+			switch f.Attr {
+			case dwarf.AttrLocation:
+				offset := evalLocation(f.Val.([]uint8))
+				location = uintptr(int64(fp) + offset)
+				frame.S += fmt.Sprintf("(%d(FP))", offset)
+			case dwarf.AttrName:
+				frame.S += " " + f.Val.(string)
+			case dwarf.AttrType:
+				t, err := s.dwarfData.Type(f.Val.(dwarf.Offset))
+				if err == nil {
+					frame.S += fmt.Sprintf("[%v]", t)
+				}
+				// TODO: don't assume amd64.
+				if t.String() != "int" && t.Size() == 8 {
+					break
+				}
+				if location == 0 {
+					return fmt.Errorf("no location for FormalParameter")
+				}
+				err = s.ptracePeek(s.proc.Pid, location, buf[:8])
+				if err != nil {
+					return err
+				}
+				// TODO: don't assume little-endian.
+				frame.S += fmt.Sprintf("==%#x", binary.LittleEndian.Uint64(buf[:8]))
+			}
+		}
+	}
+	resp.Frames = append(resp.Frames, frame)
+	return nil
 }
