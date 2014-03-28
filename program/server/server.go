@@ -181,7 +181,24 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	err := s.ptraceCont(s.proc.Pid, 0)
+	regs := syscall.PtraceRegs{}
+	err := s.ptraceGetRegs(s.proc.Pid, &regs)
+	if err != nil {
+		return err
+	}
+	if _, ok := s.breakpoints[regs.Rip]; ok {
+		err = s.ptraceSingleStep(s.proc.Pid)
+		if err != nil {
+			return fmt.Errorf("ptraceSingleStep: %v", err)
+		}
+	}
+
+	err = s.setBreakpoints()
+	if err != nil {
+		return err
+	}
+
+	err = s.ptraceCont(s.proc.Pid, 0)
 	if err != nil {
 		return err
 	}
@@ -191,45 +208,24 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 		return err
 	}
 
-	regs := syscall.PtraceRegs{}
+	err = s.liftBreakpoints()
+	if err != nil {
+		return err
+	}
+
 	err = s.ptraceGetRegs(s.proc.Pid, &regs)
 	if err != nil {
 		return err
 	}
 
-	resp.Status.PC = regs.Rip
-	resp.Status.SP = regs.Rsp
-
-	// If we're stopped on a breakpoint, restore the original code,
-	// back up the PC, step through a single instruction, and reset the breakpoint.
-	// TODO: should this happen here or just before the ptraceCont call?
-	bp, ok := s.breakpoints[regs.Rip-1] // TODO: -1 because on amd64, INT 3 is 1 byte (0xcc).
-	if ok {
-		pc := uintptr(regs.Rip - 1)
-		err := s.ptracePoke(s.proc.Pid, pc, []byte{bp.origInstr})
-		if err != nil {
-			return fmt.Errorf("ptracePoke: %v", err)
-		}
-
-		regs.Rip-- // TODO: depends on length of trap.
-		err = s.ptraceSetRegs(s.proc.Pid, &regs)
-		if err != nil {
-			return fmt.Errorf("ptraceSetRegs: %v", err)
-		}
-
-		err = s.ptraceSingleStep(s.proc.Pid)
-		if err != nil {
-			return fmt.Errorf("ptraceSingleStep: %v", err)
-		}
-
-		buf := make([]byte, 1)
-		buf[0] = 0xcc // INT 3 instruction on x86.
-		err = s.ptracePoke(s.proc.Pid, pc, buf)
-		if err != nil {
-			return fmt.Errorf("ptracePoke: %v", err)
-		}
+	regs.Rip-- // TODO: depends on length of trap.
+	err = s.ptraceSetRegs(s.proc.Pid, &regs)
+	if err != nil {
+		return fmt.Errorf("ptraceSetRegs: %v", err)
 	}
 
+	resp.Status.PC = regs.Rip
+	resp.Status.SP = regs.Rsp
 	return nil
 }
 
@@ -255,16 +251,33 @@ func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.Brea
 		if err != nil {
 			return fmt.Errorf("ptracePoke: %v", err)
 		}
-
 		s.breakpoints[pc] = breakpoint{pc: pc, origInstr: buf[0]}
-
-		buf[0] = 0xcc // INT 3 instruction on x86.
-		err = s.ptracePoke(s.proc.Pid, uintptr(pc), buf[:])
-		if err != nil {
-			return fmt.Errorf("ptracePoke: %v", err)
-		}
 	}
 
+	return nil
+}
+
+func (s *Server) setBreakpoints() error {
+	var buf [1]byte
+	buf[0] = 0xcc // INT 3 instruction on x86.
+	for pc := range s.breakpoints {
+		err := s.ptracePoke(s.proc.Pid, uintptr(pc), buf[:])
+		if err != nil {
+			return fmt.Errorf("setBreakpoints: %v", err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) liftBreakpoints() error {
+	var buf [1]byte
+	for pc, breakpoint := range s.breakpoints {
+		buf[0] = breakpoint.origInstr
+		err := s.ptracePoke(s.proc.Pid, uintptr(pc), buf[:])
+		if err != nil {
+			return fmt.Errorf("liftBreakpoints: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -349,8 +362,7 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 	}
 	fp := regs.Rsp + 8 // TODO: 8 for the return address is amd64 specific.
 
-	// TODO: the -1 on the next line backs up the INT3 breakpoint. Should it be there?
-	entry, err := s.entryForPC(regs.Rip - 1)
+	entry, err := s.entryForPC(regs.Rip)
 	if err != nil {
 		return err
 	}
