@@ -52,12 +52,12 @@ func New(executable string) (*Server, error) {
 		return nil, err
 	}
 	defer fd.Close()
-	dwarfData, err := loadDwarfData(fd)
+	architecture, dwarfData, err := loadExecutable(fd)
 	if err != nil {
 		return nil, err
 	}
 	srv := &Server{
-		arch:        arch.AMD64, // TODO: How do we discover this?
+		arch:        *architecture,
 		executable:  executable,
 		dwarfData:   dwarfData,
 		fc:          make(chan func() error),
@@ -68,14 +68,40 @@ func New(executable string) (*Server, error) {
 	return srv, nil
 }
 
-func loadDwarfData(f *os.File) (*dwarf.Data, error) {
+func loadExecutable(f *os.File) (*arch.Architecture, *dwarf.Data, error) {
+	// TODO: How do we detect NaCl?
 	if obj, err := elf.NewFile(f); err == nil {
-		return obj.DWARF()
+		dwarfData, err := obj.DWARF()
+		if err != nil {
+			return nil, nil, err
+		}
+		switch obj.Machine {
+		case elf.EM_ARM:
+			return &arch.ARM, dwarfData, nil
+		case elf.EM_386:
+			switch obj.Class {
+			case elf.ELFCLASS32:
+				return &arch.X86, dwarfData, nil
+			case elf.ELFCLASS64:
+				return &arch.AMD64, dwarfData, nil
+			}
+		}
+		return nil, nil, fmt.Errorf("unrecognized ELF architecture")
 	}
 	if obj, err := macho.NewFile(f); err == nil {
-		return obj.DWARF()
+		dwarfData, err := obj.DWARF()
+		if err != nil {
+			return nil, nil, err
+		}
+		switch obj.Cpu {
+		case macho.Cpu386:
+			return &arch.X86, dwarfData, nil
+		case macho.CpuAmd64:
+			return &arch.AMD64, dwarfData, nil
+		}
+		return nil, nil, fmt.Errorf("unrecognized Mach-O architecture")
 	}
-	return nil, fmt.Errorf("unrecognized binary format")
+	return nil, nil, fmt.Errorf("unrecognized binary format")
 }
 
 type file struct {
