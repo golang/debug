@@ -7,7 +7,6 @@
 package server
 
 import (
-	"encoding/binary"
 	"fmt"
 	"os"
 	"regexp"
@@ -20,16 +19,18 @@ import (
 	"code.google.com/p/ogle/debug/elf"
 	"code.google.com/p/ogle/debug/macho"
 
+	"code.google.com/p/ogle/arch"
 	"code.google.com/p/ogle/program"
 	"code.google.com/p/ogle/program/proxyrpc"
 )
 
 type breakpoint struct {
 	pc        uint64
-	origInstr byte // TODO: don't be amd64-specific.
+	origInstr [arch.MaxBreakpointSize]byte
 }
 
 type Server struct {
+	arch       arch.Architecture
 	executable string // Name of executable.
 	dwarfData  *dwarf.Data
 
@@ -56,6 +57,7 @@ func New(executable string) (*Server, error) {
 		return nil, err
 	}
 	srv := &Server{
+		arch:        arch.AMD64, // TODO: How do we discover this?
 		executable:  executable,
 		dwarfData:   dwarfData,
 		fc:          make(chan func() error),
@@ -218,7 +220,7 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 		return err
 	}
 
-	regs.Rip-- // TODO: depends on length of trap.
+	regs.Rip -= uint64(s.arch.BreakpointSize)
 	err = s.ptraceSetRegs(s.proc.Pid, &regs)
 	if err != nil {
 		return fmt.Errorf("ptraceSetRegs: %v", err)
@@ -237,6 +239,7 @@ func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.Brea
 	if err != nil {
 		return err
 	}
+	var bp breakpoint
 	for _, addr := range addrs {
 		pc, err := s.evalAddress(addr)
 		if err != nil {
@@ -246,22 +249,20 @@ func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.Brea
 			return fmt.Errorf("breakpoint already set at %#x (TODO)", pc)
 		}
 
-		var buf [1]byte
-		err = s.ptracePeek(s.proc.Pid, uintptr(pc), buf[:])
+		err = s.ptracePeek(s.proc.Pid, uintptr(pc), bp.origInstr[:s.arch.BreakpointSize])
 		if err != nil {
-			return fmt.Errorf("ptracePoke: %v", err)
+			return fmt.Errorf("ptracePeek: %v", err)
 		}
-		s.breakpoints[pc] = breakpoint{pc: pc, origInstr: buf[0]}
+		bp.pc = pc
+		s.breakpoints[pc] = bp
 	}
 
 	return nil
 }
 
 func (s *Server) setBreakpoints() error {
-	var buf [1]byte
-	buf[0] = 0xcc // INT 3 instruction on x86.
 	for pc := range s.breakpoints {
-		err := s.ptracePoke(s.proc.Pid, uintptr(pc), buf[:])
+		err := s.ptracePoke(s.proc.Pid, uintptr(pc), s.arch.BreakpointInstr[:s.arch.BreakpointSize])
 		if err != nil {
 			return fmt.Errorf("setBreakpoints: %v", err)
 		}
@@ -270,10 +271,8 @@ func (s *Server) setBreakpoints() error {
 }
 
 func (s *Server) liftBreakpoints() error {
-	var buf [1]byte
 	for pc, breakpoint := range s.breakpoints {
-		buf[0] = breakpoint.origInstr
-		err := s.ptracePoke(s.proc.Pid, uintptr(pc), buf[:])
+		err := s.ptracePoke(s.proc.Pid, uintptr(pc), breakpoint.origInstr[:s.arch.BreakpointSize])
 		if err != nil {
 			return fmt.Errorf("liftBreakpoints: %v", err)
 		}
@@ -360,7 +359,7 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 	if err != nil {
 		return err
 	}
-	fp := regs.Rsp + 8 // TODO: 8 for the return address is amd64 specific.
+	fp := regs.Rsp + uint64(s.arch.PointerSize)
 
 	entry, err := s.entryForPC(regs.Rip)
 	if err != nil {
@@ -401,19 +400,17 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 				if err == nil {
 					frame.S += fmt.Sprintf("[%v]", t)
 				}
-				// TODO: don't assume amd64.
-				if t.String() != "int" && t.Size() == 8 {
+				if t.String() != "int" || t.Size() != int64(s.arch.IntSize) {
 					break
 				}
 				if location == 0 {
 					return fmt.Errorf("no location for FormalParameter")
 				}
-				err = s.ptracePeek(s.proc.Pid, location, buf[:8])
+				err = s.ptracePeek(s.proc.Pid, location, buf[:s.arch.IntSize])
 				if err != nil {
 					return err
 				}
-				// TODO: don't assume little-endian.
-				frame.S += fmt.Sprintf("==%#x", binary.LittleEndian.Uint64(buf[:8]))
+				frame.S += fmt.Sprintf("==%#x", s.arch.Int(buf[:s.arch.IntSize]))
 			}
 		}
 	}
