@@ -88,6 +88,8 @@ func loadExecutable(f *os.File) (*arch.Architecture, *dwarf.Data, error) {
 			case elf.ELFCLASS64:
 				return &arch.AMD64, dwarfData, nil
 			}
+		case elf.EM_X86_64:
+			return &arch.AMD64, dwarfData, nil
 		}
 		return nil, nil, fmt.Errorf("unrecognized ELF architecture")
 	}
