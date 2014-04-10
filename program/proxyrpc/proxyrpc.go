@@ -52,7 +52,6 @@ type OpenResponse struct {
 }
 
 type RunRequest struct {
-	Start bool
 }
 
 type RunResponse struct {

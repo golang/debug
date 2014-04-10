@@ -4,9 +4,6 @@
 
 package server
 
-// TODO: syscall.PTRACE_O_TRACECLONE shenanigans to trace multi-threaded
-// programs.
-
 import (
 	"fmt"
 	"os"
@@ -50,13 +47,6 @@ func (s *Server) ptraceGetRegs(pid int, regsout *syscall.PtraceRegs) (err error)
 	return <-s.ec
 }
 
-func (s *Server) ptraceSetRegs(pid int, regs *syscall.PtraceRegs) (err error) {
-	s.fc <- func() error {
-		return syscall.PtraceSetRegs(pid, regs)
-	}
-	return <-s.ec
-}
-
 func (s *Server) ptracePeek(pid int, addr uintptr, out []byte) (err error) {
 	s.fc <- func() error {
 		n, err := syscall.PtracePeekText(pid, addr, out)
@@ -85,6 +75,20 @@ func (s *Server) ptracePoke(pid int, addr uintptr, data []byte) (err error) {
 	return <-s.ec
 }
 
+func (s *Server) ptraceSetOptions(pid int, options int) (err error) {
+	s.fc <- func() error {
+		return syscall.PtraceSetOptions(pid, options)
+	}
+	return <-s.ec
+}
+
+func (s *Server) ptraceSetRegs(pid int, regs *syscall.PtraceRegs) (err error) {
+	s.fc <- func() error {
+		return syscall.PtraceSetRegs(pid, regs)
+	}
+	return <-s.ec
+}
+
 func (s *Server) ptraceSingleStep(pid int) (err error) {
 	s.fc <- func() error {
 		return syscall.PtraceSingleStep(pid)
@@ -92,12 +96,11 @@ func (s *Server) ptraceSingleStep(pid int) (err error) {
 	return <-s.ec
 }
 
-func (s *Server) wait() (err error) {
-	var status syscall.WaitStatus
+func (s *Server) wait(pid int) (wpid int, status syscall.WaitStatus, err error) {
 	s.fc <- func() error {
-		_, err1 := syscall.Wait4(-1, &status, 0, nil)
+		var err1 error
+		wpid, err1 = syscall.Wait4(pid, &status, syscall.WALL, nil)
 		return err1
 	}
-	// TODO: do something with status.
-	return <-s.ec
+	return wpid, status, <-s.ec
 }

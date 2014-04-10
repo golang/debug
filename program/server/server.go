@@ -40,6 +40,9 @@ type Server struct {
 	ec chan error
 
 	proc        *os.Process
+	procIsUp    bool
+	stoppedPid  int
+	stoppedRegs syscall.PtraceRegs
 	breakpoints map[uint64]breakpoint
 	files       []*file // Index == file descriptor.
 }
@@ -183,6 +186,9 @@ func (s *Server) Run(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error
 	if s.proc != nil {
 		s.proc.Kill()
 		s.proc = nil
+		s.procIsUp = false
+		s.stoppedPid = 0
+		s.stoppedRegs = syscall.PtraceRegs{}
 	}
 	p, err := s.startProcess(s.executable, nil, &os.ProcAttr{
 		Files: []*os.File{
@@ -191,17 +197,15 @@ func (s *Server) Run(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error
 			os.Stderr,
 		},
 		Sys: &syscall.SysProcAttr{
-			Ptrace: !req.Start,
+			Pdeathsig: syscall.SIGKILL,
+			Ptrace:    true,
 		},
 	})
 	if err != nil {
 		return err
 	}
 	s.proc = p
-
-	if !req.Start {
-		// TODO: wait until /proc/{s.proc.Pid}/status says "State:	t (tracing stop)".
-	}
+	s.stoppedPid = p.Pid
 	return nil
 }
 
@@ -209,29 +213,41 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	regs := syscall.PtraceRegs{}
-	err := s.ptraceGetRegs(s.proc.Pid, &regs)
-	if err != nil {
-		return err
+	if s.proc == nil {
+		return fmt.Errorf("Resume: Run did not successfully start a process")
 	}
-	if _, ok := s.breakpoints[regs.Rip]; ok {
-		err = s.ptraceSingleStep(s.proc.Pid)
+
+	if !s.procIsUp {
+		s.procIsUp = true
+		_, err := s.waitForTrap(s.stoppedPid)
+		if err != nil {
+			return err
+		}
+		err = s.ptraceSetOptions(s.stoppedPid, syscall.PTRACE_O_TRACECLONE)
+		if err != nil {
+			return fmt.Errorf("ptraceSetOptions: %v", err)
+		}
+	} else if _, ok := s.breakpoints[s.stoppedRegs.Rip]; ok {
+		err := s.ptraceSingleStep(s.stoppedPid)
 		if err != nil {
 			return fmt.Errorf("ptraceSingleStep: %v", err)
 		}
+		_, err = s.waitForTrap(s.stoppedPid)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = s.setBreakpoints()
+	err := s.setBreakpoints()
 	if err != nil {
 		return err
 	}
-
-	err = s.ptraceCont(s.proc.Pid, 0)
+	err = s.ptraceCont(s.stoppedPid, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("ptraceCont: %v", err)
 	}
 
-	err = s.wait()
+	s.stoppedPid, err = s.waitForTrap(-1)
 	if err != nil {
 		return err
 	}
@@ -241,20 +257,37 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 		return err
 	}
 
-	err = s.ptraceGetRegs(s.proc.Pid, &regs)
+	err = s.ptraceGetRegs(s.stoppedPid, &s.stoppedRegs)
 	if err != nil {
-		return err
+		return fmt.Errorf("ptraceGetRegs: %v", err)
 	}
 
-	regs.Rip -= uint64(s.arch.BreakpointSize)
-	err = s.ptraceSetRegs(s.proc.Pid, &regs)
+	s.stoppedRegs.Rip -= uint64(s.arch.BreakpointSize)
+
+	err = s.ptraceSetRegs(s.stoppedPid, &s.stoppedRegs)
 	if err != nil {
 		return fmt.Errorf("ptraceSetRegs: %v", err)
 	}
 
-	resp.Status.PC = regs.Rip
-	resp.Status.SP = regs.Rsp
+	resp.Status.PC = s.stoppedRegs.Rip
+	resp.Status.SP = s.stoppedRegs.Rsp
 	return nil
+}
+
+func (s *Server) waitForTrap(pid int) (wpid int, err error) {
+	for {
+		wpid, status, err := s.wait(pid)
+		if err != nil {
+			return 0, fmt.Errorf("wait: %v", err)
+		}
+		if status.StopSignal() == syscall.SIGTRAP && status.TrapCause() != syscall.PTRACE_EVENT_CLONE {
+			return wpid, nil
+		}
+		err = s.ptraceCont(wpid, 0) // TODO: non-zero when wait catches other signals?
+		if err != nil {
+			return 0, fmt.Errorf("ptraceCont: %v", err)
+		}
+	}
 }
 
 func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.BreakpointResponse) (err error) {
@@ -275,7 +308,7 @@ func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.Brea
 			return fmt.Errorf("breakpoint already set at %#x (TODO)", pc)
 		}
 
-		err = s.ptracePeek(s.proc.Pid, uintptr(pc), bp.origInstr[:s.arch.BreakpointSize])
+		err = s.ptracePeek(s.stoppedPid, uintptr(pc), bp.origInstr[:s.arch.BreakpointSize])
 		if err != nil {
 			return fmt.Errorf("ptracePeek: %v", err)
 		}
@@ -288,7 +321,7 @@ func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.Brea
 
 func (s *Server) setBreakpoints() error {
 	for pc := range s.breakpoints {
-		err := s.ptracePoke(s.proc.Pid, uintptr(pc), s.arch.BreakpointInstr[:s.arch.BreakpointSize])
+		err := s.ptracePoke(s.stoppedPid, uintptr(pc), s.arch.BreakpointInstr[:s.arch.BreakpointSize])
 		if err != nil {
 			return fmt.Errorf("setBreakpoints: %v", err)
 		}
@@ -298,7 +331,7 @@ func (s *Server) setBreakpoints() error {
 
 func (s *Server) liftBreakpoints() error {
 	for pc, breakpoint := range s.breakpoints {
-		err := s.ptracePoke(s.proc.Pid, uintptr(pc), breakpoint.origInstr[:s.arch.BreakpointSize])
+		err := s.ptracePoke(s.stoppedPid, uintptr(pc), breakpoint.origInstr[:s.arch.BreakpointSize])
 		if err != nil {
 			return fmt.Errorf("liftBreakpoints: %v", err)
 		}
@@ -381,7 +414,7 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 	// TODO: we're assuming we're at a function's entry point (LowPC).
 
 	regs := syscall.PtraceRegs{}
-	err := s.ptraceGetRegs(s.proc.Pid, &regs)
+	err := s.ptraceGetRegs(s.stoppedPid, &regs)
 	if err != nil {
 		return err
 	}
@@ -432,7 +465,7 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 				if location == 0 {
 					return fmt.Errorf("no location for FormalParameter")
 				}
-				err = s.ptracePeek(s.proc.Pid, location, buf[:s.arch.IntSize])
+				err = s.ptracePeek(s.stoppedPid, location, buf[:s.arch.IntSize])
 				if err != nil {
 					return err
 				}

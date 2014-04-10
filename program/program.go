@@ -34,11 +34,9 @@ type Program interface {
 	// and execs a new instance of the target binary file
 	// (which may have changed underfoot).
 	// Breakpoints and open files are re-established.
-	// The flag specifies whether to run the program (true)
-	// or stop it before it executes any instructions (false).
 	// The call hangs until the program stops executing,
 	// at which point it returns the program status.
-	Run(start bool) (Status, error)
+	Run() (Status, error)
 
 	// Stop stops execution of the current process but
 	// does not kill it.

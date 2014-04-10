@@ -162,10 +162,8 @@ func (p *Program) SetArguments(args ...string) {
 	panic("unimplemented")
 }
 
-func (p *Program) Run(start bool) (program.Status, error) {
-	req := proxyrpc.RunRequest{
-		Start: start,
-	}
+func (p *Program) Run() (program.Status, error) {
+	req := proxyrpc.RunRequest{}
 	var resp proxyrpc.RunResponse
 	err := p.client.Call("Server.Run", &req, &resp)
 	if err != nil {
