@@ -15,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 
+	"code.google.com/p/ogle/gosym"
+
 	"code.google.com/p/ogle/debug/dwarf"
 	"code.google.com/p/ogle/debug/elf"
 	"code.google.com/p/ogle/debug/macho"
@@ -33,6 +35,7 @@ type Server struct {
 	arch       arch.Architecture
 	executable string // Name of executable.
 	dwarfData  *dwarf.Data
+	table      *gosym.Table
 
 	mu sync.Mutex
 
@@ -55,7 +58,7 @@ func New(executable string) (*Server, error) {
 		return nil, err
 	}
 	defer fd.Close()
-	architecture, dwarfData, err := loadExecutable(fd)
+	architecture, dwarfData, table, err := loadExecutable(fd)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +66,7 @@ func New(executable string) (*Server, error) {
 		arch:        *architecture,
 		executable:  executable,
 		dwarfData:   dwarfData,
+		table:       table,
 		fc:          make(chan func() error),
 		ec:          make(chan error),
 		breakpoints: make(map[uint64]breakpoint),
@@ -71,42 +75,76 @@ func New(executable string) (*Server, error) {
 	return srv, nil
 }
 
-func loadExecutable(f *os.File) (*arch.Architecture, *dwarf.Data, error) {
+func loadExecutable(f *os.File) (*arch.Architecture, *dwarf.Data, *gosym.Table, error) {
 	// TODO: How do we detect NaCl?
 	if obj, err := elf.NewFile(f); err == nil {
 		dwarfData, err := obj.DWARF()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
+
+		table, err := parseElf(obj)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("parsing go symbol table: %v", err)
+		}
+
 		switch obj.Machine {
 		case elf.EM_ARM:
-			return &arch.ARM, dwarfData, nil
+			return &arch.ARM, dwarfData, table, nil
 		case elf.EM_386:
 			switch obj.Class {
 			case elf.ELFCLASS32:
-				return &arch.X86, dwarfData, nil
+				return &arch.X86, dwarfData, table, nil
 			case elf.ELFCLASS64:
-				return &arch.AMD64, dwarfData, nil
+				return &arch.AMD64, dwarfData, table, nil
 			}
 		case elf.EM_X86_64:
-			return &arch.AMD64, dwarfData, nil
+			return &arch.AMD64, dwarfData, table, nil
 		}
-		return nil, nil, fmt.Errorf("unrecognized ELF architecture")
+		return nil, nil, nil, fmt.Errorf("unrecognized ELF architecture")
 	}
 	if obj, err := macho.NewFile(f); err == nil {
 		dwarfData, err := obj.DWARF()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
+
+		/* TODO
+		table, err := parseMachO(obj)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		*/
 		switch obj.Cpu {
 		case macho.Cpu386:
-			return &arch.X86, dwarfData, nil
+			return &arch.X86, dwarfData, nil, nil
 		case macho.CpuAmd64:
-			return &arch.AMD64, dwarfData, nil
+			return &arch.AMD64, dwarfData, nil, nil
 		}
-		return nil, nil, fmt.Errorf("unrecognized Mach-O architecture")
+		return nil, nil, nil, fmt.Errorf("unrecognized Mach-O architecture")
 	}
-	return nil, nil, fmt.Errorf("unrecognized binary format")
+	return nil, nil, nil, fmt.Errorf("unrecognized binary format")
+}
+
+// parseElf returns the gosym.Table representation of the old symbol tables.
+// TODO: Delete this once we know how to get PC/line data out of DWARF.
+func parseElf(f *elf.File) (*gosym.Table, error) {
+	symdat, err := f.Section(".gosymtab").Data() // TODO unused.
+	if err != nil {
+		return nil, err
+	}
+	pclndat, err := f.Section(".gopclntab").Data()
+	if err != nil {
+		return nil, err
+	}
+
+	pcln := gosym.NewLineTable(pclndat, f.Section(".text").Addr)
+	tab, err := gosym.NewTable(symdat, pcln)
+	if err != nil {
+		return nil, err
+	}
+
+	return tab, nil
 }
 
 type file struct {
@@ -369,6 +407,18 @@ func (s *Server) eval(expr string) ([]string, error) {
 		}
 		return []string{fmt.Sprintf("%#x", addr)}, nil
 
+	case strings.HasPrefix(expr, "src:"):
+		// Numerical address. Return file.go:123.
+		addr, err := strconv.ParseUint(expr[4:], 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		file, line, ok := s.lookupSource(addr)
+		if !ok {
+			return nil, fmt.Errorf("no PC/line data for: %q", expr)
+		}
+		return []string{fmt.Sprintf("%s:%d", file, line)}, nil
+
 	case len(expr) > 0 && '0' <= expr[0] && expr[0] <= '9':
 		// Numerical address. Return symbol.
 		addr, err := strconv.ParseUint(expr, 0, 0)
@@ -383,6 +433,14 @@ func (s *Server) eval(expr string) ([]string, error) {
 	}
 
 	return nil, fmt.Errorf("bad expression syntax: %q", expr)
+}
+
+func (s *Server) lookupSource(pc uint64) (file string, line int, ok bool) {
+	if s.table == nil {
+		return
+	}
+	file, line, fn := s.table.PCToLine(pc)
+	return file, line, fn != nil
 }
 
 // evalAddress takes a simple expression, either a symbol or hex value,
