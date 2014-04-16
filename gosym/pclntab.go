@@ -355,9 +355,18 @@ func (t *LineTable) findFileLine(entry uint64, filetab, linetab uint32, filenum,
 
 // go12PCToLine maps program counter to line number for the Go 1.2 pcln table.
 func (t *LineTable) go12PCToLine(pc uint64) (line int) {
+	return t.go12PCToVal(pc, t.ptrsize+5*4)
+}
+
+// go12PCToSPAdj maps program counter to Stack Pointer adjustment for the Go 1.2 pcln table.
+func (t *LineTable) go12PCToSPAdj(pc uint64) (spadj int) {
+	return t.go12PCToVal(pc, t.ptrsize+3*4)
+}
+
+func (t *LineTable) go12PCToVal(pc uint64, fOffset uint32) (val int) {
 	defer func() {
 		if recover() != nil {
-			line = -1
+			val = -1
 		}
 	}()
 
@@ -366,7 +375,7 @@ func (t *LineTable) go12PCToLine(pc uint64) (line int) {
 		return -1
 	}
 	entry := t.uintptr(f)
-	linetab := t.binary.Uint32(f[t.ptrsize+5*4:])
+	linetab := t.binary.Uint32(f[fOffset:])
 	return int(t.pcvalue(linetab, entry, pc))
 }
 

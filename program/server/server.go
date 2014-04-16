@@ -7,6 +7,7 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
@@ -137,14 +138,8 @@ func parseElf(f *elf.File) (*gosym.Table, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	pcln := gosym.NewLineTable(pclndat, f.Section(".text").Addr)
-	tab, err := gosym.NewTable(symdat, pcln)
-	if err != nil {
-		return nil, err
-	}
-
-	return tab, nil
+	return gosym.NewTable(symdat, pcln)
 }
 
 type file struct {
@@ -466,73 +461,86 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if req.Count != 1 {
-		// TODO: implement.
-		return fmt.Errorf("Frames.Count != 1 is not implemented")
-	}
-
-	// TODO: we're assuming we're at a function's entry point (LowPC).
-
 	regs := syscall.PtraceRegs{}
 	err := s.ptraceGetRegs(s.stoppedPid, &regs)
 	if err != nil {
 		return err
 	}
-	fp := regs.Rsp + uint64(s.arch.PointerSize)
-
-	entry, err := s.entryForPC(regs.Rip)
-	if err != nil {
-		return err
-	}
+	pc, sp := regs.Rip, regs.Rsp
 
 	var buf [8]byte
-	frame := program.Frame{}
+	b := new(bytes.Buffer)
 	r := s.dwarfData.Reader()
-	r.Seek(entry.Offset)
-	for {
-		entry, err := r.Next()
+
+	// TODO: check that req.Count is sane.
+	// TODO: handle walking over a split stack.
+	// TODO: handle hitting the end of the stack.
+	for i := 0; i < req.Count; i++ {
+		fp := sp + uint64(int64(s.table.PCToSPAdj(pc))) + uint64(s.arch.PointerSize)
+
+		// TODO: the returned frame should be structured instead of a hacked up string.
+		b.Reset()
+		fmt.Fprintf(b, "PC=%#x, SP=%#x:", pc, sp)
+
+		entry, err := s.entryForPC(pc)
 		if err != nil {
 			return err
 		}
-		if entry.Tag == 0 {
-			break
-		}
-		if entry.Tag != dwarf.TagFormalParameter {
-			continue
-		}
-		if entry.Children {
-			// TODO: handle this??
-			return fmt.Errorf("FormalParameter has children, expected none")
-		}
-		// TODO: the returned frame should be structured instead of a hacked up string.
-		location := uintptr(0)
-		for _, f := range entry.Field {
-			switch f.Attr {
-			case dwarf.AttrLocation:
-				offset := evalLocation(f.Val.([]uint8))
-				location = uintptr(int64(fp) + offset)
-				frame.S += fmt.Sprintf("(%d(FP))", offset)
-			case dwarf.AttrName:
-				frame.S += " " + f.Val.(string)
-			case dwarf.AttrType:
-				t, err := s.dwarfData.Type(f.Val.(dwarf.Offset))
-				if err == nil {
-					frame.S += fmt.Sprintf("[%v]", t)
+		r.Seek(entry.Offset)
+		for {
+			entry, err := r.Next()
+			if err != nil {
+				return err
+			}
+			if entry.Tag == 0 {
+				break
+			}
+			if entry.Tag != dwarf.TagFormalParameter {
+				continue
+			}
+			if entry.Children {
+				// TODO: handle this??
+				return fmt.Errorf("FormalParameter has children, expected none")
+			}
+
+			location := uintptr(0)
+			for _, f := range entry.Field {
+				switch f.Attr {
+				case dwarf.AttrLocation:
+					offset := evalLocation(f.Val.([]uint8))
+					location = uintptr(int64(fp) + offset)
+					fmt.Fprintf(b, "(%d(FP))", offset)
+				case dwarf.AttrName:
+					fmt.Fprintf(b, " %s", f.Val.(string))
+				case dwarf.AttrType:
+					t, err := s.dwarfData.Type(f.Val.(dwarf.Offset))
+					if err == nil {
+						fmt.Fprintf(b, "[%v]", t)
+					}
+					if t.String() != "int" || t.Size() != int64(s.arch.IntSize) {
+						break
+					}
+					if location == 0 {
+						return fmt.Errorf("no location for FormalParameter")
+					}
+					err = s.ptracePeek(s.stoppedPid, location, buf[:s.arch.IntSize])
+					if err != nil {
+						return err
+					}
+					fmt.Fprintf(b, "==%#x", s.arch.Int(buf[:s.arch.IntSize]))
 				}
-				if t.String() != "int" || t.Size() != int64(s.arch.IntSize) {
-					break
-				}
-				if location == 0 {
-					return fmt.Errorf("no location for FormalParameter")
-				}
-				err = s.ptracePeek(s.stoppedPid, location, buf[:s.arch.IntSize])
-				if err != nil {
-					return err
-				}
-				frame.S += fmt.Sprintf("==%#x", s.arch.Int(buf[:s.arch.IntSize]))
 			}
 		}
+		resp.Frames = append(resp.Frames, program.Frame{
+			S: b.String(),
+		})
+
+		// Walk to the caller's PC and SP.
+		err = s.ptracePeek(s.stoppedPid, uintptr(fp-uint64(s.arch.PointerSize)), buf[:s.arch.PointerSize])
+		if err != nil {
+			return fmt.Errorf("ptracePeek: %v", err)
+		}
+		pc, sp = s.arch.Uintptr(buf[:s.arch.PointerSize]), fp
 	}
-	resp.Frames = append(resp.Frames, frame)
 	return nil
 }

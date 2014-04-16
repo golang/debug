@@ -19,7 +19,7 @@ type Architecture struct {
 	IntSize int
 	// PointerSize is the size of a pointer, in bytes.
 	PointerSize int
-	// The byte order for I/O.
+	// ByteOrder is the byte order for ints and pointers.
 	ByteOrder       binary.ByteOrder
 	BreakpointInstr [MaxBreakpointSize]byte
 }
@@ -30,7 +30,7 @@ func (a *Architecture) Int(buf []byte) int64 {
 
 func (a *Architecture) Uint(buf []byte) uint64 {
 	if len(buf) != a.IntSize {
-		panic("bad uint size")
+		panic("bad IntSize")
 	}
 	switch a.IntSize {
 	case 4:
@@ -38,7 +38,20 @@ func (a *Architecture) Uint(buf []byte) uint64 {
 	case 8:
 		return a.ByteOrder.Uint64(buf[:8])
 	}
-	panic("no uint size")
+	panic("no IntSize")
+}
+
+func (a *Architecture) Uintptr(buf []byte) uint64 {
+	if len(buf) != a.PointerSize {
+		panic("bad PointerSize")
+	}
+	switch a.PointerSize {
+	case 4:
+		return uint64(a.ByteOrder.Uint32(buf[:4]))
+	case 8:
+		return a.ByteOrder.Uint64(buf[:8])
+	}
+	panic("no PointerSize")
 }
 
 var AMD64 = Architecture{

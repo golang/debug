@@ -502,6 +502,17 @@ func (t *Table) PCToLine(pc uint64) (file string, line int, fn *Func) {
 	return
 }
 
+// PCToSPAdj returns the stack pointer adjustment for a program counter.
+func (t *Table) PCToSPAdj(pc uint64) (spadj int) {
+	if fn := t.PCToFunc(pc); fn == nil {
+		return 0
+	}
+	if t.go12line != nil {
+		return t.go12line.go12PCToSPAdj(pc)
+	}
+	return 0
+}
+
 // LineToPC looks up the first program counter on the given line in
 // the named file.  It returns UnknownPathError or UnknownLineError if
 // there is an error looking up this line.
