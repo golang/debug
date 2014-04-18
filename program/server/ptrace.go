@@ -7,7 +7,7 @@ package server
 import (
 	"fmt"
 	"os"
-	"runtime"
+	rt "runtime"
 	"syscall"
 )
 
@@ -18,7 +18,7 @@ func ptraceRun(fc chan func() error, ec chan error) {
 	if cap(fc) != 0 || cap(ec) != 0 {
 		panic("ptraceRun was given unbuffered channels")
 	}
-	runtime.LockOSThread()
+	rt.LockOSThread()
 	for f := range fc {
 		ec <- f()
 	}

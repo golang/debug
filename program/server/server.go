@@ -47,8 +47,24 @@ type Server struct {
 	procIsUp    bool
 	stoppedPid  int
 	stoppedRegs syscall.PtraceRegs
+	runtime     runtime
 	breakpoints map[uint64]breakpoint
 	files       []*file // Index == file descriptor.
+}
+
+// runtime are the addresses, in the target program's address space, of Go
+// runtime functions such as runtime·lessstack.
+type runtime struct {
+	evaluated bool
+	evalErr   error
+
+	goexit                 uint64
+	mstart                 uint64
+	mcall                  uint64
+	morestack              uint64
+	lessstack              uint64
+	_rt0_go                uint64
+	externalthreadhandlerp uint64
 }
 
 // New parses the executable and builds local data structures for answering requests.
@@ -224,6 +240,8 @@ func (s *Server) Run(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error
 		s.procIsUp = false
 		s.stoppedPid = 0
 		s.stoppedRegs = syscall.PtraceRegs{}
+		s.runtime.evaluated = false
+		s.runtime.evalErr = nil
 	}
 	p, err := s.startProcess(s.executable, nil, &os.ProcAttr{
 		Files: []*os.File{
@@ -461,6 +479,13 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !s.runtime.evaluated {
+		s.evaluateRuntime()
+	}
+	if s.runtime.evalErr != nil {
+		return s.runtime.evalErr
+	}
+
 	regs := syscall.PtraceRegs{}
 	err := s.ptraceGetRegs(s.stoppedPid, &regs)
 	if err != nil {
@@ -472,9 +497,7 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 	b := new(bytes.Buffer)
 	r := s.dwarfData.Reader()
 
-	// TODO: check that req.Count is sane.
 	// TODO: handle walking over a split stack.
-	// TODO: handle hitting the end of the stack.
 	for i := 0; i < req.Count; i++ {
 		fp := sp + uint64(int64(s.table.PCToSPAdj(pc))) + uint64(s.arch.PointerSize)
 
@@ -482,7 +505,7 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 		b.Reset()
 		fmt.Fprintf(b, "PC=%#x, SP=%#x:", pc, sp)
 
-		entry, err := s.entryForPC(pc)
+		entry, funcEntry, err := s.entryForPC(pc)
 		if err != nil {
 			return err
 		}
@@ -536,6 +559,9 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 		})
 
 		// Walk to the caller's PC and SP.
+		if s.topOfStack(funcEntry) {
+			break
+		}
 		err = s.ptracePeek(s.stoppedPid, uintptr(fp-uint64(s.arch.PointerSize)), buf[:s.arch.PointerSize])
 		if err != nil {
 			return fmt.Errorf("ptracePeek: %v", err)
@@ -543,4 +569,45 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 		pc, sp = s.arch.Uintptr(buf[:s.arch.PointerSize]), fp
 	}
 	return nil
+}
+
+func (s *Server) evaluateRuntime() {
+	s.runtime.evaluated = true
+	s.runtime.evalErr = nil
+
+	addrs := [...]struct {
+		name            string
+		p               *uint64
+		windowsSpecific bool
+	}{
+		{"runtime.goexit", &s.runtime.goexit, false},
+		{"runtime.mstart", &s.runtime.mstart, false},
+		{"runtime.mcall", &s.runtime.mcall, false},
+		{"runtime.morestack", &s.runtime.morestack, false},
+		{"runtime.lessstack", &s.runtime.lessstack, false},
+		{"_rt0_go", &s.runtime._rt0_go, false},
+		{"runtime.externalthreadhandlerp", &s.runtime.externalthreadhandlerp, true},
+	}
+	for _, a := range addrs {
+		if a.windowsSpecific {
+			// TODO: determine if the traced binary is for Windows.
+			*a.p = 0
+			continue
+		}
+		*a.p, s.runtime.evalErr = s.lookupSym(a.name)
+		if s.runtime.evalErr != nil {
+			return
+		}
+	}
+}
+
+// topOfStack is the out-of-process equivalent of runtime·topofstack.
+func (s *Server) topOfStack(funcEntry uint64) bool {
+	return funcEntry == s.runtime.goexit ||
+		funcEntry == s.runtime.mstart ||
+		funcEntry == s.runtime.mcall ||
+		funcEntry == s.runtime.morestack ||
+		funcEntry == s.runtime.lessstack ||
+		funcEntry == s.runtime._rt0_go ||
+		(s.runtime.externalthreadhandlerp != 0 && funcEntry == s.runtime.externalthreadhandlerp)
 }

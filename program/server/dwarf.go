@@ -75,7 +75,7 @@ func (s *Server) lookupSym(name string) (uint64, error) {
 }
 
 func (s *Server) lookupPC(pc uint64) (string, error) {
-	entry, err := s.entryForPC(pc)
+	entry, _, err := s.entryForPC(pc)
 	if err != nil {
 		return "", err
 	}
@@ -91,12 +91,13 @@ func (s *Server) lookupPC(pc uint64) (string, error) {
 	return name, nil
 }
 
-func (s *Server) entryForPC(pc uint64) (*dwarf.Entry, error) {
+func (s *Server) entryForPC(pc uint64) (entry *dwarf.Entry, lowpc uint64, err error) {
+	// TODO: do something better than a linear scan?
 	r := s.dwarfData.Reader()
 	for {
 		entry, err := r.Next()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if entry == nil {
 			// TODO: why don't we get an error here.
@@ -110,9 +111,9 @@ func (s *Server) entryForPC(pc uint64) (*dwarf.Entry, error) {
 		if !lok || !hok || pc < lowpc || highpc <= pc {
 			continue
 		}
-		return entry, nil
+		return entry, lowpc, nil
 	}
-	return nil, fmt.Errorf("PC %#x not found", pc)
+	return nil, 0, fmt.Errorf("PC %#x not found", pc)
 }
 
 func lookupAttr(e *dwarf.Entry, a dwarf.Attr) interface{} {
