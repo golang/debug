@@ -11,7 +11,6 @@ package dwarf
 // TODO: Find a way to test this properly.
 
 import (
-	"encoding/binary"
 	"fmt"
 )
 
@@ -23,9 +22,14 @@ func (d *Data) PCToLine(pc uint64) (file string, line int, err error) {
 		return
 	}
 	var m lineMachine
-	for offset := 0; offset < len(d.line); {
+	// Assume the first info unit is the same as us. Extremely likely. TODO?
+	if len(d.unit) == 0 {
+		return "", 0, fmt.Errorf("no info section")
+	}
+	buf := makeBuf(d, &d.unit[0], "line", 0, d.line)
+	for len(buf.data) > 0 {
 		var found bool
-		offset, found, err = m.evalCompilationUnit(d.line, offset, pc)
+		found, err = m.evalCompilationUnit(&buf, pc)
 		if err != nil {
 			return "", 0, err
 		}
@@ -165,79 +169,66 @@ type lineMachine struct {
 
 // parseLinePrologue parses the prologue/header describing the compilation
 // unit in the line table starting at the specified offset.
-func (m *lineMachine) parseLinePrologue(data []byte, offset int) (int, error) {
-	// TODO: Assumes little endian
+func (m *lineMachine) parseLinePrologue(b *buf) error {
 	m.prologue = linePrologue{}
-	m.prologue.unitLength = int(binary.LittleEndian.Uint32(data[offset:]))
-	if m.prologue.unitLength > len(data)-4 {
-		return 0, fmt.Errorf("DWARF: bad PC/line header length")
+	m.prologue.unitLength = int(b.uint32())
+	if m.prologue.unitLength > len(b.data) {
+		return fmt.Errorf("DWARF: bad PC/line header length")
 	}
-	offset += 4
-	m.prologue.version = int(binary.LittleEndian.Uint16(data[offset:]))
-	offset += 2
-	m.prologue.headerLength = int(binary.LittleEndian.Uint32(data[offset:]))
-	offset += 4
-	m.prologue.minInstructionLength = int(data[offset])
-	offset += 1
+	m.prologue.version = int(b.uint16())
+	m.prologue.headerLength = int(b.uint32())
+	m.prologue.minInstructionLength = int(b.uint8())
 	if m.prologue.version >= 4 {
-		m.prologue.maxOpsPerInstruction = int(data[offset])
-		offset += 1
+		m.prologue.maxOpsPerInstruction = int(b.uint8())
 	} else {
 		m.prologue.maxOpsPerInstruction = 1
 	}
-	m.prologue.defaultIsStmt = data[offset] != 0
-	offset += 1
-	m.prologue.lineBase = int(int8(data[offset]))
-	offset += 1
-	m.prologue.lineRange = int(data[offset])
-	offset += 1
-	m.prologue.opcodeBase = data[offset]
-	offset += 1
+	m.prologue.defaultIsStmt = b.uint8() != 0
+	m.prologue.lineBase = int(int8(b.uint8()))
+	m.prologue.lineRange = int(b.uint8())
+	m.prologue.opcodeBase = b.uint8()
 	m.prologue.stdOpcodeLengths = make([]byte, m.prologue.opcodeBase-1)
-	copy(m.prologue.stdOpcodeLengths, data[offset:])
-	offset += int(m.prologue.opcodeBase - 1)
+	copy(m.prologue.stdOpcodeLengths, b.bytes(int(m.prologue.opcodeBase-1)))
 	m.prologue.include = make([]string, 1) // First entry is empty; file index entries are 1-indexed.
 	// Includes
+	name := make([]byte, 0, 64)
+	zeroTerminatedString := func() string {
+		name = name[:0]
+		for {
+			c := b.uint8()
+			if c == 0 {
+				break
+			}
+			name = append(name, c)
+		}
+		return string(name)
+	}
 	for {
-		if data[offset] == 0 {
-			offset++
+		name := zeroTerminatedString()
+		if name == "" {
 			break
 		}
-		startOfName := offset
-		for data[offset] != 0 {
-			offset++
-		}
-		m.prologue.include = append(m.prologue.include, string(data[startOfName:offset]))
-		offset++ // terminal NUL
+		m.prologue.include = append(m.prologue.include, name)
 	}
 	// Files
 	m.prologue.file = make([]lineFile, 1, 10) // entries are 1-indexed in line number program.
 	for {
-		if data[offset] == 0 {
-			offset++
+		name := zeroTerminatedString()
+		if name == "" {
 			break
 		}
-		startOfName := offset
-		for data[offset] != 0 {
-			offset++
-		}
-		name := data[startOfName:offset]
-		offset++ // terminal NUL
-		index, w := uleb128(data[offset:])
-		offset += w
-		time, w := uleb128(data[offset:])
-		offset += w
-		length, w := uleb128(data[offset:])
-		offset += w
+		index := b.uint()
+		time := b.uint()
+		length := b.uint()
 		f := lineFile{
-			name:   string(name),
+			name:   name,
 			index:  int(index),
 			time:   int(time),
 			length: int(length),
 		}
 		m.prologue.file = append(m.prologue.file, f)
 	}
-	return offset, nil
+	return nil
 }
 
 // Special opcodes, page 117.
@@ -255,61 +246,46 @@ func (m *lineMachine) specialOpcode(opcode byte) {
 	m.discriminator = 0
 }
 
-// evalCompilationUnit scans the compilation unit starting at the specified offset to see if it contains the PC.
-// It returns when it finds the PC or at the end of the compilation unit.
-// The return values are the offset where it stops and whether the PC was found; if so,
-// the machine's registers contain the relevant information.
-func (m *lineMachine) evalCompilationUnit(data []byte, startOffset int, pc uint64) (int, bool, error) {
-	offset, err := m.parseLinePrologue(data, startOffset)
+// evalCompilationUnit reads the next compilation unit to see if it contains the PC.
+// The return value reports whether the PC was found; if so, the machine's registers
+// contain the relevant information.
+func (m *lineMachine) evalCompilationUnit(b *buf, pc uint64) (bool, error) {
+	err := m.parseLinePrologue(b)
 	if err != nil {
-		return offset, false, err
+		return false, err
 	}
 	m.reset()
-	for offset < len(data) {
-		op := data[offset]
-		offset++
+	for len(b.data) > 0 {
+		op := b.uint8()
 		if op >= m.prologue.opcodeBase {
 			m.specialOpcode(op)
 			continue
 		}
 		switch op {
 		case lineStartExtendedOpcode:
-			if len(data) == 0 {
-				return offset, false, fmt.Errorf("DWARF: short extended opcode (1)")
+			if len(b.data) == 0 {
+				return false, fmt.Errorf("DWARF: short extended opcode (1)")
 			}
-			size, wid := uleb128(data[offset:])
-			if uint64(len(data)) < size {
-				return offset, false, fmt.Errorf("DWARF: short extended opcode (2)")
+			size := b.uint()
+			if uint64(len(b.data)) < size {
+				return false, fmt.Errorf("DWARF: short extended opcode (2)")
 			}
-			offset += int(wid)
-			op = data[offset]
-			offset++
+			op = b.uint8()
 			switch op {
 			case lineExtEndSequence:
 				m.endSequence = true
 				m.reset()
-				return offset, false, nil
+				return false, nil
 			case lineExtSetAddress:
-				var addr uint64
-				// TODO: Assumes little-endian.
-				switch size {
-				case 1 + 4: // TODO: How should we do this?
-					addr = uint64(binary.LittleEndian.Uint32(data[offset:]))
-					offset += 4
-				case 1 + 8:
-					addr = binary.LittleEndian.Uint64(data[offset:])
-					offset += 8
-				}
-				m.address = addr
+				m.address = b.addr()
 				m.opIndex = 0
 			case lineExtDefineFile:
-				return offset, false, fmt.Errorf("DWARF: unimplemented define_file op")
+				return false, fmt.Errorf("DWARF: unimplemented define_file op")
 			case lineExtSetDiscriminator:
-				discriminator, wid := uleb128(data[offset:])
+				discriminator := b.uint()
 				m.line = discriminator
-				offset += wid
 			default:
-				return offset, false, fmt.Errorf("DWARF: unknown extended opcode %#x", op)
+				return false, fmt.Errorf("DWARF: unknown extended opcode %#x", op)
 			}
 		case lineStdCopy:
 			m.discriminator = 0
@@ -318,47 +294,39 @@ func (m *lineMachine) evalCompilationUnit(data []byte, startOffset int, pc uint6
 			m.epilogueBegin = false
 			if m.address >= pc {
 				// TODO: if m.address > pc, is this one step too far?
-				return offset, true, nil
+				return true, nil
 			}
 		case lineStdAdvancePC:
-			advance, wid := uleb128(data[offset:])
+			advance := b.uint()
 			delta := (int(m.opIndex) + int(advance)) / m.prologue.maxOpsPerInstruction
 			m.address += uint64(m.prologue.minInstructionLength * delta)
 			m.opIndex = (m.opIndex + uint64(advance)) % uint64(m.prologue.maxOpsPerInstruction)
-			offset += wid
 			m.basicBlock = false
 			m.prologueEnd = false
 			m.epilogueBegin = false
 			m.discriminator = 0
 		case lineStdAdvanceLine:
-			advance, wid := sleb128(data[offset:])
+			advance := b.int()
 			m.line = uint64(int64(m.line) + advance)
-			offset += wid
 		case lineStdSetFile:
-			index, wid := uleb128(data[offset:])
+			index := b.uint()
 			m.file = index
-			offset += wid
 		case lineStdSetColumn:
-			column, wid := uleb128(data[offset:])
+			column := b.uint()
 			m.column = column
-			offset += wid
 		case lineStdNegateStmt:
 			m.isStmt = !m.isStmt
 		case lineStdSetBasicBlock:
 			m.basicBlock = true
 		case lineStdFixedAdvancePC:
-			delta := binary.LittleEndian.Uint16(data[offset:])
-			m.address += uint64(delta)
+			m.address += uint64(b.uint16())
 			m.opIndex = 0
-			offset += 2
 		case lineStdSetPrologueEnd:
 			m.prologueEnd = true
 		case lineStdSetEpilogueBegin:
 			m.epilogueBegin = true
 		case lineStdSetISA:
-			isa, wid := uleb128(data[offset:])
-			m.isa = isa
-			offset += wid
+			m.isa = b.uint()
 		case lineStdConstAddPC:
 			// TODO: Is this right? Seems crazy - why not just use 255 as a special opcode?
 			m.specialOpcode(255)
@@ -383,39 +351,4 @@ func (m *lineMachine) reset() {
 	m.epilogueBegin = false
 	m.isa = 0
 	m.discriminator = 0
-}
-
-// uleb128 decodes a varint-encoded unsigned integer.
-// TODO: use the buffer interface.
-func uleb128(v []uint8) (u uint64, length int) {
-	var shift uint
-	var x byte
-	for length, x = range v {
-		u |= (uint64(x) & 0x7F) << shift
-		shift += 7
-		if x&0x80 == 0 {
-			break
-		}
-	}
-	return u, length + 1
-}
-
-// sleb128 decodes a varint-encoded signed integer.
-// TODO: use the buffer interface.
-func sleb128(v []uint8) (s int64, length int) {
-	var shift uint
-	var sign int64 = -1
-	var x byte
-	for length, x = range v {
-		s |= (int64(x) & 0x7F) << shift
-		shift += 7
-		sign <<= 7
-		if x&0x80 == 0 {
-			if x&0x40 != 0 {
-				s |= sign
-			}
-			break
-		}
-	}
-	return s, length + 1
 }
