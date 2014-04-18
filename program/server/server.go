@@ -144,7 +144,7 @@ func loadExecutable(f *os.File) (*arch.Architecture, *dwarf.Data, *gosym.Table, 
 }
 
 // parseElf returns the gosym.Table representation of the old symbol tables.
-// TODO: Delete this once we know how to get PC/line data out of DWARF.
+// TODO: Delete this once we know how to get PC/SPoff data out of DWARF.
 func parseElf(f *elf.File) (*gosym.Table, error) {
 	symdat, err := f.Section(".gosymtab").Data() // TODO unused.
 	if err != nil {
@@ -426,9 +426,9 @@ func (s *Server) eval(expr string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		file, line, ok := s.lookupSource(addr)
-		if !ok {
-			return nil, fmt.Errorf("no PC/line data for: %q", expr)
+		file, line, err := s.lookupSource(addr)
+		if err != nil {
+			return nil, err
 		}
 		return []string{fmt.Sprintf("%s:%d", file, line)}, nil
 
@@ -448,12 +448,13 @@ func (s *Server) eval(expr string) ([]string, error) {
 	return nil, fmt.Errorf("bad expression syntax: %q", expr)
 }
 
-func (s *Server) lookupSource(pc uint64) (file string, line int, ok bool) {
-	if s.table == nil {
+func (s *Server) lookupSource(pc uint64) (file string, line int, err error) {
+	if s.dwarfData == nil {
 		return
 	}
-	file, line, fn := s.table.PCToLine(pc)
-	return file, line, fn != nil
+	// TODO: The gosym equivalent also returns the relevant Func. Do that when
+	// DWARF has the same facility.
+	return s.dwarfData.PCToLine(pc)
 }
 
 // evalAddress takes a simple expression, either a symbol or hex value,
