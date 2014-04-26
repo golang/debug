@@ -30,7 +30,8 @@ func (s *Server) startProcess(name string, argv []string, attr *os.ProcAttr) (pr
 		proc, err1 = os.StartProcess(name, argv, attr)
 		return err1
 	}
-	return proc, <-s.ec
+	err = <-s.ec
+	return
 }
 
 func (s *Server) ptraceCont(pid int, signal int) (err error) {
@@ -102,5 +103,6 @@ func (s *Server) wait(pid int) (wpid int, status syscall.WaitStatus, err error) 
 		wpid, err1 = syscall.Wait4(pid, &status, syscall.WALL, nil)
 		return err1
 	}
-	return wpid, status, <-s.ec
+	err = <-s.ec
+	return
 }
