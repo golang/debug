@@ -5,7 +5,6 @@
 package server
 
 import (
-	"fmt"
 	"regexp"
 
 	"code.google.com/p/ogle/debug/dwarf"
@@ -25,7 +24,7 @@ func (s *Server) lookupRE(re *regexp.Regexp) (result []string, err error) {
 		if entry.Tag != dwarf.TagSubprogram {
 			continue
 		}
-		nameAttr := lookupAttr(entry, dwarf.AttrName)
+		nameAttr := entry.LookupAttr(dwarf.AttrName)
 		if nameAttr == nil {
 			// TODO: this shouldn't be possible.
 			continue
@@ -40,89 +39,15 @@ func (s *Server) lookupRE(re *regexp.Regexp) (result []string, err error) {
 }
 
 func (s *Server) lookupSym(name string) (uint64, error) {
-	r := s.dwarfData.Reader()
-	for {
-		entry, err := r.Next()
-		if err != nil {
-			return 0, err
-		}
-		if entry == nil {
-			// TODO: why don't we get an error here.
-			break
-		}
-		if entry.Tag != dwarf.TagSubprogram {
-			continue
-		}
-		nameAttr := lookupAttr(entry, dwarf.AttrName)
-		if nameAttr == nil {
-			// TODO: this shouldn't be possible.
-			continue
-		}
-		if nameAttr.(string) != name {
-			continue
-		}
-		addrAttr := lookupAttr(entry, dwarf.AttrLowpc)
-		if addrAttr == nil {
-			return 0, fmt.Errorf("symbol %q has no LowPC attribute", name)
-		}
-		addr, ok := addrAttr.(uint64)
-		if !ok {
-			return 0, fmt.Errorf("symbol %q has non-uint64 LowPC attribute", name)
-		}
-		return addr, nil
-	}
-	return 0, fmt.Errorf("symbol %q not found", name)
+	return s.dwarfData.LookupSym(name)
 }
 
 func (s *Server) lookupPC(pc uint64) (string, error) {
-	entry, _, err := s.entryForPC(pc)
-	if err != nil {
-		return "", err
-	}
-	nameAttr := lookupAttr(entry, dwarf.AttrName)
-	if nameAttr == nil {
-		// TODO: this shouldn't be possible.
-		return "", fmt.Errorf("TODO")
-	}
-	name, ok := nameAttr.(string)
-	if !ok {
-		return "", fmt.Errorf("name for PC %#x is not a string", pc)
-	}
-	return name, nil
+	return s.dwarfData.LookupPC(pc)
 }
 
 func (s *Server) entryForPC(pc uint64) (entry *dwarf.Entry, lowpc uint64, err error) {
-	// TODO: do something better than a linear scan?
-	r := s.dwarfData.Reader()
-	for {
-		entry, err := r.Next()
-		if err != nil {
-			return nil, 0, err
-		}
-		if entry == nil {
-			// TODO: why don't we get an error here.
-			break
-		}
-		if entry.Tag != dwarf.TagSubprogram {
-			continue
-		}
-		lowpc, lok := lookupAttr(entry, dwarf.AttrLowpc).(uint64)
-		highpc, hok := lookupAttr(entry, dwarf.AttrHighpc).(uint64)
-		if !lok || !hok || pc < lowpc || highpc <= pc {
-			continue
-		}
-		return entry, lowpc, nil
-	}
-	return nil, 0, fmt.Errorf("PC %#x not found", pc)
-}
-
-func lookupAttr(e *dwarf.Entry, a dwarf.Attr) interface{} {
-	for _, f := range e.Field {
-		if f.Attr == a {
-			return f.Val
-		}
-	}
-	return nil
+	return s.dwarfData.EntryForPC(pc)
 }
 
 // TODO: signedness? Return (x int64, ok bool)??

@@ -4,11 +4,11 @@
 
 package dwarf
 
-// Mapping from PC to lines.
-// http://www.dwarfstd.org/doc/DWARF4.pdf Section 6.2 page 108
-
-// TODO: Convert the I/O to use the buffer interface defined in buf.go.
+// This file implemetns the mapping from PC to lines.
+// TODO: Also map from line to PC.
 // TODO: Find a way to test this properly.
+
+// http://www.dwarfstd.org/doc/DWARF4.pdf Section 6.2 page 108
 
 import (
 	"fmt"
@@ -19,7 +19,7 @@ import (
 // TODO: Return a function descriptor as well.
 func (d *Data) PCToLine(pc uint64) (file string, line int, err error) {
 	if len(d.line) == 0 {
-		return
+		return "", 0, fmt.Errorf("PCToLine: no line table")
 	}
 	var m lineMachine
 	// Assume the first info unit is the same as us. Extremely likely. TODO?
@@ -171,7 +171,7 @@ type lineMachine struct {
 // unit in the line table starting at the specified offset.
 func (m *lineMachine) parseLinePrologue(b *buf) error {
 	m.prologue = linePrologue{}
-	m.prologue.unitLength = int(b.uint32())
+	m.prologue.unitLength = int(b.uint32()) // Note: We are assuming 32-bit DWARF format.
 	if m.prologue.unitLength > len(b.data) {
 		return fmt.Errorf("DWARF: bad PC/line header length")
 	}
@@ -192,6 +192,7 @@ func (m *lineMachine) parseLinePrologue(b *buf) error {
 	m.prologue.include = make([]string, 1) // First entry is empty; file index entries are 1-indexed.
 	// Includes
 	name := make([]byte, 0, 64)
+	// TODO: use b.string()
 	zeroTerminatedString := func() string {
 		name = name[:0]
 		for {
