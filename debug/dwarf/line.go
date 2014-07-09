@@ -191,21 +191,8 @@ func (m *lineMachine) parseLinePrologue(b *buf) error {
 	copy(m.prologue.stdOpcodeLengths, b.bytes(int(m.prologue.opcodeBase-1)))
 	m.prologue.include = make([]string, 1) // First entry is empty; file index entries are 1-indexed.
 	// Includes
-	name := make([]byte, 0, 64)
-	// TODO: use b.string()
-	zeroTerminatedString := func() string {
-		name = name[:0]
-		for {
-			c := b.uint8()
-			if c == 0 {
-				break
-			}
-			name = append(name, c)
-		}
-		return string(name)
-	}
 	for {
-		name := zeroTerminatedString()
+		name := b.string()
 		if name == "" {
 			break
 		}
@@ -214,7 +201,7 @@ func (m *lineMachine) parseLinePrologue(b *buf) error {
 	// Files
 	m.prologue.file = make([]lineFile, 1, 10) // entries are 1-indexed in line number program.
 	for {
-		name := zeroTerminatedString()
+		name := b.string()
 		if name == "" {
 			break
 		}
