@@ -103,7 +103,7 @@ func getData(file string) (*Data, error) {
 	panic("unimplemented DWARF for GOOS=" + runtime.GOOS)
 }
 
-func TestPCLine(t *testing.T) {
+func TestPCToLine(t *testing.T) {
 	if !dotest(false) {
 		return
 	}

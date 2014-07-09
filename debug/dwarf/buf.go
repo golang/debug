@@ -54,6 +54,14 @@ func makeBuf(d *Data, format dataFormat, name string, off Offset, data []byte) b
 	return buf{d, d.order, format, name, off, data, nil}
 }
 
+func (b *buf) slice(length int) buf {
+	n := *b
+	data := b.data
+	b.skip(length) // Will validate length.
+	n.data = data[:length]
+	return n
+}
+
 func (b *buf) uint8() uint8 {
 	if len(b.data) < 1 {
 		b.error("underflow")
@@ -78,6 +86,8 @@ func (b *buf) bytes(n int) []byte {
 
 func (b *buf) skip(n int) { b.bytes(n) }
 
+// string returns the NUL-terminated (C-like) string at the start of the buffer.
+// The terminal NUL is discarded.
 func (b *buf) string() string {
 	for i := 0; i < len(b.data); i++ {
 		if b.data[i] == 0 {
