@@ -8,7 +8,10 @@
 
 package dwarf
 
-import "strconv"
+import (
+	"reflect"
+	"strconv"
+)
 
 // A Type conventionally represents a pointer to any of the
 // specific Type structures (CharType, StructType, etc.).
@@ -22,8 +25,9 @@ type Type interface {
 // If a field is not known or not applicable for a given type,
 // the zero value is used.
 type CommonType struct {
-	ByteSize int64  // size of value of this type, in bytes
-	Name     string // name that can be used to refer to type
+	ByteSize    int64        // size of value of this type, in bytes
+	Name        string       // name that can be used to refer to type
+	ReflectKind reflect.Kind // the reflect kind of the type.
 }
 
 func (c *CommonType) Common() *CommonType { return c }
@@ -181,6 +185,33 @@ func (t *StructType) Defn() string {
 	return s
 }
 
+// A SliceType represents a Go slice type. It looks like a StructType, describing
+// the runtime-internal structure, with extra fields.
+type SliceType struct {
+	StructType
+	ElemType Type
+}
+
+func (t *SliceType) String() string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return "[]" + t.ElemType.String()
+}
+
+// A StringType represents a Go string type. It looks like a StructType, describing
+// the runtime-internal structure, but we wrap it for neatness.
+type StringType struct {
+	StructType
+}
+
+func (t *StringType) String() string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return "string"
+}
+
 // An EnumType represents an enumerated type.
 // The only indication of its native integer type is its ByteSize
 // (inside CommonType).
@@ -251,6 +282,21 @@ func (t *TypedefType) String() string { return t.Name }
 
 func (t *TypedefType) Size() int64 { return t.Type.Size() }
 
+// A MapType represents a Go slice type. It looks like a TypedefType, describing
+// the runtime-internal structure, with extra fields.
+type MapType struct {
+	TypedefType
+	KeyType  Type
+	ElemType Type
+}
+
+func (t *MapType) String() string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return "map[" + t.KeyType.String() + "]" + t.ElemType.String()
+}
+
 // typeReader is used to read from either the info section or the
 // types section.
 type typeReader interface {
@@ -263,6 +309,11 @@ type typeReader interface {
 // Type reads the type at off in the DWARF ``info'' section.
 func (d *Data) Type(off Offset) (Type, error) {
 	return d.readType("info", d.Reader(), off, d.typeCache)
+}
+
+func getKind(e *Entry) reflect.Kind {
+	integer, _ := e.Val(AttrGoKind).(int64)
+	return reflect.Kind(integer)
 }
 
 // readType reads a type from r at off of name using and updating a
@@ -324,10 +375,10 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		}
 	}
 
-	// Get Type referred to by Entry's AttrType field.
+	// Get Type referred to by Entry's attr.
 	// Set err if error happens.  Not having a type is an error.
-	typeOf := func(e *Entry) Type {
-		tval := e.Val(AttrType)
+	typeOf := func(e *Entry, attr Attr) Type {
+		tval := e.Val(attr)
 		var t Type
 		switch toff := tval.(type) {
 		case Offset:
@@ -356,9 +407,10 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//	TagSubrangeType or TagEnumerationType giving one dimension.
 		//	dimensions are in left to right order.
 		t := new(ArrayType)
+		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
-		if t.Type = typeOf(e); err != nil {
+		if t.Type = typeOf(e, AttrType); err != nil {
 			goto Error
 		}
 		t.StrideBitSize, _ = e.Val(AttrStrideSize).(int64)
@@ -435,13 +487,16 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		t.Name = name
 		t.BitSize, _ = e.Val(AttrBitSize).(int64)
 		t.BitOffset, _ = e.Val(AttrBitOffset).(int64)
+		t.ReflectKind = getKind(e)
 
 	case TagClassType, TagStructType, TagUnionType:
 		// Structure, union, or class type.  (DWARF v2 §5.5)
+		// Also Slices and Strings (Go-specific).
 		// Attributes:
 		//	AttrName: name of struct, union, or class
 		//	AttrByteSize: byte size [required]
 		//	AttrDeclaration: if true, struct/union/class is incomplete
+		// 	AttrGoElem: present for slices only.
 		// Children:
 		//	TagMember to describe one member.
 		//		AttrName: name of member [required]
@@ -452,8 +507,21 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//		AttrDataMemberLoc: location within struct [required for struct, class]
 		// There is much more to handle C++, all ignored for now.
 		t := new(StructType)
-		typ = t
-		typeCache[off] = t
+		t.ReflectKind = getKind(e)
+		switch t.ReflectKind {
+		case reflect.Slice:
+			slice := new(SliceType)
+			slice.ElemType = typeOf(e, AttrGoElem)
+			t = &slice.StructType
+			typ = slice
+		case reflect.String:
+			str := new(StringType)
+			t = &str.StructType
+			typ = str
+		default:
+			typ = t
+		}
+		typeCache[off] = typ
 		switch e.Tag {
 		case TagClassType:
 			t.Kind = "class"
@@ -470,7 +538,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		for kid := next(); kid != nil; kid = next() {
 			if kid.Tag == TagMember {
 				f := new(StructField)
-				if f.Type = typeOf(kid); err != nil {
+				if f.Type = typeOf(kid, AttrType); err != nil {
 					goto Error
 				}
 				switch loc := kid.Val(AttrDataMemberLoc).(type) {
@@ -524,9 +592,10 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		// Attributes:
 		//	AttrType: subtype
 		t := new(QualType)
+		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
-		if t.Type = typeOf(e); err != nil {
+		if t.Type = typeOf(e, AttrType); err != nil {
 			goto Error
 		}
 		switch e.Tag {
@@ -548,6 +617,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//		AttrName: name of constant
 		//		AttrConstValue: value of constant
 		t := new(EnumType)
+		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
 		t.EnumName, _ = e.Val(AttrName).(string)
@@ -574,13 +644,14 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//	AttrType: subtype [not required!  void* has no AttrType]
 		//	AttrAddrClass: address class [ignored]
 		t := new(PtrType)
+		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
 		if e.Val(AttrType) == nil {
 			t.Type = &VoidType{}
 			break
 		}
-		t.Type = typeOf(e)
+		t.Type = typeOf(e, AttrType)
 
 	case TagSubroutineType:
 		// Subroutine type.  (DWARF v2 §5.7)
@@ -593,9 +664,10 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//		AttrType: type of parameter
 		//	TagUnspecifiedParameter: final ...
 		t := new(FuncType)
+		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
-		if t.ReturnType = typeOf(e); err != nil {
+		if t.ReturnType = typeOf(e, AttrType); err != nil {
 			goto Error
 		}
 		t.ParamType = make([]Type, 0, 8)
@@ -605,7 +677,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 			default:
 				continue
 			case TagFormalParameter:
-				if tkid = typeOf(kid); err != nil {
+				if tkid = typeOf(kid, AttrType); err != nil {
 					goto Error
 				}
 			case TagUnspecifiedParameters:
@@ -616,14 +688,27 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 
 	case TagTypedef:
 		// Typedef (DWARF v2 §5.3)
+		// Also maps (Go-specific).
 		// Attributes:
 		//	AttrName: name [required]
 		//	AttrType: type definition [required]
+		//	AttrGoKey: present for maps only.
+		//	AttrElemKey: present for maps only.
 		t := new(TypedefType)
-		typ = t
-		typeCache[off] = t
+		t.ReflectKind = getKind(e)
+		switch t.ReflectKind {
+		case reflect.Map:
+			m := new(MapType)
+			m.KeyType = typeOf(e, AttrGoKey)
+			m.ElemType = typeOf(e, AttrGoElem)
+			t = &m.TypedefType
+			typ = m
+		default:
+			typ = t
+		}
+		typeCache[off] = typ
 		t.Name, _ = e.Val(AttrName).(string)
-		t.Type = typeOf(e)
+		t.Type = typeOf(e, AttrType)
 	}
 
 	if err != nil {

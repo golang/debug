@@ -84,6 +84,11 @@ const (
 	AttrCallFile       Attr = 0x58
 	AttrCallLine       Attr = 0x59
 	AttrDescription    Attr = 0x5A
+
+	// Go-specific attributes.
+	AttrGoKind Attr = 0x2900
+	AttrGoKey  Attr = 0x2901
+	AttrGoElem Attr = 0x2902
 )
 
 var attrNames = [...]string{
@@ -167,6 +172,14 @@ func (a Attr) String() string {
 		if s != "" {
 			return s
 		}
+	}
+	switch a {
+	case AttrGoKind:
+		return "GoKind"
+	case AttrGoKey:
+		return "GoKey"
+	case AttrGoElem:
+		return "GoElem"
 	}
 	return strconv.Itoa(int(a))
 }
