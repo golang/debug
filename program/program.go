@@ -62,7 +62,7 @@ type Program interface {
 	// expression to match a set of symbols.
 	Breakpoint(address string) error
 
-	// DeleteBreakpoint removes the breakpoint at to the specified
+	// DeleteBreakpoint removes the breakpoint at the specified
 	// address. TODO: Probably the wrong interface.
 	DeleteBreakpoint(address string) error
 
@@ -72,9 +72,12 @@ type Program interface {
 	// Syntax:
 	//	re:regexp
 	//		Returns a list of symbol names that match the expression
-	//	sym:symbol
+	//	addr:symbol
 	//		Returns a one-element list holding the hexadecimal
 	//		("0x1234") value of the address of the symbol
+	//	val:symbol
+	//		Returns a one-element list holding the formatted
+	//		value of the symbol
 	//	0x1234, 01234, 467
 	//		Returns a one-element list holding the name of the
 	//		symbol ("main.foo") at that address (hex, octal, decimal).

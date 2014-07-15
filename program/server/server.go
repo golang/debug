@@ -47,6 +47,7 @@ type Server struct {
 	runtime     runtime
 	breakpoints map[uint64]breakpoint
 	files       []*file // Index == file descriptor.
+	printer     *Printer
 }
 
 // runtime are the addresses, in the target program's address space, of Go
@@ -62,6 +63,11 @@ type runtime struct {
 	lessstack              uint64
 	_rt0_go                uint64
 	externalthreadhandlerp uint64
+}
+
+// peek implements the Peeker interface required by the printer.
+func (s *Server) peek(offset uintptr, buf []byte) error {
+	return s.ptracePeek(s.stoppedPid, offset, buf)
 }
 
 // New parses the executable and builds local data structures for answering requests.
@@ -84,6 +90,7 @@ func New(executable string) (*Server, error) {
 		ec:          make(chan error),
 		breakpoints: make(map[uint64]breakpoint),
 	}
+	srv.printer = NewPrinter(architecture, dwarfData, srv)
 	go ptraceRun(srv.fc, srv.ec)
 	return srv, nil
 }
@@ -388,13 +395,21 @@ func (s *Server) eval(expr string) ([]string, error) {
 		}
 		return s.lookupRE(re)
 
-	case strings.HasPrefix(expr, "sym:"):
+	case strings.HasPrefix(expr, "addr:"):
 		// Symbol lookup. Return address.
-		addr, err := s.lookupSym(expr[4:])
+		addr, err := s.lookupFunction(expr[5:])
 		if err != nil {
 			return nil, err
 		}
 		return []string{fmt.Sprintf("%#x", addr)}, nil
+
+	case strings.HasPrefix(expr, "val:"):
+		// Symbol lookup. Return formatted value.
+		value, err := s.printer.Sprint(expr[4:])
+		if err != nil {
+			return nil, err
+		}
+		return []string{value}, nil
 
 	case strings.HasPrefix(expr, "src:"):
 		// Numerical address. Return file.go:123.
@@ -437,7 +452,7 @@ func (s *Server) lookupSource(pc uint64) (file string, line int, err error) {
 // and evaluates it as an address.
 func (s *Server) evalAddress(expr string) (uint64, error) {
 	// Might be a symbol.
-	addr, err := s.lookupSym(expr)
+	addr, err := s.lookupFunction(expr) // TODO: might not be a function
 	if err == nil {
 		return addr, nil
 	}
@@ -507,32 +522,20 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 				return fmt.Errorf("FormalParameter has children, expected none")
 			}
 
-			location := uintptr(0)
+			offset := int64(0)
+			name := "arg"
 			for _, f := range entry.Field {
 				switch f.Attr {
 				case dwarf.AttrLocation:
-					offset := evalLocation(f.Val.([]uint8))
-					location = uintptr(int64(fp) + offset)
-					fmt.Fprintf(b, "(%d(FP))", offset)
+					offset = evalLocation(f.Val.([]uint8))
 				case dwarf.AttrName:
-					fmt.Fprintf(b, " %s", f.Val.(string))
-				case dwarf.AttrType:
-					t, err := s.dwarfData.Type(f.Val.(dwarf.Offset))
-					if err == nil {
-						fmt.Fprintf(b, "[%v]", t)
-					}
-					if t.String() != "int" || t.Size() != int64(s.arch.IntSize) {
-						break
-					}
-					if location == 0 {
-						return fmt.Errorf("no location for FormalParameter")
-					}
-					err = s.ptracePeek(s.stoppedPid, location, buf[:s.arch.IntSize])
-					if err != nil {
-						return err
-					}
-					fmt.Fprintf(b, "==%#x", s.arch.Int(buf[:s.arch.IntSize]))
+					name = f.Val.(string)
 				}
+			}
+			str, err := s.printer.SprintEntry(entry, uintptr(fp)+uintptr(offset))
+			fmt.Fprintf(b, "%s (%d(FP)) = %s ", name, offset, str)
+			if err != nil {
+				fmt.Fprintf(b, "(%s) ", err)
 			}
 		}
 		resp.Frames = append(resp.Frames, program.Frame{
@@ -575,7 +578,7 @@ func (s *Server) evaluateRuntime() {
 			*a.p = 0
 			continue
 		}
-		*a.p, s.runtime.evalErr = s.lookupSym(a.name)
+		*a.p, s.runtime.evalErr = s.lookupFunction(a.name)
 		if s.runtime.evalErr != nil {
 			return
 		}

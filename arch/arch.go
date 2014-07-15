@@ -41,6 +41,27 @@ func (a *Architecture) Uint(buf []byte) uint64 {
 	panic("no IntSize")
 }
 
+func (a *Architecture) IntN(buf []byte) int64 {
+	return int64(a.UintN(buf))
+}
+
+func (a *Architecture) UintN(buf []byte) uint64 {
+	u := uint64(0)
+	if a.ByteOrder == binary.LittleEndian {
+		shift := uint(0)
+		for _, c := range buf {
+			u |= uint64(c) << shift
+			shift += 8
+		}
+	} else {
+		for _, c := range buf {
+			u <<= 8
+			u |= uint64(c)
+		}
+	}
+	return u
+}
+
 func (a *Architecture) Uintptr(buf []byte) uint64 {
 	if len(buf) != a.PointerSize {
 		panic("bad PointerSize")

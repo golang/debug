@@ -24,7 +24,7 @@ func (s *Server) lookupRE(re *regexp.Regexp) (result []string, err error) {
 		if entry.Tag != dwarf.TagSubprogram {
 			continue
 		}
-		nameAttr := entry.LookupAttr(dwarf.AttrName)
+		nameAttr := entry.Val(dwarf.AttrName)
 		if nameAttr == nil {
 			// TODO: this shouldn't be possible.
 			continue
@@ -38,8 +38,8 @@ func (s *Server) lookupRE(re *regexp.Regexp) (result []string, err error) {
 	return result, nil
 }
 
-func (s *Server) lookupSym(name string) (uint64, error) {
-	return s.dwarfData.LookupSym(name)
+func (s *Server) lookupFunction(name string) (uint64, error) {
+	return s.dwarfData.LookupFunction(name)
 }
 
 func (s *Server) lookupPC(pc uint64) (string, error) {
