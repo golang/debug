@@ -282,7 +282,17 @@ func (p *Printer) printArrayAt(typ *dwarf.ArrayType, addr uintptr) {
 	p.printf("}")
 }
 
-// TODO: Unimplemented.
+// mapDesc collects the information necessary to print a map.
+type mapDesc struct {
+	typ        *dwarf.MapType
+	count      int
+	numBuckets int
+	keySize    uintptr
+	elemSize   uintptr
+	bucketSize uintptr
+	buf        []byte
+}
+
 func (p *Printer) printMapAt(typ *dwarf.MapType, addr uintptr) {
 	// Maps are pointers to a struct type.
 	structType := typ.Type.(*dwarf.PtrType).Type.(*dwarf.StructType)
@@ -295,11 +305,82 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, addr uintptr) {
 	if !p.peek(addr, structType.ByteSize) {
 		return
 	}
-	// TODO: unimplemented. Hard.
-	countField := structType.Field[0]
-	p.printf("%s with ", typ)
-	p.printValueAt(countField.Type, addr+uintptr(countField.ByteOffset))
-	p.printf(" elements")
+	// From runtime/hashmap.*; We need to walk the map data structure.
+	// Load the struct, then iterate over the buckets.
+	// uintgo count (occupancy).
+	offset := int(structType.Field[0].ByteOffset)
+	count := int(p.arch.Uint(p.tmp[offset : offset+p.arch.IntSize]))
+	// uint8 Log2 of number of buckets.
+	b := uint(p.tmp[structType.Field[3].ByteOffset])
+	// uint8 key size in bytes.
+	keySize := uintptr(p.tmp[structType.Field[4].ByteOffset])
+	// uint8 element size in bytes.
+	elemSize := uintptr(p.tmp[structType.Field[5].ByteOffset])
+	// uint16 bucket size in bytes.
+	bucketSize := uintptr(p.arch.Uint16(p.tmp[structType.Field[6].ByteOffset:]))
+	// pointer to buckets
+	offset = int(structType.Field[7].ByteOffset)
+	bucketPtr := uintptr(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
+	// pointer to old buckets.
+	offset = int(structType.Field[8].ByteOffset)
+	oldBucketPtr := uintptr(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
+	// Ready to print.
+	p.printf("%s{", typ)
+	desc := mapDesc{
+		typ:        typ,
+		count:      count,
+		numBuckets: 1 << b,
+		keySize:    keySize,
+		elemSize:   elemSize,
+		bucketSize: bucketSize,
+		buf:        make([]byte, bucketSize),
+	}
+	p.printMapBucketsAt(desc, bucketPtr)
+	p.printMapBucketsAt(desc, oldBucketPtr)
+	p.printf("}")
+}
+
+// Map bucket layout from runtime/hashmap.*
+const (
+	bucketCnt  = 8 // BUCKETSIZE (poor name) in C code.
+	minTopHash = 4
+)
+
+func (p *Printer) printMapBucketsAt(desc mapDesc, addr uintptr) {
+	if addr == 0 {
+		return
+	}
+	for i := 0; desc.count > 0 && i < desc.numBuckets; i++ {
+		// Load this bucket struct into memory and initialize "pointers" to the key and value slices.
+		// After the header, the bucket struct has an array of keys followed by an array of elements.
+		if !p.ok(p.peeker.peek(addr, desc.buf)) {
+			return
+		}
+		// TODO: We have loaded the data but printValueAt loads from remote addresses
+		// so we need to keep track of addresses and read memory twice. It would
+		// be nice to avoid this overhead.
+		keyAddr := addr + bucketCnt + uintptr(p.arch.PointerSize)
+		elemAddr := keyAddr + bucketCnt*desc.keySize
+		addr += desc.bucketSize // Advance to next bucket; buf, keyAddr and elemAddr are all we need now.
+		// tophash uint8 [bucketCnt] tells us which buckets are occupied.
+		tophash := desc.buf[:bucketCnt]
+		for j := 0; desc.count > 0 && j < bucketCnt; j++ {
+			if tophash[j] >= minTopHash {
+				p.printValueAt(desc.typ.KeyType, keyAddr)
+				p.printf(":")
+				p.printValueAt(desc.typ.ElemType, elemAddr)
+				desc.count--
+				if desc.count > 0 {
+					p.printf(", ")
+				}
+			}
+			keyAddr += desc.keySize
+			elemAddr += desc.elemSize
+		}
+		// pointer to overflow bucket, if any.
+		overflow := uintptr(p.arch.Uintptr(desc.buf[bucketCnt : bucketCnt+p.arch.PointerSize]))
+		p.printMapBucketsAt(desc, overflow)
+	}
 }
 
 func (p *Printer) printSliceAt(typ *dwarf.SliceType, addr uintptr) {

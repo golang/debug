@@ -41,6 +41,30 @@ func (a *Architecture) Uint(buf []byte) uint64 {
 	panic("no IntSize")
 }
 
+func (a *Architecture) Int16(buf []byte) int16 {
+	return int16(a.Uint16(buf))
+}
+
+func (a *Architecture) Int32(buf []byte) int32 {
+	return int32(a.Uint32(buf))
+}
+
+func (a *Architecture) Int64(buf []byte) int64 {
+	return int64(a.Uint64(buf))
+}
+
+func (a *Architecture) Uint16(buf []byte) uint16 {
+	return a.ByteOrder.Uint16(buf)
+}
+
+func (a *Architecture) Uint32(buf []byte) uint32 {
+	return a.ByteOrder.Uint32(buf)
+}
+
+func (a *Architecture) Uint64(buf []byte) uint64 {
+	return a.ByteOrder.Uint64(buf)
+}
+
 func (a *Architecture) IntN(buf []byte) int64 {
 	return int64(a.UintN(buf))
 }
