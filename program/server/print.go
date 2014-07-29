@@ -27,6 +27,11 @@ type Printer struct {
 	printBuf bytes.Buffer     // Accumulates the output.
 	tmp      []byte           // Temporary used for I/O.
 	visited  map[uintptr]bool // Prevents looping on cyclic data.
+	// The cache stores a local copy of part of the address space.
+	// Saves I/O overhead when scanning map buckets by letting
+	// printValueAt use the contents of already-read bucket data.
+	cache    []byte  // Already-read data.
+	cacheOff uintptr // Starting address of cache.
 }
 
 // printf prints to printBuf, unless there has been an error.
@@ -56,9 +61,35 @@ func (p *Printer) ok(err error) bool {
 }
 
 // peek reads len bytes at offset, leaving p.tmp with the data and sized appropriately.
-func (p *Printer) peek(offset uintptr, len int64) bool {
-	p.tmp = p.tmp[:len]
+// It uses the cache if the request is within it.
+func (p *Printer) peek(offset uintptr, length int64) bool {
+	p.tmp = p.tmp[:length]
+	if p.cacheOff <= offset && offset+uintptr(length) <= p.cacheOff+uintptr(len(p.cache)) {
+		copy(p.tmp, p.cache[offset-p.cacheOff:])
+		return true
+	}
 	return p.ok(p.peeker.peek(offset, p.tmp))
+}
+
+// setCache initializes the cache to contain the contents of the
+// address space at the specified offset.
+func (p *Printer) setCache(offset, length uintptr) bool {
+	if uintptr(cap(p.cache)) >= length {
+		p.cache = p.cache[:length]
+	} else {
+		p.cache = make([]byte, length)
+	}
+	p.cacheOff = offset
+	ok := p.ok(p.peeker.peek(offset, p.cache))
+	if !ok {
+		p.resetCache()
+	}
+	return ok
+}
+
+func (p *Printer) resetCache() {
+	p.cache = p.cache[0:0]
+	p.cacheOff = 0
 }
 
 // Peeker is like a read that probes the remote address space.
@@ -83,6 +114,7 @@ func NewPrinter(arch *arch.Architecture, dwarf *dwarf.Data, peeker Peeker) *Prin
 func (p *Printer) reset() {
 	p.err = nil
 	p.printBuf.Reset()
+	p.resetCache()
 	// Just wipe the map rather than reallocating. It's almost always tiny.
 	for k := range p.visited {
 		delete(p.visited, k)
@@ -290,7 +322,6 @@ type mapDesc struct {
 	keySize    uintptr
 	elemSize   uintptr
 	bucketSize uintptr
-	buf        []byte
 }
 
 func (p *Printer) printMapAt(typ *dwarf.MapType, addr uintptr) {
@@ -305,7 +336,7 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, addr uintptr) {
 	if !p.peek(addr, structType.ByteSize) {
 		return
 	}
-	// From runtime/hashmap.*; We need to walk the map data structure.
+	// From runtime/hashmap.go; We need to walk the map data structure.
 	// Load the struct, then iterate over the buckets.
 	// uintgo count (occupancy).
 	offset := int(structType.Field[0].ByteOffset)
@@ -333,16 +364,15 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, addr uintptr) {
 		keySize:    keySize,
 		elemSize:   elemSize,
 		bucketSize: bucketSize,
-		buf:        make([]byte, bucketSize),
 	}
 	p.printMapBucketsAt(desc, bucketPtr)
 	p.printMapBucketsAt(desc, oldBucketPtr)
 	p.printf("}")
 }
 
-// Map bucket layout from runtime/hashmap.*
+// Map bucket layout from runtime/hashmap.go
 const (
-	bucketCnt  = 8 // BUCKETSIZE (poor name) in C code.
+	bucketCnt  = 8
 	minTopHash = 4
 )
 
@@ -351,19 +381,23 @@ func (p *Printer) printMapBucketsAt(desc mapDesc, addr uintptr) {
 		return
 	}
 	for i := 0; desc.count > 0 && i < desc.numBuckets; i++ {
-		// Load this bucket struct into memory and initialize "pointers" to the key and value slices.
 		// After the header, the bucket struct has an array of keys followed by an array of elements.
-		if !p.ok(p.peeker.peek(addr, desc.buf)) {
+		// Load this bucket struct into p's cache and initialize "pointers" to the key and value slices.
+		if !p.setCache(addr, desc.bucketSize) {
 			return
 		}
-		// TODO: We have loaded the data but printValueAt loads from remote addresses
-		// so we need to keep track of addresses and read memory twice. It would
-		// be nice to avoid this overhead.
 		keyAddr := addr + bucketCnt + uintptr(p.arch.PointerSize)
 		elemAddr := keyAddr + bucketCnt*desc.keySize
-		addr += desc.bucketSize // Advance to next bucket; buf, keyAddr and elemAddr are all we need now.
+		addr += desc.bucketSize // Advance to next bucket; keyAddr and elemAddr are all we need now.
 		// tophash uint8 [bucketCnt] tells us which buckets are occupied.
-		tophash := desc.buf[:bucketCnt]
+		// p.cache has the data but calls to printValueAt below may overwrite the
+		// cache, so grab a copy of the relevant data.
+		var tophash [bucketCnt]byte
+		if copy(tophash[:], p.cache) != bucketCnt {
+			p.errorf("bad count copying hash flags")
+			return
+		}
+		overflow := uintptr(p.arch.Uintptr(p.cache[bucketCnt : bucketCnt+p.arch.PointerSize]))
 		for j := 0; desc.count > 0 && j < bucketCnt; j++ {
 			if tophash[j] >= minTopHash {
 				p.printValueAt(desc.typ.KeyType, keyAddr)
@@ -378,7 +412,6 @@ func (p *Printer) printMapBucketsAt(desc mapDesc, addr uintptr) {
 			elemAddr += desc.elemSize
 		}
 		// pointer to overflow bucket, if any.
-		overflow := uintptr(p.arch.Uintptr(desc.buf[bucketCnt : bucketCnt+p.arch.PointerSize]))
 		p.printMapBucketsAt(desc, overflow)
 	}
 }
