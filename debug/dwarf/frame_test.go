@@ -77,11 +77,11 @@ func TestPCToSPOffset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	startPC, err := data.LookupSym("main.test")
+	startPC, err := data.LookupFunction("main.test")
 	if err != nil {
 		t.Fatal("lookup startPC:", err)
 	}
-	endPC, err := data.LookupSym("main.afterTest")
+	endPC, err := data.LookupFunction("main.afterTest")
 	if err != nil {
 		t.Fatal("lookup endPC:", err)
 	}

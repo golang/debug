@@ -116,7 +116,7 @@ func TestPCToLine(t *testing.T) {
 
 	// Test PCToLine.
 	// TODO: Do much more than this.
-	pc, err := data.LookupSym("linefrompc")
+	pc, err := data.LookupFunction("linefrompc")
 	if err != nil {
 		t.Fatal(err)
 	}
