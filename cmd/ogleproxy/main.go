@@ -25,7 +25,7 @@ func main() {
 	log.SetPrefix("ogleproxy: ")
 	flag.Parse()
 	if *textFlag == "" {
-		fmt.Printf("OGLE BAD\nUsage")
+		fmt.Printf("OGLE BAD\n")
 		flag.Usage()
 		os.Exit(2)
 	}
