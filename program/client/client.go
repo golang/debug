@@ -20,6 +20,10 @@ import (
 var _ program.Program = (*Program)(nil)
 var _ program.File = (*File)(nil)
 
+// OgleproxyCmd is the path to the ogleproxy command. It is a variable in case
+// the default value, "ogleproxy", is not in the $PATH.
+var OgleproxyCmd = "ogleproxy"
+
 // New connects to the specified host using SSH, starts an ogle proxy
 // there, and creates a new program from the specified file with the specified
 // arguments, which include the program name the first argument.
@@ -35,7 +39,7 @@ func New(host string, textFile string, args ...string) (*Program, error) {
 // It is similar to New except that the program is allowed to run.
 func Run(host string, textFile string, args ...string) (*Program, error) {
 	// TODO: add args.
-	cmdStrs := []string{"/usr/bin/ssh", host, "ogleproxy", "-text", textFile}
+	cmdStrs := []string{"/usr/bin/ssh", host, OgleproxyCmd, "-text", textFile}
 	if host == "localhost" {
 		cmdStrs = cmdStrs[2:]
 	}
