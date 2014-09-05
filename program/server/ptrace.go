@@ -9,6 +9,7 @@ import (
 	"os"
 	rt "runtime"
 	"syscall"
+	"time"
 )
 
 // ptraceRun runs all the closures from fc on a dedicated OS thread. Errors
@@ -16,7 +17,7 @@ import (
 // resultant error is sent back to the same goroutine that sent the closure.
 func ptraceRun(fc chan func() error, ec chan error) {
 	if cap(fc) != 0 || cap(ec) != 0 {
-		panic("ptraceRun was given unbuffered channels")
+		panic("ptraceRun was given buffered channels")
 	}
 	rt.LockOSThread()
 	for f := range fc {
@@ -97,12 +98,48 @@ func (s *Server) ptraceSingleStep(pid int) (err error) {
 	return <-s.ec
 }
 
-func (s *Server) wait(pid int) (wpid int, status syscall.WaitStatus, err error) {
-	s.fc <- func() error {
+type breakpointsChangedError struct {
+	call call
+}
+
+func (*breakpointsChangedError) Error() string {
+	return "breakpoints changed"
+}
+
+func (s *Server) wait(pid int, allowBreakpointsChange bool) (wpid int, status syscall.WaitStatus, err error) {
+	// We poll syscall.Wait4 with WNOHANG, sleeping in between, as a poor man's
+	// waitpid-with-timeout. This allows adding and removing breakpoints
+	// concurrently with waiting to hit an existing breakpoint.
+	f := func() error {
 		var err1 error
-		wpid, err1 = syscall.Wait4(pid, &status, syscall.WALL, nil)
+		wpid, err1 = syscall.Wait4(pid, &status, syscall.WALL|syscall.WNOHANG, nil)
 		return err1
 	}
-	err = <-s.ec
-	return
+
+	const (
+		minSleep = 1 * time.Microsecond
+		maxSleep = 100 * time.Millisecond
+	)
+	for sleep := minSleep; ; {
+		s.fc <- f
+		err = <-s.ec
+
+		// wpid == 0 means that wait found nothing (and returned due to WNOHANG).
+		if wpid != 0 {
+			return
+		}
+
+		if allowBreakpointsChange {
+			select {
+			case c := <-s.breakpointc:
+				return 0, 0, &breakpointsChangedError{c}
+			default:
+			}
+		}
+
+		time.Sleep(sleep)
+		if sleep < maxSleep {
+			sleep *= 10
+		}
+	}
 }

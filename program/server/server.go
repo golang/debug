@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
 	"code.google.com/p/ogle/debug/dwarf"
@@ -30,12 +29,18 @@ type breakpoint struct {
 	origInstr [arch.MaxBreakpointSize]byte
 }
 
+type call struct {
+	req, resp interface{}
+	errc      chan error
+}
+
 type Server struct {
 	arch       arch.Architecture
 	executable string // Name of executable.
 	dwarfData  *dwarf.Data
 
-	mu sync.Mutex
+	breakpointc chan call
+	otherc      chan call
 
 	fc chan func() error
 	ec chan error
@@ -86,12 +91,15 @@ func New(executable string) (*Server, error) {
 		arch:        *architecture,
 		executable:  executable,
 		dwarfData:   dwarfData,
+		breakpointc: make(chan call),
+		otherc:      make(chan call),
 		fc:          make(chan func() error),
 		ec:          make(chan error),
 		breakpoints: make(map[uint64]breakpoint),
 	}
 	srv.printer = NewPrinter(architecture, dwarfData, srv)
 	go ptraceRun(srv.fc, srv.ec)
+	go srv.loop()
 	return srv, nil
 }
 
@@ -141,6 +149,46 @@ func loadExecutable(f *os.File) (*arch.Architecture, *dwarf.Data, error) {
 	return nil, nil, fmt.Errorf("unrecognized binary format")
 }
 
+func (s *Server) loop() {
+	for {
+		var c call
+		select {
+		case c = <-s.breakpointc:
+		case c = <-s.otherc:
+		}
+		s.dispatch(c)
+	}
+}
+
+func (s *Server) dispatch(c call) {
+	switch req := c.req.(type) {
+	case *proxyrpc.BreakpointRequest:
+		c.errc <- s.handleBreakpoint(req, c.resp.(*proxyrpc.BreakpointResponse))
+	case *proxyrpc.CloseRequest:
+		c.errc <- s.handleClose(req, c.resp.(*proxyrpc.CloseResponse))
+	case *proxyrpc.EvalRequest:
+		c.errc <- s.handleEval(req, c.resp.(*proxyrpc.EvalResponse))
+	case *proxyrpc.FramesRequest:
+		c.errc <- s.handleFrames(req, c.resp.(*proxyrpc.FramesResponse))
+	case *proxyrpc.OpenRequest:
+		c.errc <- s.handleOpen(req, c.resp.(*proxyrpc.OpenResponse))
+	case *proxyrpc.ReadAtRequest:
+		c.errc <- s.handleReadAt(req, c.resp.(*proxyrpc.ReadAtResponse))
+	case *proxyrpc.ResumeRequest:
+		c.errc <- s.handleResume(req, c.resp.(*proxyrpc.ResumeResponse))
+	case *proxyrpc.RunRequest:
+		c.errc <- s.handleRun(req, c.resp.(*proxyrpc.RunResponse))
+	default:
+		panic(fmt.Sprintf("unexpected call request type %T", c.req))
+	}
+}
+
+func (s *Server) call(c chan call, req, resp interface{}) error {
+	errc := make(chan error)
+	c <- call{req, resp, errc}
+	return <-errc
+}
+
 type file struct {
 	mode  string
 	index int
@@ -148,9 +196,10 @@ type file struct {
 }
 
 func (s *Server) Open(req *proxyrpc.OpenRequest, resp *proxyrpc.OpenResponse) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.call(s.otherc, req, resp)
+}
 
+func (s *Server) handleOpen(req *proxyrpc.OpenRequest, resp *proxyrpc.OpenResponse) error {
 	// TODO: Better simulation. For now we just open the named OS file.
 	var flag int
 	switch req.Mode {
@@ -185,9 +234,10 @@ func (s *Server) Open(req *proxyrpc.OpenRequest, resp *proxyrpc.OpenResponse) er
 }
 
 func (s *Server) ReadAt(req *proxyrpc.ReadAtRequest, resp *proxyrpc.ReadAtResponse) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.call(s.otherc, req, resp)
+}
 
+func (s *Server) handleReadAt(req *proxyrpc.ReadAtRequest, resp *proxyrpc.ReadAtResponse) error {
 	fd := req.FD
 	if fd < 0 || len(s.files) <= fd || s.files[fd] == nil {
 		return fmt.Errorf("ReadAt: bad file descriptor %d", fd)
@@ -200,9 +250,10 @@ func (s *Server) ReadAt(req *proxyrpc.ReadAtRequest, resp *proxyrpc.ReadAtRespon
 }
 
 func (s *Server) Close(req *proxyrpc.CloseRequest, resp *proxyrpc.CloseResponse) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.call(s.otherc, req, resp)
+}
 
+func (s *Server) handleClose(req *proxyrpc.CloseRequest, resp *proxyrpc.CloseResponse) error {
 	fd := req.FD
 	if fd < 0 || fd >= len(s.files) || s.files[fd] == nil {
 		return fmt.Errorf("Close: bad file descriptor %d", fd)
@@ -214,9 +265,10 @@ func (s *Server) Close(req *proxyrpc.CloseRequest, resp *proxyrpc.CloseResponse)
 }
 
 func (s *Server) Run(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.call(s.otherc, req, resp)
+}
 
+func (s *Server) handleRun(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error {
 	if s.proc != nil {
 		s.proc.Kill()
 		s.proc = nil
@@ -246,62 +298,85 @@ func (s *Server) Run(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error
 }
 
 func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeResponse) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.call(s.otherc, req, resp)
+}
 
+func (s *Server) handleResume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeResponse) error {
 	if s.proc == nil {
 		return fmt.Errorf("Resume: Run did not successfully start a process")
 	}
 
 	if !s.procIsUp {
 		s.procIsUp = true
-		_, err := s.waitForTrap(s.stoppedPid)
-		if err != nil {
+		if _, err := s.waitForTrap(s.stoppedPid, false); err != nil {
 			return err
 		}
-		err = s.ptraceSetOptions(s.stoppedPid, syscall.PTRACE_O_TRACECLONE)
-		if err != nil {
+		if err := s.ptraceSetOptions(s.stoppedPid, syscall.PTRACE_O_TRACECLONE); err != nil {
 			return fmt.Errorf("ptraceSetOptions: %v", err)
 		}
 	} else if _, ok := s.breakpoints[s.stoppedRegs.Rip]; ok {
-		err := s.ptraceSingleStep(s.stoppedPid)
-		if err != nil {
+		if err := s.ptraceSingleStep(s.stoppedPid); err != nil {
 			return fmt.Errorf("ptraceSingleStep: %v", err)
 		}
-		_, err = s.waitForTrap(s.stoppedPid)
-		if err != nil {
+		if _, err := s.waitForTrap(s.stoppedPid, false); err != nil {
 			return err
 		}
 	}
 
-	err := s.setBreakpoints()
-	if err != nil {
+	for {
+		if err := s.setBreakpoints(); err != nil {
+			return err
+		}
+		if err := s.ptraceCont(s.stoppedPid, 0); err != nil {
+			return fmt.Errorf("ptraceCont: %v", err)
+		}
+
+		wpid, err := s.waitForTrap(-1, true)
+		if err == nil {
+			s.stoppedPid = wpid
+			break
+		}
+		bce, ok := err.(*breakpointsChangedError)
+		if !ok {
+			return err
+		}
+
+		if err := syscall.Kill(s.stoppedPid, syscall.SIGSTOP); err != nil {
+			return fmt.Errorf("kill(SIGSTOP): %v", err)
+		}
+		_, status, err := s.wait(s.stoppedPid, false)
+		if err != nil {
+			return fmt.Errorf("wait (after SIGSTOP): %v", err)
+		}
+		if !status.Stopped() || status.StopSignal() != syscall.SIGSTOP {
+			return fmt.Errorf("wait (after SIGSTOP): unexpected wait status 0x%x", status)
+		}
+
+		if err := s.liftBreakpoints(); err != nil {
+			return err
+		}
+
+	loop:
+		for c := bce.call; ; {
+			s.dispatch(c)
+			select {
+			case c = <-s.breakpointc:
+			default:
+				break loop
+			}
+		}
+	}
+	if err := s.liftBreakpoints(); err != nil {
 		return err
 	}
-	err = s.ptraceCont(s.stoppedPid, 0)
-	if err != nil {
-		return fmt.Errorf("ptraceCont: %v", err)
-	}
 
-	s.stoppedPid, err = s.waitForTrap(-1)
-	if err != nil {
-		return err
-	}
-
-	err = s.liftBreakpoints()
-	if err != nil {
-		return err
-	}
-
-	err = s.ptraceGetRegs(s.stoppedPid, &s.stoppedRegs)
-	if err != nil {
+	if err := s.ptraceGetRegs(s.stoppedPid, &s.stoppedRegs); err != nil {
 		return fmt.Errorf("ptraceGetRegs: %v", err)
 	}
 
 	s.stoppedRegs.Rip -= uint64(s.arch.BreakpointSize)
 
-	err = s.ptraceSetRegs(s.stoppedPid, &s.stoppedRegs)
-	if err != nil {
+	if err := s.ptraceSetRegs(s.stoppedPid, &s.stoppedRegs); err != nil {
 		return fmt.Errorf("ptraceSetRegs: %v", err)
 	}
 
@@ -310,11 +385,14 @@ func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeRespon
 	return nil
 }
 
-func (s *Server) waitForTrap(pid int) (wpid int, err error) {
+func (s *Server) waitForTrap(pid int, allowBreakpointsChange bool) (wpid int, err error) {
 	for {
-		wpid, status, err := s.wait(pid)
+		wpid, status, err := s.wait(pid, allowBreakpointsChange)
 		if err != nil {
-			return 0, fmt.Errorf("wait: %v", err)
+			if _, ok := err.(*breakpointsChangedError); !ok {
+				err = fmt.Errorf("wait: %v", err)
+			}
+			return 0, err
 		}
 		if status.StopSignal() == syscall.SIGTRAP && status.TrapCause() != syscall.PTRACE_EVENT_CLONE {
 			return wpid, nil
@@ -326,10 +404,11 @@ func (s *Server) waitForTrap(pid int) (wpid int, err error) {
 	}
 }
 
-func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.BreakpointResponse) (err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.BreakpointResponse) error {
+	return s.call(s.breakpointc, req, resp)
+}
 
+func (s *Server) handleBreakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.BreakpointResponse) error {
 	addrs, err := s.eval(req.Address)
 	if err != nil {
 		return err
@@ -375,10 +454,11 @@ func (s *Server) liftBreakpoints() error {
 	return nil
 }
 
-func (s *Server) Eval(req *proxyrpc.EvalRequest, resp *proxyrpc.EvalResponse) (err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Server) Eval(req *proxyrpc.EvalRequest, resp *proxyrpc.EvalResponse) error {
+	return s.call(s.otherc, req, resp)
+}
 
+func (s *Server) handleEval(req *proxyrpc.EvalRequest, resp *proxyrpc.EvalResponse) (err error) {
 	resp.Result, err = s.eval(req.Expr)
 	return err
 }
@@ -467,10 +547,11 @@ func (s *Server) evalAddress(expr string) (uint64, error) {
 }
 
 func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesResponse) error {
-	// TODO: verify that we're stopped.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.call(s.otherc, req, resp)
+}
 
+func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesResponse) error {
+	// TODO: verify that we're stopped.
 	if !s.runtime.evaluated {
 		s.evaluateRuntime()
 	}
