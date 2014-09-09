@@ -429,6 +429,7 @@ func (s *Server) handleBreakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrp
 		}
 		bp.pc = pc
 		s.breakpoints[pc] = bp
+		resp.PCs = append(resp.PCs, pc)
 	}
 
 	return nil

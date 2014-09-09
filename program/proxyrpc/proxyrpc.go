@@ -70,6 +70,7 @@ type BreakpointRequest struct {
 }
 
 type BreakpointResponse struct {
+	PCs []uint64
 }
 
 type EvalRequest struct {

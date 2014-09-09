@@ -60,7 +60,7 @@ type Program interface {
 	// The address is the same mini-language accepted by Eval,
 	// which permits setting multiple breakpoints using a regular
 	// expression to match a set of symbols.
-	Breakpoint(address string) error
+	Breakpoint(address string) (PCs []uint64, err error)
 
 	// DeleteBreakpoint removes the breakpoint at the specified
 	// address. TODO: Probably the wrong interface.

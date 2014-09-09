@@ -194,12 +194,13 @@ func (p *Program) Kill() (program.Status, error) {
 	panic("unimplemented")
 }
 
-func (p *Program) Breakpoint(address string) error {
+func (p *Program) Breakpoint(address string) ([]uint64, error) {
 	req := proxyrpc.BreakpointRequest{
 		Address: address,
 	}
 	var resp proxyrpc.BreakpointResponse
-	return p.client.Call("Server.Breakpoint", &req, &resp)
+	err := p.client.Call("Server.Breakpoint", &req, &resp)
+	return resp.PCs, err
 }
 
 func (p *Program) DeleteBreakpoint(address string) error {
