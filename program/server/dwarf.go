@@ -42,6 +42,10 @@ func (s *Server) lookupFunction(name string) (uint64, error) {
 	return s.dwarfData.LookupFunction(name)
 }
 
+func (s *Server) lookupVariable(name string) (uint64, error) {
+	return s.dwarfData.LookupVariable(name)
+}
+
 func (s *Server) lookupPC(pc uint64) (string, error) {
 	return s.dwarfData.LookupPC(pc)
 }

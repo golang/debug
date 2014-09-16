@@ -8,45 +8,10 @@ package dwarf
 
 import "fmt"
 
-// LookupFunction returns the address of the named symbol, a function.
-func (data *Data) LookupFunction(name string) (uint64, error) {
-	r := data.Reader()
-	for {
-		entry, err := r.Next()
-		if err != nil {
-			return 0, err
-		}
-		if entry == nil {
-			// TODO: why don't we get an error here?
-			break
-		}
-		if entry.Tag != TagSubprogram {
-			continue
-		}
-		nameAttr := entry.Val(AttrName)
-		if nameAttr == nil {
-			// TODO: this shouldn't be possible.
-			continue
-		}
-		if nameAttr.(string) != name {
-			continue
-		}
-		addrAttr := entry.Val(AttrLowpc)
-		if addrAttr == nil {
-			return 0, fmt.Errorf("symbol %q has no LowPC attribute", name)
-		}
-		addr, ok := addrAttr.(uint64)
-		if !ok {
-			return 0, fmt.Errorf("symbol %q has non-uint64 LowPC attribute", name)
-		}
-		return addr, nil
-	}
-	return 0, fmt.Errorf("function %q not found", name)
-}
-
-// LookupEntry returns the Entry for the named symbol.
-func (data *Data) LookupEntry(name string) (*Entry, error) {
-	r := data.Reader()
+// lookupEntry returns the Entry for the name. If tag is non-zero, only entries
+// with that tag are considered.
+func (d *Data) lookupEntry(name string, tag Tag) (*Entry, error) {
+	r := d.Reader()
 	for {
 		entry, err := r.Next()
 		if err != nil {
@@ -56,6 +21,9 @@ func (data *Data) LookupEntry(name string) (*Entry, error) {
 			// TODO: why don't we get an error here?
 			break
 		}
+		if tag != 0 && tag != entry.Tag {
+			continue
+		}
 		nameAttr := entry.Val(AttrName)
 		if nameAttr == nil {
 			continue
@@ -64,12 +32,66 @@ func (data *Data) LookupEntry(name string) (*Entry, error) {
 			return entry, nil
 		}
 	}
-	return nil, fmt.Errorf("entry for %q not found", name)
+	return nil, fmt.Errorf("DWARF entry for %q not found", name)
+}
+
+// LookupEntry returns the Entry for the named symbol.
+func (d *Data) LookupEntry(name string) (*Entry, error) {
+	return d.lookupEntry(name, 0)
+}
+
+// LookupFunction returns the address of the named symbol, a function.
+func (d *Data) LookupFunction(name string) (uint64, error) {
+	entry, err := d.lookupEntry(name, TagSubprogram)
+	if err != nil {
+		return 0, err
+	}
+	addrAttr := entry.Val(AttrLowpc)
+	if addrAttr == nil {
+		return 0, fmt.Errorf("symbol %q has no LowPC attribute", name)
+	}
+	addr, ok := addrAttr.(uint64)
+	if !ok {
+		return 0, fmt.Errorf("symbol %q has non-uint64 LowPC attribute", name)
+	}
+	return addr, nil
+}
+
+// TODO: should LookupVariable handle both globals and locals? Locals don't
+// necessarily have a fixed address. They may be in a register, or otherwise
+// move around. Should this function be renamed LookupGlobal?
+
+// LookupVariable returns the location of a named symbol, a variable.
+func (d *Data) LookupVariable(name string) (uint64, error) {
+	entry, err := d.lookupEntry(name, TagVariable)
+	if err != nil {
+		return 0, err
+	}
+	loc, _ := entry.Val(AttrLocation).([]byte)
+	if len(loc) == 0 {
+		return 0, fmt.Errorf("name %q has no Location attribute", name)
+	}
+	// TODO: implement the DWARF Location bytecode. What we have here only
+	// recognizes a program with a single literal opAddr bytecode.
+	// TODO: is d.unit[0] always the right unit to take?
+	if asize := d.unit[0].asize; loc[0] == opAddr || len(loc) == 1+asize {
+		switch asize {
+		case 1:
+			return uint64(loc[1]), nil
+		case 2:
+			return uint64(d.order.Uint16(loc[1:])), nil
+		case 4:
+			return uint64(d.order.Uint32(loc[1:])), nil
+		case 8:
+			return d.order.Uint64(loc[1:]), nil
+		}
+	}
+	return 0, fmt.Errorf("DWARF: unimplemented Location op")
 }
 
 // LookupPC returns the name of a symbol at the specified PC.
-func (data *Data) LookupPC(pc uint64) (string, error) {
-	entry, _, err := data.EntryForPC(pc)
+func (d *Data) LookupPC(pc uint64) (string, error) {
+	entry, _, err := d.EntryForPC(pc)
 	if err != nil {
 		return "", err
 	}
@@ -86,9 +108,9 @@ func (data *Data) LookupPC(pc uint64) (string, error) {
 }
 
 // EntryForPC returns the entry and address for a symbol at the specified PC.
-func (data *Data) EntryForPC(pc uint64) (entry *Entry, lowpc uint64, err error) {
+func (d *Data) EntryForPC(pc uint64) (entry *Entry, lowpc uint64, err error) {
 	// TODO: do something better than a linear scan?
-	r := data.Reader()
+	r := d.Reader()
 	for {
 		entry, err := r.Next()
 		if err != nil {

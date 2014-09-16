@@ -165,7 +165,7 @@ func (m *frameMachine) scanFDE(allBuf *buf, pc uint64) (int64, bool, error) {
 	if length <= 0 {
 		if length == 0 {
 			// EOF.
-			return 0, false, fmt.Errorf("PC not found in PC/SP table")
+			return 0, false, fmt.Errorf("PC %#x not found in PC/SP table", pc)
 		}
 		return 0, false, fmt.Errorf("bad FDE length %d", length)
 	}

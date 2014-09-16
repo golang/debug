@@ -7,7 +7,7 @@ package server
 import (
 	"fmt"
 	"os"
-	rt "runtime"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -19,7 +19,7 @@ func ptraceRun(fc chan func() error, ec chan error) {
 	if cap(fc) != 0 || cap(ec) != 0 {
 		panic("ptraceRun was given buffered channels")
 	}
-	rt.LockOSThread()
+	runtime.LockOSThread()
 	for f := range fc {
 		ec <- f()
 	}

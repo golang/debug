@@ -15,11 +15,10 @@ import (
 	"strings"
 	"syscall"
 
+	"code.google.com/p/ogle/arch"
 	"code.google.com/p/ogle/debug/dwarf"
 	"code.google.com/p/ogle/debug/elf"
 	"code.google.com/p/ogle/debug/macho"
-
-	"code.google.com/p/ogle/arch"
 	"code.google.com/p/ogle/program"
 	"code.google.com/p/ogle/program/proxyrpc"
 )
@@ -45,29 +44,14 @@ type Server struct {
 	fc chan func() error
 	ec chan error
 
-	proc        *os.Process
-	procIsUp    bool
-	stoppedPid  int
-	stoppedRegs syscall.PtraceRegs
-	runtime     runtime
-	breakpoints map[uint64]breakpoint
-	files       []*file // Index == file descriptor.
-	printer     *Printer
-}
-
-// runtime are the addresses, in the target program's address space, of Go
-// runtime functions such as runtime·lessstack.
-type runtime struct {
-	evaluated bool
-	evalErr   error
-
-	goexit                 uint64
-	mstart                 uint64
-	mcall                  uint64
-	morestack              uint64
-	lessstack              uint64
-	_rt0_go                uint64
-	externalthreadhandlerp uint64
+	proc            *os.Process
+	procIsUp        bool
+	stoppedPid      int
+	stoppedRegs     syscall.PtraceRegs
+	topOfStackAddrs []uint64
+	breakpoints     map[uint64]breakpoint
+	files           []*file // Index == file descriptor.
+	printer         *Printer
 }
 
 // peek implements the Peeker interface required by the printer.
@@ -275,8 +259,7 @@ func (s *Server) handleRun(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse)
 		s.procIsUp = false
 		s.stoppedPid = 0
 		s.stoppedRegs = syscall.PtraceRegs{}
-		s.runtime.evaluated = false
-		s.runtime.evalErr = nil
+		s.topOfStackAddrs = nil
 	}
 	p, err := s.startProcess(s.executable, nil, &os.ProcAttr{
 		Files: []*os.File{
@@ -553,11 +536,10 @@ func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesRespon
 
 func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesResponse) error {
 	// TODO: verify that we're stopped.
-	if !s.runtime.evaluated {
-		s.evaluateRuntime()
-	}
-	if s.runtime.evalErr != nil {
-		return s.runtime.evalErr
+	if s.topOfStackAddrs == nil {
+		if err := s.evaluateTopOfStackAddrs(); err != nil {
+			return err
+		}
 	}
 
 	regs := syscall.PtraceRegs{}
@@ -637,43 +619,63 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 	return nil
 }
 
-func (s *Server) evaluateRuntime() {
-	s.runtime.evaluated = true
-	s.runtime.evalErr = nil
+func (s *Server) evaluateTopOfStackAddrs() error {
+	var (
+		lookup   func(name string) (uint64, error)
+		indirect bool
+		names    []string
+	)
+	if _, err := s.lookupVariable("runtime.rt0_goPC"); err != nil {
+		// Look for a Go 1.3 binary (or earlier version).
+		lookup, indirect, names = s.lookupFunction, false, []string{
+			"runtime.goexit",
+			"runtime.mstart",
+			"runtime.mcall",
+			"runtime.morestack",
+			"runtime.lessstack",
+			"_rt0_go",
+		}
+	} else {
+		// Look for a Go 1.4 binary (or later version).
+		lookup, indirect, names = s.lookupVariable, true, []string{
+			"runtime.goexitPC",
+			"runtime.mstartPC",
+			"runtime.mcallPC",
+			"runtime.morestackPC",
+			"runtime.rt0_goPC",
+		}
+	}
+	// TODO: also look for runtime.externalthreadhandlerp, on Windows.
 
-	addrs := [...]struct {
-		name            string
-		p               *uint64
-		windowsSpecific bool
-	}{
-		{"runtime.goexit", &s.runtime.goexit, false},
-		{"runtime.mstart", &s.runtime.mstart, false},
-		{"runtime.mcall", &s.runtime.mcall, false},
-		{"runtime.morestack", &s.runtime.morestack, false},
-		{"runtime.lessstack", &s.runtime.lessstack, false},
-		{"_rt0_go", &s.runtime._rt0_go, false},
-		{"runtime.externalthreadhandlerp", &s.runtime.externalthreadhandlerp, true},
-	}
-	for _, a := range addrs {
-		if a.windowsSpecific {
-			// TODO: determine if the traced binary is for Windows.
-			*a.p = 0
-			continue
+	addrs := make([]uint64, 0, len(names))
+	for _, name := range names {
+		addr, err := lookup(name)
+		if err != nil {
+			return err
 		}
-		*a.p, s.runtime.evalErr = s.lookupFunction(a.name)
-		if s.runtime.evalErr != nil {
-			return
+		addrs = append(addrs, addr)
+	}
+
+	if indirect {
+		buf := make([]byte, s.arch.PointerSize)
+		for i, addr := range addrs {
+			if err := s.ptracePeek(s.stoppedPid, uintptr(addr), buf); err != nil {
+				return fmt.Errorf("ptracePeek: %v", err)
+			}
+			addrs[i] = s.arch.Uintptr(buf)
 		}
 	}
+
+	s.topOfStackAddrs = addrs
+	return nil
 }
 
 // topOfStack is the out-of-process equivalent of runtime·topofstack.
 func (s *Server) topOfStack(funcEntry uint64) bool {
-	return funcEntry == s.runtime.goexit ||
-		funcEntry == s.runtime.mstart ||
-		funcEntry == s.runtime.mcall ||
-		funcEntry == s.runtime.morestack ||
-		funcEntry == s.runtime.lessstack ||
-		funcEntry == s.runtime._rt0_go ||
-		(s.runtime.externalthreadhandlerp != 0 && funcEntry == s.runtime.externalthreadhandlerp)
+	for _, addr := range s.topOfStackAddrs {
+		if addr == funcEntry {
+			return true
+		}
+	}
+	return false
 }
