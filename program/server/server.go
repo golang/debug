@@ -555,16 +555,16 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 
 	// TODO: handle walking over a split stack.
 	for i := 0; i < req.Count; i++ {
+		b.Reset()
+		file, line, err := s.dwarfData.PCToLine(pc)
+		if err != nil {
+			return err
+		}
 		fpOffset, err := s.dwarfData.PCToSPOffset(pc)
 		if err != nil {
 			return err
 		}
 		fp := sp + uint64(fpOffset)
-
-		// TODO: the returned frame should be structured instead of a hacked up string.
-		b.Reset()
-		fmt.Fprintf(b, "PC=%#x, SP=%#x:", pc, sp)
-
 		entry, funcEntry, err := s.entryForPC(pc)
 		if err != nil {
 			return err
@@ -603,6 +603,11 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 			}
 		}
 		resp.Frames = append(resp.Frames, program.Frame{
+			PC:   pc,
+			SP:   sp,
+			File: file,
+			Line: line,
+			// TODO: delete the Frame.S field.
 			S: b.String(),
 		})
 

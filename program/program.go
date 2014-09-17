@@ -104,5 +104,18 @@ type Status struct {
 }
 
 type Frame struct {
+	// PC is the hardware program counter.
+	PC uint64
+	// SP is the hardware stack pointer.
+	SP uint64
+
+	// File and Line are the source code location of the PC.
+	File string
+	Line int
+
+	// TODO: add arguments and return values.
+
+	// S is an unstructured string value used for debugging the ogle
+	// library. It is not guaranteed to be in any particular format.
 	S string
 }
