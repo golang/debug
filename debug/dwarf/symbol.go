@@ -59,7 +59,7 @@ func (d *Data) LookupFunction(name string) (uint64, error) {
 
 // TODO: should LookupVariable handle both globals and locals? Locals don't
 // necessarily have a fixed address. They may be in a register, or otherwise
-// move around. Should this function be renamed LookupGlobal?
+// move around.
 
 // LookupVariable returns the location of a named symbol, a variable.
 func (d *Data) LookupVariable(name string) (uint64, error) {
@@ -73,8 +73,7 @@ func (d *Data) LookupVariable(name string) (uint64, error) {
 	}
 	// TODO: implement the DWARF Location bytecode. What we have here only
 	// recognizes a program with a single literal opAddr bytecode.
-	// TODO: is d.unit[0] always the right unit to take?
-	if asize := d.unit[0].asize; loc[0] == opAddr || len(loc) == 1+asize {
+	if asize := d.unit[0].asize; loc[0] == opAddr && len(loc) == 1+asize {
 		switch asize {
 		case 1:
 			return uint64(loc[1]), nil
