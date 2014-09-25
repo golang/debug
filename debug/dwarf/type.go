@@ -92,6 +92,11 @@ type AddrType struct {
 	BasicType
 }
 
+// An UnspecifiedType represents an implicit, unknown, ambiguous or nonexistent type.
+type UnspecifiedType struct {
+	BasicType
+}
+
 // qualifiers
 
 // A QualType represents a type that has the C/C++ "const", "restrict", or "volatile" qualifier.
@@ -475,6 +480,17 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 			typ = new(BoolType)
 		case encComplexFloat:
 			typ = new(ComplexType)
+			if name == "complex" {
+				// clang writes out 'complex' instead of 'complex float' or 'complex double'.
+				// clang also writes out a byte size that we can use to distinguish.
+				// See issue 8694.
+				switch byteSize, _ := e.Val(AttrByteSize).(int64); byteSize {
+				case 8:
+					name = "complex float"
+				case 16:
+					name = "complex double"
+				}
+			}
 		case encFloat:
 			typ = new(FloatType)
 		case encSigned:
@@ -715,6 +731,15 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		typeCache[off] = typ
 		t.Name, _ = e.Val(AttrName).(string)
 		t.Type = typeOf(e, AttrType)
+
+	case TagUnspecifiedType:
+		// Unspecified type (DWARF v3 §5.2)
+		// Attributes:
+		//      AttrName: name
+		t := new(UnspecifiedType)
+		typ = t
+		typeCache[off] = t
+		t.Name, _ = e.Val(AttrName).(string)
 	}
 
 	if err != nil {
