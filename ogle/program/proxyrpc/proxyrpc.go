@@ -4,9 +4,9 @@
 
 // Package proxyrpc defines the types used to represent the RPC calls
 // used to the ogleproxy.
-package proxyrpc
+package proxyrpc // import "golang.org/x/debug/ogle/program/proxyrpc"
 
-import "code.google.com/p/ogle/program"
+import "golang.org/x/debug/ogle/program"
 
 // For regularity, each method has a unique Request and a Response type even
 // when not strictly necessary.

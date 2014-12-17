@@ -6,7 +6,7 @@
 // (this program) forking, executing and inserting breakpoints into a (multi-
 // threaded) Go tracee program. It logs all syscall.Wait4 results, and reading
 // those logs, as well as ../../doc/ptrace-nptl.txt, should help understand how
-// the (more complicated) code.google.com/p/ogle/program/server package works.
+// the (more complicated) golang.org/x/debug/ogle/program/server package works.
 //
 // Only tested on linux/amd64.
 package main
@@ -32,9 +32,9 @@ import (
 	"syscall"
 	"time"
 
-	"code.google.com/p/ogle/debug/dwarf"
-	"code.google.com/p/ogle/debug/elf"
-	"code.google.com/p/ogle/debug/macho"
+	"golang.org/x/debug/ogle/debug/dwarf"
+	"golang.org/x/debug/ogle/debug/elf"
+	"golang.org/x/debug/ogle/debug/macho"
 )
 
 const (

@@ -4,7 +4,7 @@
 
 // Package server provides RPC access to a local program being debugged.
 // It is the remote end of the client implementation of the Program interface.
-package server
+package server // import "golang.org/x/debug/ogle/program/server"
 
 import (
 	"bytes"
@@ -15,12 +15,12 @@ import (
 	"strings"
 	"syscall"
 
-	"code.google.com/p/ogle/arch"
-	"code.google.com/p/ogle/debug/dwarf"
-	"code.google.com/p/ogle/debug/elf"
-	"code.google.com/p/ogle/debug/macho"
-	"code.google.com/p/ogle/program"
-	"code.google.com/p/ogle/program/proxyrpc"
+	"golang.org/x/debug/ogle/arch"
+	"golang.org/x/debug/ogle/debug/dwarf"
+	"golang.org/x/debug/ogle/debug/elf"
+	"golang.org/x/debug/ogle/debug/macho"
+	"golang.org/x/debug/ogle/program"
+	"golang.org/x/debug/ogle/program/proxyrpc"
 )
 
 type breakpoint struct {

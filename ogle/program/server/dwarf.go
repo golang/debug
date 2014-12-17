@@ -7,7 +7,7 @@ package server
 import (
 	"regexp"
 
-	"code.google.com/p/ogle/debug/dwarf"
+	"golang.org/x/debug/ogle/debug/dwarf"
 )
 
 func (s *Server) lookupRE(re *regexp.Regexp) (result []string, err error) {

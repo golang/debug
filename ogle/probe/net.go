@@ -11,7 +11,7 @@ import (
 	"io" // Used only for the definitions of the various interfaces and errors.
 	"net"
 
-	"code.google.com/p/ogle/socket"
+	"golang.org/x/debug/ogle/socket"
 )
 
 var (

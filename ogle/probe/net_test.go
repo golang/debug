@@ -12,7 +12,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"code.google.com/p/ogle/socket"
+	"golang.org/x/debug/ogle/socket"
 )
 
 // traceThisFunction turns on tracing and returns a function to turn it off.

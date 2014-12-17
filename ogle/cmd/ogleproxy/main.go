@@ -13,7 +13,7 @@ import (
 	"net/rpc"
 	"os"
 
-	"code.google.com/p/ogle/program/server"
+	"golang.org/x/debug/ogle/program/server"
 )
 
 var (

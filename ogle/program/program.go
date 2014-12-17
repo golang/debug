@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package program provides the portable interface to a program being debugged.
-package program
+package program // import "golang.org/x/debug/ogle/program"
 
 import (
 	"io"

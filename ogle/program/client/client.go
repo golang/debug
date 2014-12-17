@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package client provides remote access to an ogle proxy.
-package client
+package client // import "golang.org/x/debug/ogle/program/client"
 
 import (
 	"errors"
@@ -13,8 +13,8 @@ import (
 	"os"
 	"os/exec"
 
-	"code.google.com/p/ogle/program"
-	"code.google.com/p/ogle/program/proxyrpc"
+	"golang.org/x/debug/ogle/program"
+	"golang.org/x/debug/ogle/program/proxyrpc"
 )
 
 var _ program.Program = (*Program)(nil)

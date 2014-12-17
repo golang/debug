@@ -16,9 +16,9 @@ import (
 	"strings"
 	"testing"
 
-	. "code.google.com/p/ogle/debug/dwarf"
-	"code.google.com/p/ogle/debug/elf"
-	"code.google.com/p/ogle/debug/macho"
+	. "golang.org/x/debug/ogle/debug/dwarf"
+	"golang.org/x/debug/ogle/debug/elf"
+	"golang.org/x/debug/ogle/debug/macho"
 )
 
 var (

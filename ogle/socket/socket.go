@@ -4,7 +4,7 @@
 
 // Package socket provides a way for multiple processes from the same user to
 // communicate over a Unix domain socket.
-package socket
+package socket // import "golang.org/x/debug/ogle/socket"
 
 // TODO: euid instead of uid?
 // TODO: Windows support.

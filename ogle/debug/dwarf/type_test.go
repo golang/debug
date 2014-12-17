@@ -5,11 +5,11 @@
 package dwarf_test
 
 import (
-	. "code.google.com/p/ogle/debug/dwarf"
+	. "golang.org/x/debug/ogle/debug/dwarf"
 	"testing"
 
-	"code.google.com/p/ogle/debug/elf"
-	"code.google.com/p/ogle/debug/macho"
+	"golang.org/x/debug/ogle/debug/elf"
+	"golang.org/x/debug/ogle/debug/macho"
 )
 
 var typedefTests = map[string]string{

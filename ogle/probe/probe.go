@@ -4,7 +4,7 @@
 
 // Package probe is imported by programs to provide (possibly remote)
 // access to a separate debugger program.
-package probe
+package probe // import "golang.org/x/debug/ogle/probe"
 
 import (
 	"runtime/debug"

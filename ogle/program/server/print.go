@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"math"
 
-	"code.google.com/p/ogle/arch"
-	"code.google.com/p/ogle/debug/dwarf"
+	"golang.org/x/debug/ogle/arch"
+	"golang.org/x/debug/ogle/debug/dwarf"
 )
 
 // Routines to print a value using DWARF type descriptions.
