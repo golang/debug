@@ -21,9 +21,6 @@ func (s *Server) lookupRE(re *regexp.Regexp) (result []string, err error) {
 			// TODO: why don't we get an error here.
 			break
 		}
-		if entry.Tag != dwarf.TagSubprogram {
-			continue
-		}
 		nameAttr := entry.Val(dwarf.AttrName)
 		if nameAttr == nil {
 			// TODO: this shouldn't be possible.
