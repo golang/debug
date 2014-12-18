@@ -13,7 +13,7 @@ import (
 	"io"
 	"os"
 
-	"golang.org/x/debug/ogle/debug/dwarf"
+	"golang.org/x/debug/dwarf"
 )
 
 // TODO: error reporting detail

@@ -32,9 +32,9 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/debug/ogle/debug/dwarf"
-	"golang.org/x/debug/ogle/debug/elf"
-	"golang.org/x/debug/ogle/debug/macho"
+	"golang.org/x/debug/dwarf"
+	"golang.org/x/debug/elf"
+	"golang.org/x/debug/macho"
 )
 
 const (

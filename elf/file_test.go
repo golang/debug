@@ -16,7 +16,7 @@ import (
 	"runtime"
 	"testing"
 
-	"golang.org/x/debug/ogle/debug/dwarf"
+	"golang.org/x/debug/dwarf"
 )
 
 type fileTest struct {

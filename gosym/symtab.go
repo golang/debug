@@ -5,7 +5,7 @@
 // Package gosym implements access to the Go symbol
 // and line number tables embedded in Go binaries generated
 // by the gc compilers.
-package gosym // import "golang.org/x/debug/ogle/gosym"
+package gosym // import "golang.org/x/debug/gosym"
 
 // The table format is a variant of the format used in Plan 9's a.out
 // format, documented at http://plan9.bell-labs.com/magic/man2html/6/a.out.
