@@ -13,6 +13,9 @@ import (
 	"golang.org/x/debug/ogle/arch"
 )
 
+// address is a type denoting addresses in the tracee.
+type address uintptr
+
 // Routines to print a value using DWARF type descriptions.
 // TODO: Does this deserve its own package? It has no dependencies on Server.
 
@@ -26,12 +29,12 @@ type Printer struct {
 	arch     *arch.Architecture
 	printBuf bytes.Buffer     // Accumulates the output.
 	tmp      []byte           // Temporary used for I/O.
-	visited  map[uintptr]bool // Prevents looping on cyclic data.
+	visited  map[address]bool // Prevents looping on cyclic data.
 	// The cache stores a local copy of part of the address space.
 	// Saves I/O overhead when scanning map buckets by letting
 	// printValueAt use the contents of already-read bucket data.
-	cache    []byte  // Already-read data.
-	cacheOff uintptr // Starting address of cache.
+	cache     []byte  // Already-read data.
+	cacheAddr address // Starting address of cache.
 }
 
 // printf prints to printBuf, unless there has been an error.
@@ -62,25 +65,25 @@ func (p *Printer) ok(err error) bool {
 
 // peek reads len bytes at offset, leaving p.tmp with the data and sized appropriately.
 // It uses the cache if the request is within it.
-func (p *Printer) peek(offset uintptr, length int64) bool {
+func (p *Printer) peek(a address, length int64) bool {
 	p.tmp = p.tmp[:length]
-	if p.cacheOff <= offset && offset+uintptr(length) <= p.cacheOff+uintptr(len(p.cache)) {
-		copy(p.tmp, p.cache[offset-p.cacheOff:])
+	if p.cacheAddr <= a && a+address(length) <= p.cacheAddr+address(len(p.cache)) {
+		copy(p.tmp, p.cache[a-p.cacheAddr:])
 		return true
 	}
-	return p.ok(p.peeker.peek(offset, p.tmp))
+	return p.ok(p.peeker.peek(uintptr(a), p.tmp))
 }
 
 // setCache initializes the cache to contain the contents of the
 // address space at the specified offset.
-func (p *Printer) setCache(offset, length uintptr) bool {
-	if uintptr(cap(p.cache)) >= length {
+func (p *Printer) setCache(a, length address) bool {
+	if address(cap(p.cache)) >= length {
 		p.cache = p.cache[:length]
 	} else {
 		p.cache = make([]byte, length)
 	}
-	p.cacheOff = offset
-	ok := p.ok(p.peeker.peek(offset, p.cache))
+	p.cacheAddr = a
+	ok := p.ok(p.peeker.peek(uintptr(a), p.cache))
 	if !ok {
 		p.resetCache()
 	}
@@ -89,7 +92,7 @@ func (p *Printer) setCache(offset, length uintptr) bool {
 
 func (p *Printer) resetCache() {
 	p.cache = p.cache[0:0]
-	p.cacheOff = 0
+	p.cacheAddr = 0
 }
 
 // Peeker is like a read that probes the remote address space.
@@ -104,7 +107,7 @@ func NewPrinter(arch *arch.Architecture, dwarf *dwarf.Data, peeker Peeker) *Prin
 		peeker:  peeker,
 		arch:    arch,
 		dwarf:   dwarf,
-		visited: make(map[uintptr]bool),
+		visited: make(map[address]bool),
 		tmp:     make([]byte, 100), // Enough for a largish string.
 	}
 }
@@ -130,12 +133,12 @@ func (p *Printer) Sprint(name string) (string, error) {
 	p.reset()
 	switch entry.Tag {
 	case dwarf.TagVariable: // TODO: What other entries have global location attributes?
-		addr := uintptr(0)
+		var a address
 		iface := entry.Val(dwarf.AttrLocation)
 		if iface != nil {
-			addr = p.decodeLocation(iface.([]byte))
+			a = p.decodeLocation(iface.([]byte))
 		}
-		p.printEntryValueAt(entry, addr)
+		p.printEntryValueAt(entry, a)
 	default:
 		p.errorf("unrecognized entry type %s", entry.Tag)
 	}
@@ -148,10 +151,10 @@ const (
 )
 
 // decodeLocation decodes the dwarf data describing an address.
-func (p *Printer) decodeLocation(data []byte) uintptr {
+func (p *Printer) decodeLocation(data []byte) address {
 	switch data[0] {
 	case locationAddr:
-		return uintptr(p.arch.Uintptr(data[1:]))
+		return address(p.arch.Uintptr(data[1:]))
 	default:
 		p.errorf("unimplemented location type %#x", data[0])
 	}
@@ -159,16 +162,16 @@ func (p *Printer) decodeLocation(data []byte) uintptr {
 }
 
 // SprintEntry returns the pretty-printed value of the item with the specified DWARF Entry and address.
-func (p *Printer) SprintEntry(entry *dwarf.Entry, addr uintptr) (string, error) {
+func (p *Printer) SprintEntry(entry *dwarf.Entry, a address) (string, error) {
 	p.reset()
-	p.printEntryValueAt(entry, addr)
+	p.printEntryValueAt(entry, a)
 	return p.printBuf.String(), p.err
 }
 
 // printEntryValueAt pretty-prints the data at the specified addresss
 // using the type information in the Entry.
-func (p *Printer) printEntryValueAt(entry *dwarf.Entry, addr uintptr) {
-	if addr == 0 {
+func (p *Printer) printEntryValueAt(entry *dwarf.Entry, a address) {
+	if a == 0 {
 		p.printf("<nil>")
 		return
 	}
@@ -189,15 +192,15 @@ func (p *Printer) printEntryValueAt(entry *dwarf.Entry, addr uintptr) {
 		p.errorf("type lookup: %v", err)
 		return
 	}
-	p.printValueAt(typ, addr)
+	p.printValueAt(typ, a)
 }
 
 // printValueAt pretty-prints the data at the specified addresss
 // using the provided type information.
-func (p *Printer) printValueAt(typ dwarf.Type, addr uintptr) {
+func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 	// Make sure we don't recur forever.
-	if p.visited[addr] {
-		p.printf("(@%x...)", addr)
+	if p.visited[a] {
+		p.printf("(@%x...)", a)
 		return
 	}
 	switch typ := typ.(type) {
@@ -206,25 +209,25 @@ func (p *Printer) printValueAt(typ dwarf.Type, addr uintptr) {
 			p.errorf("unrecognized bool size %d", typ.ByteSize)
 			return
 		}
-		if p.peek(addr, 1) {
+		if p.peek(a, 1) {
 			p.printf("%t", p.tmp[0] != 0)
 		}
 	case *dwarf.PtrType:
 		// This type doesn't define the ByteSize attribute.
-		if p.peek(addr, int64(p.arch.PointerSize)) {
+		if p.peek(a, int64(p.arch.PointerSize)) {
 			p.printf("%#x", p.arch.Uintptr(p.tmp))
 		}
 	case *dwarf.IntType:
 		// Sad we can't tell a rune from an int32.
-		if p.peek(addr, typ.ByteSize) {
+		if p.peek(a, typ.ByteSize) {
 			p.printf("%d", p.arch.IntN(p.tmp))
 		}
 	case *dwarf.UintType:
-		if p.peek(addr, typ.ByteSize) {
+		if p.peek(a, typ.ByteSize) {
 			p.printf("%d", p.arch.UintN(p.tmp))
 		}
 	case *dwarf.FloatType:
-		if !p.peek(addr, typ.ByteSize) {
+		if !p.peek(a, typ.ByteSize) {
 			return
 		}
 		switch typ.ByteSize {
@@ -236,7 +239,7 @@ func (p *Printer) printValueAt(typ dwarf.Type, addr uintptr) {
 			p.errorf("unrecognized float size %d", typ.ByteSize)
 		}
 	case *dwarf.ComplexType:
-		if !p.peek(addr, typ.ByteSize) {
+		if !p.peek(a, typ.ByteSize) {
 			return
 		}
 		switch typ.ByteSize {
@@ -252,7 +255,7 @@ func (p *Printer) printValueAt(typ dwarf.Type, addr uintptr) {
 			p.errorf("unrecognized complex size %d", typ.ByteSize)
 		}
 	case *dwarf.StructType:
-		p.visited[addr] = true
+		p.visited[a] = true
 		if typ.Kind != "struct" {
 			// Could be "class" or "union".
 			p.errorf("can't handle struct type %s", typ.Kind)
@@ -263,19 +266,19 @@ func (p *Printer) printValueAt(typ dwarf.Type, addr uintptr) {
 			if i != 0 {
 				p.printf(", ")
 			}
-			p.printValueAt(field.Type, addr+uintptr(field.ByteOffset))
+			p.printValueAt(field.Type, a+address(field.ByteOffset))
 		}
 		p.printf("}")
 	case *dwarf.ArrayType:
-		p.printArrayAt(typ, addr)
+		p.printArrayAt(typ, a)
 	case *dwarf.MapType:
-		p.visited[addr] = true
-		p.printMapAt(typ, addr)
+		p.visited[a] = true
+		p.printMapAt(typ, a)
 	case *dwarf.SliceType:
-		p.visited[addr] = true
-		p.printSliceAt(typ, addr)
+		p.visited[a] = true
+		p.printSliceAt(typ, a)
 	case *dwarf.StringType:
-		p.printStringAt(typ, addr)
+		p.printStringAt(typ, a)
 	case *dwarf.TypedefType:
 		p.errorf("unimplemented typedef type %T %v", typ, typ)
 	default:
@@ -284,7 +287,7 @@ func (p *Printer) printValueAt(typ dwarf.Type, addr uintptr) {
 	}
 }
 
-func (p *Printer) printArrayAt(typ *dwarf.ArrayType, addr uintptr) {
+func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a address) {
 	elemType := typ.Type
 	length := typ.Count
 	stride := typ.StrideBitSize
@@ -305,8 +308,8 @@ func (p *Printer) printArrayAt(typ *dwarf.ArrayType, addr uintptr) {
 		if i != 0 {
 			p.printf(", ")
 		}
-		p.printValueAt(elemType, addr)
-		addr += uintptr(stride) // TODO: Alignment and padding - not given by Type
+		p.printValueAt(elemType, a)
+		a += address(stride) // TODO: Alignment and padding - not given by Type
 	}
 	if n < length {
 		p.printf(", ...")
@@ -319,21 +322,21 @@ type mapDesc struct {
 	typ        *dwarf.MapType
 	count      int
 	numBuckets int
-	keySize    uintptr
-	elemSize   uintptr
-	bucketSize uintptr
+	keySize    address
+	elemSize   address
+	bucketSize address
 }
 
-func (p *Printer) printMapAt(typ *dwarf.MapType, addr uintptr) {
+func (p *Printer) printMapAt(typ *dwarf.MapType, a address) {
 	// Maps are pointers to a struct type.
 	structType := typ.Type.(*dwarf.PtrType).Type.(*dwarf.StructType)
 	// Indirect through the pointer.
-	if !p.peek(addr, int64(p.arch.PointerSize)) {
+	if !p.peek(a, int64(p.arch.PointerSize)) {
 		return
 	}
-	addr = uintptr(p.arch.Uintptr(p.tmp[:p.arch.PointerSize]))
+	a = address(p.arch.Uintptr(p.tmp[:p.arch.PointerSize]))
 	// Now read the struct.
-	if !p.peek(addr, structType.ByteSize) {
+	if !p.peek(a, structType.ByteSize) {
 		return
 	}
 	// From runtime/hashmap.go; We need to walk the map data structure.
@@ -344,17 +347,17 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, addr uintptr) {
 	// uint8 Log2 of number of buckets.
 	b := uint(p.tmp[structType.Field[3].ByteOffset])
 	// uint8 key size in bytes.
-	keySize := uintptr(p.tmp[structType.Field[4].ByteOffset])
+	keySize := address(p.tmp[structType.Field[4].ByteOffset])
 	// uint8 element size in bytes.
-	elemSize := uintptr(p.tmp[structType.Field[5].ByteOffset])
+	elemSize := address(p.tmp[structType.Field[5].ByteOffset])
 	// uint16 bucket size in bytes.
-	bucketSize := uintptr(p.arch.Uint16(p.tmp[structType.Field[6].ByteOffset:]))
+	bucketSize := address(p.arch.Uint16(p.tmp[structType.Field[6].ByteOffset:]))
 	// pointer to buckets
 	offset = int(structType.Field[7].ByteOffset)
-	bucketPtr := uintptr(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
+	bucketPtr := address(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
 	// pointer to old buckets.
 	offset = int(structType.Field[8].ByteOffset)
-	oldBucketPtr := uintptr(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
+	oldBucketPtr := address(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
 	// Ready to print.
 	p.printf("%s{", typ)
 	desc := mapDesc{
@@ -376,19 +379,19 @@ const (
 	minTopHash = 4
 )
 
-func (p *Printer) printMapBucketsAt(desc mapDesc, addr uintptr) {
-	if addr == 0 {
+func (p *Printer) printMapBucketsAt(desc mapDesc, a address) {
+	if a == 0 {
 		return
 	}
 	for i := 0; desc.count > 0 && i < desc.numBuckets; i++ {
 		// After the header, the bucket struct has an array of keys followed by an array of elements.
 		// Load this bucket struct into p's cache and initialize "pointers" to the key and value slices.
-		if !p.setCache(addr, desc.bucketSize) {
+		if !p.setCache(a, desc.bucketSize) {
 			return
 		}
-		keyAddr := addr + bucketCnt + uintptr(p.arch.PointerSize)
+		keyAddr := a + bucketCnt + address(p.arch.PointerSize)
 		elemAddr := keyAddr + bucketCnt*desc.keySize
-		addr += desc.bucketSize // Advance to next bucket; keyAddr and elemAddr are all we need now.
+		a += desc.bucketSize // Advance to next bucket; keyAddr and elemAddr are all we need now.
 		// tophash uint8 [bucketCnt] tells us which buckets are occupied.
 		// p.cache has the data but calls to printValueAt below may overwrite the
 		// cache, so grab a copy of the relevant data.
@@ -397,7 +400,7 @@ func (p *Printer) printMapBucketsAt(desc mapDesc, addr uintptr) {
 			p.errorf("bad count copying hash flags")
 			return
 		}
-		overflow := uintptr(p.arch.Uintptr(p.cache[bucketCnt : bucketCnt+p.arch.PointerSize]))
+		overflow := address(p.arch.Uintptr(p.cache[bucketCnt : bucketCnt+p.arch.PointerSize]))
 		for j := 0; desc.count > 0 && j < bucketCnt; j++ {
 			if tophash[j] >= minTopHash {
 				p.printValueAt(desc.typ.KeyType, keyAddr)
@@ -416,16 +419,16 @@ func (p *Printer) printMapBucketsAt(desc mapDesc, addr uintptr) {
 	}
 }
 
-func (p *Printer) printSliceAt(typ *dwarf.SliceType, addr uintptr) {
+func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 	// Slices look like a struct with fields array *elemtype, len uint32/64, cap uint32/64.
 	// BUG: Slice header appears to have fields with ByteSize == 0
-	if !p.peek(addr, typ.ByteSize) {
+	if !p.peek(a, typ.ByteSize) {
 		p.errorf("slice header has no known size")
 		return
 	}
 	lo := typ.Field[0].ByteOffset
 	hi := lo + int64(p.arch.PointerSize)
-	ptr := uintptr(p.arch.UintN(p.tmp[lo:hi]))
+	ptr := address(p.arch.UintN(p.tmp[lo:hi]))
 	lo = typ.Field[1].ByteOffset
 	hi = lo + int64(p.arch.IntSize)
 	length := p.arch.UintN(p.tmp[lo:hi])
@@ -441,15 +444,15 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, addr uintptr) {
 			p.printf(", ")
 		}
 		p.printValueAt(elemType, ptr)
-		ptr += uintptr(size) // TODO: Alignment and padding - not given by Type
+		ptr += address(size) // TODO: Alignment and padding - not given by Type
 	}
 	p.printf("}")
 }
 
-func (p *Printer) printStringAt(typ *dwarf.StringType, addr uintptr) {
+func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
 	// Strings look like a struct with fields array *elemtype, len uint64.
 	// TODO uint64 on 386 too?
-	if !p.peek(addr, typ.ByteSize) {
+	if !p.peek(a, typ.ByteSize) {
 		p.errorf("string header has no known size")
 		return
 	}
@@ -461,11 +464,11 @@ func (p *Printer) printStringAt(typ *dwarf.StringType, addr uintptr) {
 	hi = lo + int64(p.arch.IntSize) // TODO?
 	length := p.arch.UintN(p.tmp[lo:hi])
 	if length > uint64(cap(p.tmp)) {
-		if p.peek(uintptr(ptr), int64(cap(p.tmp))) {
+		if p.peek(address(ptr), int64(cap(p.tmp))) {
 			p.printf("%q...", p.tmp)
 		}
 	} else {
-		if p.peek(uintptr(ptr), int64(length)) {
+		if p.peek(address(ptr), int64(length)) {
 			p.printf("%q", p.tmp[:length])
 		}
 	}

@@ -596,7 +596,7 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 					name = f.Val.(string)
 				}
 			}
-			str, err := s.printer.SprintEntry(entry, uintptr(fp)+uintptr(offset))
+			str, err := s.printer.SprintEntry(entry, address(fp)+address(offset))
 			fmt.Fprintf(b, "%s (%d(FP)) = %s ", name, offset, str)
 			if err != nil {
 				fmt.Fprintf(b, "(%s) ", err)
