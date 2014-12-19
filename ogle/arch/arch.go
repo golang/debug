@@ -66,7 +66,25 @@ func (a *Architecture) Uint64(buf []byte) uint64 {
 }
 
 func (a *Architecture) IntN(buf []byte) int64 {
-	return int64(a.UintN(buf))
+	if len(buf) == 0 {
+		return 0
+	}
+	x := int64(0)
+	if a.ByteOrder == binary.LittleEndian {
+		i := len(buf)-1
+		x = int64(int8(buf[i]))  // sign-extended
+		for i--; i >= 0; i-- {
+			x <<= 8
+			x |= int64(buf[i])  // not sign-extended
+		}
+	} else {
+		x = int64(int8(buf[0]))    // sign-extended
+		for i := 1; i < len(buf); i++ {
+			x <<= 8
+			x |= int64(buf[i])  // not sign-extended
+		}
+	}
+	return x
 }
 
 func (a *Architecture) UintN(buf []byte) uint64 {
