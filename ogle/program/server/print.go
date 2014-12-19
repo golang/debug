@@ -16,6 +16,12 @@ import (
 // address is a type denoting addresses in the tracee.
 type address uintptr
 
+// typeAndAddress associates an address in the target with a DWARF type.
+type typeAndAddress struct {
+	Type    dwarf.Type
+	Address address
+}
+
 // Routines to print a value using DWARF type descriptions.
 // TODO: Does this deserve its own package? It has no dependencies on Server.
 
@@ -27,9 +33,9 @@ type Printer struct {
 	peeker   Peeker
 	dwarf    *dwarf.Data
 	arch     *arch.Architecture
-	printBuf bytes.Buffer     // Accumulates the output.
-	tmp      []byte           // Temporary used for I/O.
-	visited  map[address]bool // Prevents looping on cyclic data.
+	printBuf bytes.Buffer            // Accumulates the output.
+	tmp      []byte                  // Temporary used for I/O.
+	visited  map[typeAndAddress]bool // Prevents looping on cyclic data.
 	// The cache stores a local copy of part of the address space.
 	// Saves I/O overhead when scanning map buckets by letting
 	// printValueAt use the contents of already-read bucket data.
@@ -107,7 +113,7 @@ func NewPrinter(arch *arch.Architecture, dwarf *dwarf.Data, peeker Peeker) *Prin
 		peeker:  peeker,
 		arch:    arch,
 		dwarf:   dwarf,
-		visited: make(map[address]bool),
+		visited: make(map[typeAndAddress]bool),
 		tmp:     make([]byte, 100), // Enough for a largish string.
 	}
 }
@@ -198,10 +204,14 @@ func (p *Printer) printEntryValueAt(entry *dwarf.Entry, a address) {
 // printValueAt pretty-prints the data at the specified addresss
 // using the provided type information.
 func (p *Printer) printValueAt(typ dwarf.Type, a address) {
-	// Make sure we don't recur forever.
-	if p.visited[a] {
-		p.printf("(@%x...)", a)
-		return
+	if a != 0 {
+		// Check if we are repeating the same type and address.
+		ta := typeAndAddress{typ, a}
+		if p.visited[ta] {
+			p.printf("(%v %#x)", typ, a)
+			return
+		}
+		p.visited[ta] = true
 	}
 	switch typ := typ.(type) {
 	case *dwarf.BoolType:
@@ -255,7 +265,6 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 			p.errorf("unrecognized complex size %d", typ.ByteSize)
 		}
 	case *dwarf.StructType:
-		p.visited[a] = true
 		if typ.Kind != "struct" {
 			// Could be "class" or "union".
 			p.errorf("can't handle struct type %s", typ.Kind)
@@ -272,17 +281,19 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 	case *dwarf.ArrayType:
 		p.printArrayAt(typ, a)
 	case *dwarf.MapType:
-		p.visited[a] = true
 		p.printMapAt(typ, a)
 	case *dwarf.SliceType:
-		p.visited[a] = true
 		p.printSliceAt(typ, a)
 	case *dwarf.StringType:
 		p.printStringAt(typ, a)
 	case *dwarf.TypedefType:
-		p.errorf("unimplemented typedef type %T %v", typ, typ)
+		p.printValueAt(typ.Type, a)
+	case *dwarf.FuncType:
+		p.printf("%v @%#x ", typ, a)
+	case *dwarf.VoidType:
+		p.printf("void")
 	default:
-		// TODO: chan func interface
+		// TODO: chan interface
 		p.errorf("unimplemented type %v", typ)
 	}
 }
