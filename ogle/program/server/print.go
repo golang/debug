@@ -43,30 +43,19 @@ type Printer struct {
 	cacheAddr address // Starting address of cache.
 }
 
-// printf prints to printBuf, unless there has been an error.
+// printf prints to printBuf.
 func (p *Printer) printf(format string, args ...interface{}) {
-	if p.err != nil {
-		return
-	}
 	fmt.Fprintf(&p.printBuf, format, args...)
 }
 
-// errorf sets the sticky error for the printer, if not already set.
+// errorf prints the error to printBuf, then sets the sticky error for the
+// printer, if not already set.
 func (p *Printer) errorf(format string, args ...interface{}) {
+	fmt.Fprintf(&p.printBuf, "<"+format+">", args...)
 	if p.err != nil {
 		return
 	}
 	p.err = fmt.Errorf(format, args...)
-}
-
-// ok checks the error. If it is the first non-nil error encountered,
-// it is printed to printBuf, parenthesized for discrimination, and remembered.
-func (p *Printer) ok(err error) bool {
-	if p.err == nil && err != nil {
-		p.printf("(%s)", err)
-		p.err = err
-	}
-	return p.err == nil
 }
 
 // peek reads len bytes at offset, leaving p.tmp with the data and sized appropriately.
@@ -77,7 +66,8 @@ func (p *Printer) peek(a address, length int64) bool {
 		copy(p.tmp, p.cache[a-p.cacheAddr:])
 		return true
 	}
-	return p.ok(p.peeker.peek(uintptr(a), p.tmp))
+	err := p.peeker.peek(uintptr(a), p.tmp)
+	return err == nil
 }
 
 // setCache initializes the cache to contain the contents of the
@@ -89,11 +79,13 @@ func (p *Printer) setCache(a, length address) bool {
 		p.cache = make([]byte, length)
 	}
 	p.cacheAddr = a
-	ok := p.ok(p.peeker.peek(uintptr(a), p.cache))
-	if !ok {
+	err := p.peeker.peek(uintptr(a), p.cache)
+	if err != nil {
+		// If the peek failed, don't cache anything.
 		p.resetCache()
+		return false
 	}
-	return ok
+	return true
 }
 
 func (p *Printer) resetCache() {
@@ -221,23 +213,32 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 		}
 		if p.peek(a, 1) {
 			p.printf("%t", p.tmp[0] != 0)
+		} else {
+			p.errorf("couldn't read bool")
 		}
 	case *dwarf.PtrType:
 		// This type doesn't define the ByteSize attribute.
 		if p.peek(a, int64(p.arch.PointerSize)) {
 			p.printf("%#x", p.arch.Uintptr(p.tmp))
+		} else {
+			p.errorf("couldn't read pointer")
 		}
 	case *dwarf.IntType:
 		// Sad we can't tell a rune from an int32.
 		if p.peek(a, typ.ByteSize) {
 			p.printf("%d", p.arch.IntN(p.tmp))
+		} else {
+			p.errorf("couldn't read int")
 		}
 	case *dwarf.UintType:
 		if p.peek(a, typ.ByteSize) {
 			p.printf("%d", p.arch.UintN(p.tmp))
+		} else {
+			p.errorf("couldn't read uint")
 		}
 	case *dwarf.FloatType:
 		if !p.peek(a, typ.ByteSize) {
+			p.errorf("couldn't read float")
 			return
 		}
 		switch typ.ByteSize {
@@ -250,6 +251,7 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 		}
 	case *dwarf.ComplexType:
 		if !p.peek(a, typ.ByteSize) {
+			p.errorf("couldn't read complex")
 			return
 		}
 		switch typ.ByteSize {
@@ -343,11 +345,13 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, a address) {
 	structType := typ.Type.(*dwarf.PtrType).Type.(*dwarf.StructType)
 	// Indirect through the pointer.
 	if !p.peek(a, int64(p.arch.PointerSize)) {
+		p.errorf("couldn't read map")
 		return
 	}
 	a = address(p.arch.Uintptr(p.tmp[:p.arch.PointerSize]))
 	// Now read the struct.
 	if !p.peek(a, structType.ByteSize) {
+		p.errorf("couldn't read map")
 		return
 	}
 	// From runtime/hashmap.go; We need to walk the map data structure.
@@ -398,6 +402,7 @@ func (p *Printer) printMapBucketsAt(desc mapDesc, a address) {
 		// After the header, the bucket struct has an array of keys followed by an array of elements.
 		// Load this bucket struct into p's cache and initialize "pointers" to the key and value slices.
 		if !p.setCache(a, desc.bucketSize) {
+			p.errorf("couldn't read map")
 			return
 		}
 		keyAddr := a + bucketCnt + address(p.arch.PointerSize)
@@ -434,7 +439,7 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 	// Slices look like a struct with fields array *elemtype, len uint32/64, cap uint32/64.
 	// BUG: Slice header appears to have fields with ByteSize == 0
 	if !p.peek(a, typ.ByteSize) {
-		p.errorf("slice header has no known size")
+		p.errorf("couldn't read slice")
 		return
 	}
 	lo := typ.Field[0].ByteOffset
@@ -464,7 +469,7 @@ func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
 	// Strings look like a struct with fields array *elemtype, len uint64.
 	// TODO uint64 on 386 too?
 	if !p.peek(a, typ.ByteSize) {
-		p.errorf("string header has no known size")
+		p.errorf("couldn't read string")
 		return
 	}
 	// BUG: String header appears to have fields with ByteSize == 0
@@ -477,10 +482,16 @@ func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
 	if length > uint64(cap(p.tmp)) {
 		if p.peek(address(ptr), int64(cap(p.tmp))) {
 			p.printf("%q...", p.tmp)
+		} else {
+			p.errorf("couldn't read string")
+			return
 		}
 	} else {
 		if p.peek(address(ptr), int64(length)) {
 			p.printf("%q", p.tmp[:length])
+		} else {
+			p.errorf("couldn't read string")
+			return
 		}
 	}
 }
