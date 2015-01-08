@@ -58,16 +58,96 @@ func (p *Printer) errorf(format string, args ...interface{}) {
 	p.err = fmt.Errorf(format, args...)
 }
 
-// peek reads len bytes at offset, leaving p.tmp with the data and sized appropriately.
+// peek reads len bytes at addr, leaving p.tmp with the data and sized appropriately.
 // It uses the cache if the request is within it.
-func (p *Printer) peek(a address, length int64) bool {
+func (p *Printer) peek(addr address, length int64) bool {
 	p.tmp = p.tmp[:length]
-	if p.cacheAddr <= a && a+address(length) <= p.cacheAddr+address(len(p.cache)) {
-		copy(p.tmp, p.cache[a-p.cacheAddr:])
+	if p.cacheAddr <= addr && addr+address(length) <= p.cacheAddr+address(len(p.cache)) {
+		copy(p.tmp, p.cache[addr-p.cacheAddr:])
 		return true
 	}
-	err := p.peeker.peek(uintptr(a), p.tmp)
+	err := p.peeker.peek(uintptr(addr), p.tmp)
 	return err == nil
+}
+
+// peekPtr reads a pointer at addr.
+func (p *Printer) peekPtr(addr address) (address, bool) {
+	if p.peek(addr, int64(p.arch.PointerSize)) {
+		return address(p.arch.Uintptr(p.tmp)), true
+	}
+	return 0, false
+}
+
+// peekUint8 reads a uint8 at addr.
+func (p *Printer) peekUint8(addr address) (uint8, bool) {
+	if p.peek(addr, 1) {
+		return p.tmp[0], true
+	}
+	return 0, false
+}
+
+// peekInt reads an int of size s at addr.
+func (p *Printer) peekInt(addr address, s int64) (int64, bool) {
+	if p.peek(addr, s) {
+		return p.arch.IntN(p.tmp), true
+	}
+	return 0, false
+}
+
+// peekUint reads a uint of size s at addr.
+func (p *Printer) peekUint(addr address, s int64) (uint64, bool) {
+	if p.peek(addr, s) {
+		return p.arch.UintN(p.tmp), true
+	}
+	return 0, false
+}
+
+// peekPtrStructField reads a pointer in the field fieldName of the struct
+// of type t at address addr.
+func (p *Printer) peekPtrStructField(t *dwarf.StructType, addr address, fieldName string) (address, bool) {
+	f, err := getField(t, fieldName)
+	if err != nil {
+		p.errorf("%s", err)
+		return 0, false
+	}
+	_, ok := f.Type.(*dwarf.PtrType)
+	if !ok {
+		p.errorf("struct field %s is not a pointer", fieldName)
+		return 0, false
+	}
+	return p.peekPtr(addr + address(f.ByteOffset))
+}
+
+// peekUintStructField reads a uint in the field fieldName of the struct
+// of type t at address addr.  The size of the uint is determined by the field.
+func (p *Printer) peekUintStructField(t *dwarf.StructType, addr address, fieldName string) (uint64, bool) {
+	f, err := getField(t, fieldName)
+	if err != nil {
+		p.errorf("%s", err)
+		return 0, false
+	}
+	ut, ok := f.Type.(*dwarf.UintType)
+	if !ok {
+		p.errorf("struct field %s is not a uint", fieldName)
+		return 0, false
+	}
+	return p.peekUint(addr + address(f.ByteOffset), ut.ByteSize)
+}
+
+// peekIntStructField reads an int in the field fieldName of the struct
+// of type t at address addr.  The size of the int is determined by the field.
+func (p *Printer) peekIntStructField(t *dwarf.StructType, addr address, fieldName string) (int64, bool) {
+	f, err := getField(t, fieldName)
+	if f == nil {
+		p.errorf("%s", err)
+		return 0, false
+	}
+	it, ok := f.Type.(*dwarf.IntType)
+	if !ok {
+		p.errorf("struct field %s is not an int", fieldName)
+		return 0, false
+	}
+	return p.peekInt(addr + address(f.ByteOffset), it.ByteSize)
 }
 
 // setCache initializes the cache to contain the contents of the
@@ -211,28 +291,27 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 			p.errorf("unrecognized bool size %d", typ.ByteSize)
 			return
 		}
-		if p.peek(a, 1) {
-			p.printf("%t", p.tmp[0] != 0)
+		if b, ok := p.peekUint8(a); ok {
+			p.printf("%t", b != 0)
 		} else {
 			p.errorf("couldn't read bool")
 		}
 	case *dwarf.PtrType:
-		// This type doesn't define the ByteSize attribute.
-		if p.peek(a, int64(p.arch.PointerSize)) {
-			p.printf("%#x", p.arch.Uintptr(p.tmp))
+		if ptr, ok := p.peekPtr(a); ok {
+			p.printf("%#x", ptr)
 		} else {
 			p.errorf("couldn't read pointer")
 		}
 	case *dwarf.IntType:
 		// Sad we can't tell a rune from an int32.
-		if p.peek(a, typ.ByteSize) {
-			p.printf("%d", p.arch.IntN(p.tmp))
+		if i, ok := p.peekInt(a, typ.ByteSize); ok {
+			p.printf("%d", i)
 		} else {
 			p.errorf("couldn't read int")
 		}
 	case *dwarf.UintType:
-		if p.peek(a, typ.ByteSize) {
-			p.printf("%d", p.arch.UintN(p.tmp))
+		if u, ok := p.peekUint(a, typ.ByteSize); ok {
+			p.printf("%d", u)
 		} else {
 			p.errorf("couldn't read uint")
 		}
@@ -438,17 +517,14 @@ func (p *Printer) printMapBucketsAt(desc mapDesc, a address) {
 func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 	// Slices look like a struct with fields array *elemtype, len uint32/64, cap uint32/64.
 	// BUG: Slice header appears to have fields with ByteSize == 0
-	if !p.peek(a, typ.ByteSize) {
+	ptr, ok1 := p.peekPtrStructField(&typ.StructType, a, "array")
+	length, ok2 := p.peekUintStructField(&typ.StructType, a, "len")
+	// Capacity is not used yet.
+	_, ok3 := p.peekUintStructField(&typ.StructType, a, "cap")
+	if !ok1 || !ok2 || !ok3 {
 		p.errorf("couldn't read slice")
 		return
 	}
-	lo := typ.Field[0].ByteOffset
-	hi := lo + int64(p.arch.PointerSize)
-	ptr := address(p.arch.UintN(p.tmp[lo:hi]))
-	lo = typ.Field[1].ByteOffset
-	hi = lo + int64(p.arch.IntSize)
-	length := p.arch.UintN(p.tmp[lo:hi])
-	// Capacity is unused here.
 	elemType := typ.ElemType
 	size := p.sizeof(elemType)
 	if size < 0 {
@@ -466,20 +542,18 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 }
 
 func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
-	// Strings look like a struct with fields array *elemtype, len uint64.
-	// TODO uint64 on 386 too?
-	if !p.peek(a, typ.ByteSize) {
+	// BUG: String header appears to have fields with ByteSize == 0
+	ptr, ok := p.peekPtrStructField(&typ.StructType, a, "str")
+	if !ok {
 		p.errorf("couldn't read string")
 		return
 	}
-	// BUG: String header appears to have fields with ByteSize == 0
-	lo := typ.Field[0].ByteOffset
-	hi := lo + int64(p.arch.PointerSize)
-	ptr := p.arch.UintN(p.tmp[lo:hi])
-	lo = typ.Field[1].ByteOffset
-	hi = lo + int64(p.arch.IntSize) // TODO?
-	length := p.arch.UintN(p.tmp[lo:hi])
-	if length > uint64(cap(p.tmp)) {
+	length, ok := p.peekIntStructField(&typ.StructType, a, "len")
+	if !ok {
+		p.errorf("couldn't read string")
+		return
+	}
+	if length > int64(cap(p.tmp)) {
 		if p.peek(address(ptr), int64(cap(p.tmp))) {
 			p.printf("%q...", p.tmp)
 		} else {
@@ -509,4 +583,21 @@ func (p *Printer) sizeof(typ dwarf.Type) int64 {
 	}
 	p.errorf("unknown size for %s", typ)
 	return -1
+}
+
+// getField finds the *dwarf.StructField in a dwarf.StructType with name fieldName.
+func getField(t *dwarf.StructType, fieldName string) (*dwarf.StructField, error) {
+	var r *dwarf.StructField
+	for _, f := range t.Field {
+		if f.Name == fieldName {
+			if r != nil {
+				return nil, fmt.Errorf("struct definition repeats field %s", fieldName)
+			}
+			r = f
+		}
+	}
+	if r == nil {
+		return nil, fmt.Errorf("struct field %s missing", fieldName)
+	}
+	return r, nil
 }
