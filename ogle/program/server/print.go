@@ -131,7 +131,7 @@ func (p *Printer) peekUintStructField(t *dwarf.StructType, addr address, fieldNa
 		p.errorf("struct field %s is not a uint", fieldName)
 		return 0, false
 	}
-	return p.peekUint(addr + address(f.ByteOffset), ut.ByteSize)
+	return p.peekUint(addr+address(f.ByteOffset), ut.ByteSize)
 }
 
 // peekIntStructField reads an int in the field fieldName of the struct
@@ -147,7 +147,7 @@ func (p *Printer) peekIntStructField(t *dwarf.StructType, addr address, fieldNam
 		p.errorf("struct field %s is not an int", fieldName)
 		return 0, false
 	}
-	return p.peekInt(addr + address(f.ByteOffset), it.ByteSize)
+	return p.peekInt(addr+address(f.ByteOffset), it.ByteSize)
 }
 
 // setCache initializes the cache to contain the contents of the
@@ -382,14 +382,9 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a address) {
 	elemType := typ.Type
 	length := typ.Count
-	stride := typ.StrideBitSize
-	if stride > 0 {
-		stride /= 8
-	} else {
-		stride = p.sizeof(elemType)
-		if stride < 0 {
-			p.errorf("array elements have no known size")
-		}
+	stride, ok := p.arrayStride(typ)
+	if !ok {
+		p.errorf("can't determine element size")
 	}
 	p.printf("%s{", typ)
 	n := length
@@ -526,9 +521,9 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 		return
 	}
 	elemType := typ.ElemType
-	size := p.sizeof(elemType)
-	if size < 0 {
-		return
+	size, ok := p.sizeof(typ.ElemType)
+	if !ok {
+		p.errorf("can't determine element size")
 	}
 	p.printf("%s{", typ)
 	for i := uint64(0); i < length; i++ {
@@ -570,19 +565,27 @@ func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
 	}
 }
 
-// sizeof returns the byte size of the type. It returns -1 if no size can be found.
-func (p *Printer) sizeof(typ dwarf.Type) int64 {
+// sizeof returns the byte size of the type.
+func (p *Printer) sizeof(typ dwarf.Type) (address, bool) {
 	size := typ.Size() // Will be -1 if ByteSize is not set.
 	if size >= 0 {
-		return size
+		return address(size), true
 	}
 	switch typ.(type) {
 	case *dwarf.PtrType:
 		// This is the only one we know of, but more may arise.
-		return int64(p.arch.PointerSize)
+		return address(p.arch.PointerSize), true
 	}
-	p.errorf("unknown size for %s", typ)
-	return -1
+	return 0, false
+}
+
+// arrayStride returns the stride of a dwarf.ArrayType in bytes.
+func (p *Printer) arrayStride(t *dwarf.ArrayType) (address, bool) {
+	stride := t.StrideBitSize
+	if stride > 0 {
+		return address(stride / 8), true
+	}
+	return p.sizeof(t.Type)
 }
 
 // getField finds the *dwarf.StructField in a dwarf.StructType with name fieldName.
