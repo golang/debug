@@ -5,11 +5,14 @@
 // Demo program that starts another program and calls Ogle library functions
 // to debug it.
 
-package main
+package ogler
 
 import (
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"testing"
 
 	"golang.org/x/debug/ogle/program/client"
 )
@@ -94,8 +97,32 @@ func matches(p, s string) bool {
 	return j == len(s)
 }
 
-func main() {
-	prog, err := client.Run("localhost", "bin/tracee")
+func run(t *testing.T, name string, args ...string) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+const (
+	proxySrc     = "golang.org/x/debug/ogle/cmd/ogleproxy"
+	proxyBinary  = "./ogleproxy"
+	traceeSrc    = "golang.org/x/debug/ogle/demo/tracee"
+	traceeBinary = "./tracee"
+)
+
+func TestBreakAndEval(t *testing.T) {
+	run(t, "go", "build", "-o", proxyBinary, proxySrc)
+	defer os.Remove(proxyBinary)
+
+	run(t, "go", "build", "-o", traceeBinary, traceeSrc)
+	defer os.Remove(traceeBinary)
+
+	client.OgleproxyCmd = proxyBinary
+	prog, err := client.Run("localhost", traceeBinary)
 	if err != nil {
 		log.Fatalf("Run: %v", err)
 	}
