@@ -36,11 +36,6 @@ type Printer struct {
 	printBuf bytes.Buffer            // Accumulates the output.
 	tmp      []byte                  // Temporary used for I/O.
 	visited  map[typeAndAddress]bool // Prevents looping on cyclic data.
-	// The cache stores a local copy of part of the address space.
-	// Saves I/O overhead when scanning map buckets by letting
-	// printValueAt use the contents of already-read bucket data.
-	cache     []byte  // Already-read data.
-	cacheAddr address // Starting address of cache.
 }
 
 // printf prints to printBuf.
@@ -59,13 +54,8 @@ func (p *Printer) errorf(format string, args ...interface{}) {
 }
 
 // peek reads len bytes at addr, leaving p.tmp with the data and sized appropriately.
-// It uses the cache if the request is within it.
 func (p *Printer) peek(addr address, length int64) bool {
 	p.tmp = p.tmp[:length]
-	if p.cacheAddr <= addr && addr+address(length) <= p.cacheAddr+address(len(p.cache)) {
-		copy(p.tmp, p.cache[addr-p.cacheAddr:])
-		return true
-	}
 	err := p.peeker.peek(uintptr(addr), p.tmp)
 	return err == nil
 }
@@ -150,29 +140,6 @@ func (p *Printer) peekIntStructField(t *dwarf.StructType, addr address, fieldNam
 	return p.peekInt(addr+address(f.ByteOffset), it.ByteSize)
 }
 
-// setCache initializes the cache to contain the contents of the
-// address space at the specified offset.
-func (p *Printer) setCache(a, length address) bool {
-	if address(cap(p.cache)) >= length {
-		p.cache = p.cache[:length]
-	} else {
-		p.cache = make([]byte, length)
-	}
-	p.cacheAddr = a
-	err := p.peeker.peek(uintptr(a), p.cache)
-	if err != nil {
-		// If the peek failed, don't cache anything.
-		p.resetCache()
-		return false
-	}
-	return true
-}
-
-func (p *Printer) resetCache() {
-	p.cache = p.cache[0:0]
-	p.cacheAddr = 0
-}
-
 // Peeker is like a read that probes the remote address space.
 type Peeker interface {
 	peek(offset uintptr, buf []byte) error
@@ -195,7 +162,6 @@ func NewPrinter(arch *arch.Architecture, dwarf *dwarf.Data, peeker Peeker) *Prin
 func (p *Printer) reset() {
 	p.err = nil
 	p.printBuf.Reset()
-	p.resetCache()
 	// Just wipe the map rather than reallocating. It's almost always tiny.
 	for k := range p.visited {
 		delete(p.visited, k)
