@@ -329,6 +329,8 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 		p.printArrayAt(typ, a)
 	case *dwarf.MapType:
 		p.printMapAt(typ, a)
+	case *dwarf.ChanType:
+		p.printChannelAt(typ, a)
 	case *dwarf.SliceType:
 		p.printSliceAt(typ, a)
 	case *dwarf.StringType:
@@ -340,7 +342,7 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 	case *dwarf.VoidType:
 		p.printf("void")
 	default:
-		// TODO: chan interface
+		// TODO: interface
 		p.errorf("unimplemented type %v", typ)
 	}
 }
@@ -376,12 +378,12 @@ const maxMapValuesToPrint = 8
 
 func (p *Printer) printMapAt(typ *dwarf.MapType, a address) {
 	// Maps are pointers to structs.
-	pst, ok := typ.Type.(*dwarf.PtrType)
+	pt, ok := typ.Type.(*dwarf.PtrType)
 	if !ok {
 		p.errorf("bad map type: not a pointer")
 		return
 	}
-	st, ok := pst.Type.(*dwarf.StructType)
+	st, ok := pt.Type.(*dwarf.StructType)
 	if !ok {
 		p.errorf("bad map type: not a pointer to a struct")
 		return
@@ -537,6 +539,50 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValu
 				return
 			}
 		}
+	}
+}
+
+func (p *Printer) printChannelAt(ct *dwarf.ChanType, a address) {
+	p.printf("(chan %s ", ct.ElemType)
+	defer p.printf(")")
+
+	a, ok := p.peekPtr(a)
+	if !ok {
+		p.errorf("couldn't read channel")
+		return
+	}
+	if a == 0 {
+		p.printf("<nil>")
+		return
+	}
+	p.printf("%#x", a)
+
+	// ct is a typedef for a pointer to a struct.
+	pt, ok := ct.TypedefType.Type.(*dwarf.PtrType)
+	if !ok {
+		p.errorf("bad channel type: not a pointer")
+		return
+	}
+	st, ok := pt.Type.(*dwarf.StructType)
+	if !ok {
+		p.errorf("bad channel type: not a pointer to a struct")
+		return
+	}
+
+	// Print the channel buffer's length (qcount) and capacity (dataqsiz),
+	// if not 0/0.
+	qcount, ok := p.peekUintStructField(st, a, "qcount")
+	if !ok {
+		p.errorf(`couldn't read channel field "qcount"`)
+		return
+	}
+	dataqsiz, ok := p.peekUintStructField(st, a, "dataqsiz")
+	if !ok {
+		p.errorf(`couldn't read channel field "dataqsiz"`)
+		return
+	}
+	if qcount != 0 || dataqsiz != 0 {
+		p.printf(" [%d/%d]", qcount, dataqsiz)
 	}
 }
 

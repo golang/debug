@@ -287,7 +287,7 @@ func (t *TypedefType) String() string { return t.Name }
 
 func (t *TypedefType) Size() int64 { return t.Type.Size() }
 
-// A MapType represents a Go slice type. It looks like a TypedefType, describing
+// A MapType represents a Go map type. It looks like a TypedefType, describing
 // the runtime-internal structure, with extra fields.
 type MapType struct {
 	TypedefType
@@ -300,6 +300,19 @@ func (t *MapType) String() string {
 		return t.Name
 	}
 	return "map[" + t.KeyType.String() + "]" + t.ElemType.String()
+}
+
+// A ChanType represents a Go channel type.
+type ChanType struct {
+	TypedefType
+	ElemType Type
+}
+
+func (t *ChanType) String() string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return "chan " + t.ElemType.String()
 }
 
 // typeReader is used to read from either the info section or the
@@ -710,12 +723,12 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 
 	case TagTypedef:
 		// Typedef (DWARF v2 §5.3)
-		// Also maps (Go-specific).
+		// Also maps and channels (Go-specific).
 		// Attributes:
 		//	AttrName: name [required]
 		//	AttrType: type definition [required]
-		//	AttrGoKey: present for maps only.
-		//	AttrElemKey: present for maps only.
+		//	AttrGoKey: present for maps.
+		//	AttrGoElem: present for maps and channels.
 		t := new(TypedefType)
 		t.ReflectKind = getKind(e)
 		switch t.ReflectKind {
@@ -725,6 +738,11 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 			m.ElemType = typeOf(e, AttrGoElem)
 			t = &m.TypedefType
 			typ = m
+		case reflect.Chan:
+			c := new(ChanType)
+			c.ElemType = typeOf(e, AttrGoElem)
+			t = &c.TypedefType
+			typ = c
 		default:
 			typ = t
 		}
