@@ -404,108 +404,173 @@ func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a address) {
 	p.printf("}")
 }
 
-// mapDesc collects the information necessary to print a map.
-type mapDesc struct {
-	typ        *dwarf.MapType
-	count      int
-	numBuckets int
-	keySize    address
-	elemSize   address
-	bucketSize address
-}
+// maxMapValuesToPrint values are printed for each map; any remaining values are
+// truncated to "...".
+const maxMapValuesToPrint = 8
 
 func (p *Printer) printMapAt(typ *dwarf.MapType, a address) {
-	// Maps are pointers to a struct type.
-	structType := typ.Type.(*dwarf.PtrType).Type.(*dwarf.StructType)
-	// Indirect through the pointer.
-	if !p.peek(a, int64(p.arch.PointerSize)) {
-		p.errorf("couldn't read map")
+	// Maps are pointers to structs.
+	pst, ok := typ.Type.(*dwarf.PtrType)
+	if !ok {
+		p.errorf("bad map type: not a pointer")
 		return
 	}
-	a = address(p.arch.Uintptr(p.tmp[:p.arch.PointerSize]))
-	// Now read the struct.
-	if !p.peek(a, structType.ByteSize) {
-		p.errorf("couldn't read map")
+	st, ok := pst.Type.(*dwarf.StructType)
+	if !ok {
+		p.errorf("bad map type: not a pointer to a struct")
 		return
 	}
-	// From runtime/hashmap.go; We need to walk the map data structure.
-	// Load the struct, then iterate over the buckets.
-	// uintgo count (occupancy).
-	offset := int(structType.Field[0].ByteOffset)
-	count := int(p.arch.Uint(p.tmp[offset : offset+p.arch.IntSize]))
-	// uint8 Log2 of number of buckets.
-	b := uint(p.tmp[structType.Field[3].ByteOffset])
-	// uint8 key size in bytes.
-	keySize := address(p.tmp[structType.Field[4].ByteOffset])
-	// uint8 element size in bytes.
-	elemSize := address(p.tmp[structType.Field[5].ByteOffset])
-	// uint16 bucket size in bytes.
-	bucketSize := address(p.arch.Uint16(p.tmp[structType.Field[6].ByteOffset:]))
-	// pointer to buckets
-	offset = int(structType.Field[7].ByteOffset)
-	bucketPtr := address(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
-	// pointer to old buckets.
-	offset = int(structType.Field[8].ByteOffset)
-	oldBucketPtr := address(p.arch.Uintptr(p.tmp[offset : offset+p.arch.PointerSize]))
-	// Ready to print.
-	p.printf("%s{", typ)
-	desc := mapDesc{
-		typ:        typ,
-		count:      count,
-		numBuckets: 1 << b,
-		keySize:    keySize,
-		elemSize:   elemSize,
-		bucketSize: bucketSize,
+	a, ok = p.peekPtr(a)
+	if !ok {
+		p.errorf("couldn't read map pointer")
+		return
 	}
-	p.printMapBucketsAt(desc, bucketPtr)
-	p.printMapBucketsAt(desc, oldBucketPtr)
+	if a == 0 {
+		p.printf("<nil>")
+		return
+	}
+	b, ok := p.peekUintStructField(st, a, "B")
+	if !ok {
+		p.errorf(`couldn't read map field "B"`)
+		return
+	}
+	buckets, ok := p.peekPtrStructField(st, a, "buckets")
+	if !ok {
+		p.errorf(`couldn't read map field "buckets"`)
+		return
+	}
+	oldbuckets, ok := p.peekPtrStructField(st, a, "oldbuckets")
+	if !ok {
+		p.errorf(`couldn't read map field "oldbuckets"`)
+		return
+	}
+
+	p.printf("{")
+	// Limit how many values are printed per map.
+	numValues := address(0)
+	{
+		bf, err := getField(st, "buckets")
+		if err != nil {
+			p.errorf("%s", err)
+		} else {
+			p.printMapBucketsAt(bf.Type, buckets, 1<<b, &numValues)
+		}
+	}
+	if b > 0 {
+		bf, err := getField(st, "oldbuckets")
+		if err != nil {
+			p.errorf("%s", err)
+		} else {
+			p.printMapBucketsAt(bf.Type, oldbuckets, 1<<(b-1), &numValues)
+		}
+	}
 	p.printf("}")
 }
 
-// Map bucket layout from runtime/hashmap.go
-const (
-	bucketCnt  = 8
-	minTopHash = 4
-)
-
-func (p *Printer) printMapBucketsAt(desc mapDesc, a address) {
+func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValues *address) {
+	if *numValues > maxMapValuesToPrint {
+		return
+	}
 	if a == 0 {
 		return
 	}
-	for i := 0; desc.count > 0 && i < desc.numBuckets; i++ {
-		// After the header, the bucket struct has an array of keys followed by an array of elements.
-		// Load this bucket struct into p's cache and initialize "pointers" to the key and value slices.
-		if !p.setCache(a, desc.bucketSize) {
-			p.errorf("couldn't read map")
-			return
-		}
-		keyAddr := a + bucketCnt + address(p.arch.PointerSize)
-		elemAddr := keyAddr + bucketCnt*desc.keySize
-		a += desc.bucketSize // Advance to next bucket; keyAddr and elemAddr are all we need now.
-		// tophash uint8 [bucketCnt] tells us which buckets are occupied.
-		// p.cache has the data but calls to printValueAt below may overwrite the
-		// cache, so grab a copy of the relevant data.
-		var tophash [bucketCnt]byte
-		if copy(tophash[:], p.cache) != bucketCnt {
-			p.errorf("bad count copying hash flags")
-			return
-		}
-		overflow := address(p.arch.Uintptr(p.cache[bucketCnt : bucketCnt+p.arch.PointerSize]))
-		for j := 0; desc.count > 0 && j < bucketCnt; j++ {
-			if tophash[j] >= minTopHash {
-				p.printValueAt(desc.typ.KeyType, keyAddr)
-				p.printf(":")
-				p.printValueAt(desc.typ.ElemType, elemAddr)
-				desc.count--
-				if desc.count > 0 {
+	// From runtime/hashmap.go
+	const minTopHash = 4
+	// t is a pointer to a struct.
+	bucketPtrType, ok := t.(*dwarf.PtrType)
+	if !ok {
+		p.errorf("bad map bucket type: not a pointer")
+		return
+	}
+	bt, ok := bucketPtrType.Type.(*dwarf.StructType)
+	if !ok {
+		p.errorf("bad map bucket type: not a pointer to a struct")
+		return
+	}
+	bucketSize, ok := p.sizeof(bucketPtrType.Type)
+	if !ok {
+		p.errorf("can't get bucket size")
+		return
+	}
+	tophashField, err := getField(bt, "tophash")
+	if err != nil {
+		p.errorf("%s", err)
+		return
+	}
+	bucketCnt, ok := p.sizeof(tophashField.Type)
+	if !ok {
+		p.errorf("can't get tophash size")
+		return
+	}
+	keysField, err := getField(bt, "keys")
+	if err != nil {
+		p.errorf("%s", err)
+		return
+	}
+	keysType, ok := keysField.Type.(*dwarf.ArrayType)
+	if !ok {
+		p.errorf(`bad map bucket type: "keys" is not an array`)
+		return
+	}
+	keysStride, ok := p.arrayStride(keysType)
+	if !ok {
+		p.errorf("unknown key size")
+		keysStride = 1
+	}
+	valuesField, err := getField(bt, "values")
+	if err != nil {
+		p.errorf("%s", err)
+		return
+	}
+	valuesType, ok := valuesField.Type.(*dwarf.ArrayType)
+	if !ok {
+		p.errorf(`bad map bucket type: "values" is not an array`)
+		return
+	}
+	valuesStride, ok := p.arrayStride(valuesType)
+	if !ok {
+		p.errorf("unknown value size")
+		keysStride = 1
+	}
+
+	for i := address(0); i < numBuckets; i++ {
+		bucketAddr := a + i*bucketSize
+		// TODO: check for repeated bucket pointers.
+		for bucketAddr != 0 {
+			for j := address(0); j < bucketCnt; j++ {
+				tophash, ok := p.peekUint8(bucketAddr + address(tophashField.ByteOffset) + j)
+				if !ok {
+					p.errorf("couldn't read map")
+					return
+				}
+				if tophash < minTopHash {
+					continue
+				}
+
+				// Limit how many values are printed per map.
+				(*numValues)++
+				if *numValues > maxMapValuesToPrint {
+					p.printf(", ...")
+					return
+				}
+				if *numValues > 1 {
 					p.printf(", ")
 				}
+
+				p.printValueAt(keysType.Type,
+					bucketAddr+address(keysField.ByteOffset)+j*keysStride)
+				p.printf(":")
+				p.printValueAt(valuesType.Type,
+					bucketAddr+address(valuesField.ByteOffset)+j*valuesStride)
 			}
-			keyAddr += desc.keySize
-			elemAddr += desc.elemSize
+
+			var ok bool
+			bucketAddr, ok = p.peekPtrStructField(bt, bucketAddr, "overflow")
+			if !ok {
+				p.errorf("couldn't read map")
+				return
+			}
 		}
-		// pointer to overflow bucket, if any.
-		p.printMapBucketsAt(desc, overflow)
 	}
 }
 
