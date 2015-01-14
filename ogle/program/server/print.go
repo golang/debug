@@ -496,7 +496,7 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValu
 	valuesStride, ok := p.arrayStride(valuesType)
 	if !ok {
 		p.errorf("unknown value size")
-		keysStride = 1
+		valuesStride = 1
 	}
 
 	for i := address(0); i < numBuckets; i++ {
@@ -514,7 +514,7 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValu
 				}
 
 				// Limit how many values are printed per map.
-				(*numValues)++
+				*numValues++
 				if *numValues > maxMapValuesToPrint {
 					p.printf(", ...")
 					return
