@@ -327,6 +327,8 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 		p.printf("}")
 	case *dwarf.ArrayType:
 		p.printArrayAt(typ, a)
+	case *dwarf.InterfaceType:
+		p.printInterfaceAt(typ, a)
 	case *dwarf.MapType:
 		p.printMapAt(typ, a)
 	case *dwarf.ChanType:
@@ -342,7 +344,6 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 	case *dwarf.VoidType:
 		p.printf("void")
 	default:
-		// TODO: interface
 		p.errorf("unimplemented type %v", typ)
 	}
 }
@@ -370,6 +371,114 @@ func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a address) {
 		p.printf(", ...")
 	}
 	p.printf("}")
+}
+
+func (p *Printer) printInterfaceAt(t *dwarf.InterfaceType, a address) {
+	// t should be a typedef binding a typedef binding a struct.
+	tt, ok := t.TypedefType.Type.(*dwarf.TypedefType)
+	if !ok {
+		p.errorf("bad interface type: not a typedef")
+		return
+	}
+	st, ok := tt.Type.(*dwarf.StructType)
+	if !ok {
+		p.errorf("bad interface type: not a typedef of a struct")
+		return
+	}
+	p.printf("(")
+	tab, ok := p.peekPtrStructField(st, a, "tab")
+	if ok {
+		f, err := getField(st, "tab")
+		if err != nil {
+			p.errorf("%s", err)
+		} else {
+			p.printTypeOfInterface(f.Type, tab)
+		}
+	} else {
+		p.errorf("couldn't read interface type")
+	}
+	p.printf(", ")
+	data, ok := p.peekPtrStructField(st, a, "data")
+	if !ok {
+		p.errorf("couldn't read interface value")
+	} else if data == 0 {
+		p.printf("<nil>")
+	} else {
+		p.printf("%#x", data)
+	}
+	p.printf(")")
+}
+
+// printTypeOfInterface prints the type of the given tab pointer.
+func (p *Printer) printTypeOfInterface(t dwarf.Type, a address) {
+	if a == 0 {
+		p.printf("<nil>")
+		return
+	}
+	// t should be a pointer to a typedef binding a struct which contains a field _type.
+	// _type should be a pointer to a typedef binding a struct which contains a field _string.
+	// _string is the name of the type.
+	t1, ok := t.(*dwarf.PtrType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	t2, ok := t1.Type.(*dwarf.TypedefType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	t3, ok := t2.Type.(*dwarf.StructType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	typeField, err := getField(t3, "_type")
+	if err != nil {
+		p.errorf("%s", err)
+		return
+	}
+	t4, ok := typeField.Type.(*dwarf.PtrType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	t5, ok := t4.Type.(*dwarf.TypedefType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	t6, ok := t5.Type.(*dwarf.StructType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	stringField, err := getField(t6, "_string")
+	if err != nil {
+		p.errorf("%s", err)
+		return
+	}
+	t7, ok := stringField.Type.(*dwarf.PtrType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	stringType, ok := t7.Type.(*dwarf.StringType)
+	if !ok {
+		p.errorf("bad type")
+		return
+	}
+	typeAddr, ok := p.peekPtrStructField(t3, a, "_type")
+	if !ok {
+		p.errorf("couldn't read type structure pointer")
+		return
+	}
+	stringAddr, ok := p.peekPtrStructField(t6, typeAddr, "_string")
+	if !ok {
+		p.errorf("couldn't read type name")
+		return
+	}
+	p.printStringAt(stringType, stringAddr)
 }
 
 // maxMapValuesToPrint values are printed for each map; any remaining values are

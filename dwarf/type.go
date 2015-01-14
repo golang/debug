@@ -217,6 +217,18 @@ func (t *StringType) String() string {
 	return "string"
 }
 
+// An InterfaceType represents a Go interface.
+type InterfaceType struct {
+	TypedefType
+}
+
+func (t *InterfaceType) String() string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return "Interface"
+}
+
 // An EnumType represents an enumerated type.
 // The only indication of its native integer type is its ByteSize
 // (inside CommonType).
@@ -743,6 +755,10 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 			c.ElemType = typeOf(e, AttrGoElem)
 			t = &c.TypedefType
 			typ = c
+		case reflect.Interface:
+			it := new(InterfaceType)
+			t = &it.TypedefType
+			typ = it
 		default:
 			typ = t
 		}
