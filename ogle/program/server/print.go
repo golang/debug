@@ -113,12 +113,10 @@ func (p *Printer) peekPtrStructField(t *dwarf.StructType, addr address, fieldNam
 func (p *Printer) peekUintStructField(t *dwarf.StructType, addr address, fieldName string) (uint64, bool) {
 	f, err := getField(t, fieldName)
 	if err != nil {
-		p.errorf("%s", err)
 		return 0, false
 	}
 	ut, ok := f.Type.(*dwarf.UintType)
 	if !ok {
-		p.errorf("struct field %s is not a uint", fieldName)
 		return 0, false
 	}
 	return p.peekUint(addr+address(f.ByteOffset), ut.ByteSize)
@@ -128,13 +126,11 @@ func (p *Printer) peekUintStructField(t *dwarf.StructType, addr address, fieldNa
 // of type t at address addr.  The size of the int is determined by the field.
 func (p *Printer) peekIntStructField(t *dwarf.StructType, addr address, fieldName string) (int64, bool) {
 	f, err := getField(t, fieldName)
-	if f == nil {
-		p.errorf("%s", err)
+	if err != nil {
 		return 0, false
 	}
 	it, ok := f.Type.(*dwarf.IntType)
 	if !ok {
-		p.errorf("struct field %s is not an int", fieldName)
 		return 0, false
 	}
 	return p.peekInt(addr+address(f.ByteOffset), it.ByteSize)
@@ -699,9 +695,17 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 	// Slices look like a struct with fields array *elemtype, len uint32/64, cap uint32/64.
 	// BUG: Slice header appears to have fields with ByteSize == 0
 	ptr, ok1 := p.peekPtrStructField(&typ.StructType, a, "array")
-	length, ok2 := p.peekUintStructField(&typ.StructType, a, "len")
+	length, ok2 := p.peekIntStructField(&typ.StructType, a, "len")
+	if !ok2 {
+		var u uint64
+		u, ok2 = p.peekUintStructField(&typ.StructType, a, "len")
+		length = int64(u)
+	}
 	// Capacity is not used yet.
-	_, ok3 := p.peekUintStructField(&typ.StructType, a, "cap")
+	_, ok3 := p.peekIntStructField(&typ.StructType, a, "cap")
+	if !ok3 {
+		_, ok3 = p.peekUintStructField(&typ.StructType, a, "cap")
+	}
 	if !ok1 || !ok2 || !ok3 {
 		p.errorf("couldn't read slice")
 		return
@@ -712,7 +716,7 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 		p.errorf("can't determine element size")
 	}
 	p.printf("%s{", typ)
-	for i := uint64(0); i < length; i++ {
+	for i := int64(0); i < length; i++ {
 		if i != 0 {
 			p.printf(", ")
 		}
