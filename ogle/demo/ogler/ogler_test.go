@@ -189,4 +189,38 @@ func TestBreakAndEval(t *testing.T) {
 			log.Fatalf("Didn't get %s = %s\n", v, e)
 		}
 	}
+
+	// Remove the breakpoint at main.foo, set a breakpoint at main.f1 and main.f2,
+	// then delete the breakpoint at main.f1.  Resume, then check we stopped at
+	// main.f2.
+	err = prog.DeleteBreakpoints(pcs)
+	if err != nil {
+		log.Fatalf("DeleteBreakpoints: %v", err)
+	}
+	pcs1, err := prog.Breakpoint("re:main.f1")
+	if err != nil {
+		log.Fatalf("Breakpoint: %v", err)
+	}
+	pcs2, err := prog.Breakpoint("re:main.f2")
+	if err != nil {
+		log.Fatalf("Breakpoint: %v", err)
+	}
+	err = prog.DeleteBreakpoints(pcs1)
+	if err != nil {
+		log.Fatalf("DeleteBreakpoints: %v", err)
+	}
+	status, err := prog.Resume()
+	if err != nil {
+		log.Fatalf("Resume: %v", err)
+	}
+	ok := false
+	for _, pc := range pcs2 {
+		if status.PC == pc {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		t.Errorf("Stopped at %X expected one of %X.", status.PC, pcs2)
+	}
 }

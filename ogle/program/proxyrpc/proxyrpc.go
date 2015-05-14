@@ -73,6 +73,13 @@ type BreakpointResponse struct {
 	PCs []uint64
 }
 
+type DeleteBreakpointsRequest struct {
+	PCs []uint64
+}
+
+type DeleteBreakpointsResponse struct {
+}
+
 type EvalRequest struct {
 	Expr string
 }

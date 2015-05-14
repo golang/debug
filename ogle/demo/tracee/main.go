@@ -82,6 +82,16 @@ func foo() {
 	fmt.Println(Z_slice, Z_slice_2, Z_slice_nil)
 	fmt.Println(Z_string, Z_struct)
 	fmt.Println(Z_unsafe_pointer, Z_unsafe_pointer_nil)
+	f1()
+	f2()
+}
+
+func f1() {
+	fmt.Println()
+}
+
+func f2() {
+	fmt.Println()
 }
 
 func bar() {

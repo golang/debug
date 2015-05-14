@@ -203,8 +203,10 @@ func (p *Program) Breakpoint(address string) ([]uint64, error) {
 	return resp.PCs, err
 }
 
-func (p *Program) DeleteBreakpoint(address string) error {
-	panic("unimplemented")
+func (p *Program) DeleteBreakpoints(pcs []uint64) error {
+	req := proxyrpc.DeleteBreakpointsRequest{PCs: pcs}
+	var resp proxyrpc.DeleteBreakpointsResponse
+	return p.client.Call("Server.DeleteBreakpoints", &req, &resp)
 }
 
 func (p *Program) Eval(expr string) ([]string, error) {

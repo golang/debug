@@ -62,9 +62,9 @@ type Program interface {
 	// expression to match a set of symbols.
 	Breakpoint(address string) (PCs []uint64, err error)
 
-	// DeleteBreakpoint removes the breakpoint at the specified
-	// address. TODO: Probably the wrong interface.
-	DeleteBreakpoint(address string) error
+	// DeleteBreakpoints removes the breakpoints at the specified addresses.
+	// Addresses where no breakpoint is set are ignored.
+	DeleteBreakpoints(pcs []uint64) error
 
 	// Eval evaluates the expression (typically an address) and returns
 	// its string representation(s). Multivalued expressions such as

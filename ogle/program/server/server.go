@@ -148,6 +148,8 @@ func (s *Server) dispatch(c call) {
 	switch req := c.req.(type) {
 	case *proxyrpc.BreakpointRequest:
 		c.errc <- s.handleBreakpoint(req, c.resp.(*proxyrpc.BreakpointResponse))
+	case *proxyrpc.DeleteBreakpointsRequest:
+		c.errc <- s.handleDeleteBreakpoints(req, c.resp.(*proxyrpc.DeleteBreakpointsResponse))
 	case *proxyrpc.CloseRequest:
 		c.errc <- s.handleClose(req, c.resp.(*proxyrpc.CloseResponse))
 	case *proxyrpc.EvalRequest:
@@ -415,6 +417,17 @@ func (s *Server) handleBreakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrp
 		resp.PCs = append(resp.PCs, pc)
 	}
 
+	return nil
+}
+
+func (s *Server) DeleteBreakpoints(req *proxyrpc.DeleteBreakpointsRequest, resp *proxyrpc.DeleteBreakpointsResponse) error {
+	return s.call(s.breakpointc, req, resp)
+}
+
+func (s *Server) handleDeleteBreakpoints(req *proxyrpc.DeleteBreakpointsRequest, resp *proxyrpc.DeleteBreakpointsResponse) error {
+	for _, pc := range req.PCs {
+		delete(s.breakpoints, pc)
+	}
 	return nil
 }
 
