@@ -95,3 +95,19 @@ type FramesRequest struct {
 type FramesResponse struct {
 	Frames []program.Frame
 }
+
+type VarByNameRequest struct {
+	Name string
+}
+
+type VarByNameResponse struct {
+	Var program.Var
+}
+
+type ValueRequest struct {
+	Var program.Var
+}
+
+type ValueResponse struct {
+	Value program.Value
+}

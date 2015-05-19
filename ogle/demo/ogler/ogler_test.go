@@ -14,10 +14,22 @@ import (
 	"os/exec"
 	"testing"
 
+	"golang.org/x/debug/ogle/program"
 	"golang.org/x/debug/ogle/program/client"
 )
 
-var expected_vars = map[string]string{
+var expectedVarValues = map[string]interface{}{
+	`main.Z_int16`:  int16(-32321),
+	`main.Z_int32`:  int32(-1987654321),
+	`main.Z_int64`:  int64(-9012345678987654321),
+	`main.Z_int8`:   int8(-121),
+	`main.Z_uint16`: uint16(54321),
+	`main.Z_uint32`: uint32(3217654321),
+	`main.Z_uint64`: uint64(12345678900987654321),
+	`main.Z_uint8`:  uint8(231),
+}
+
+var expectedVars = map[string]string{
 	`main.Z_array`:               `[5]int8{-121, 121, 3, 2, 1}`,
 	`main.Z_array_empty`:         `[0]int8{}`,
 	`main.Z_bool_false`:          `false`,
@@ -126,7 +138,11 @@ func TestBreakAndEval(t *testing.T) {
 	defer os.Remove(traceeBinary)
 
 	client.OgleproxyCmd = proxyBinary
-	prog, err := client.Run("localhost", traceeBinary)
+	var (
+		prog program.Program
+		err  error
+	)
+	prog, err = client.Run("localhost", traceeBinary)
 	if err != nil {
 		log.Fatalf("Run: %v", err)
 	}
@@ -159,7 +175,7 @@ func TestBreakAndEval(t *testing.T) {
 	}
 
 	// Evaluate each of the variables found above, and check they match
-	// expected_vars.
+	// expectedVars.
 	seen := make(map[string]bool)
 	for _, v := range varnames {
 		val, err := prog.Eval("val:" + v)
@@ -174,7 +190,7 @@ func TestBreakAndEval(t *testing.T) {
 			if len(val) != 1 {
 				log.Fatalf("Should be one value for %s\n", v)
 			}
-			expected, ok := expected_vars[v]
+			expected, ok := expectedVars[v]
 			if !ok {
 				log.Fatalf("Unexpected variable %s\n", v)
 			} else {
@@ -184,7 +200,7 @@ func TestBreakAndEval(t *testing.T) {
 			}
 		}
 	}
-	for v, e := range expected_vars {
+	for v, e := range expectedVars {
 		if !seen[v] {
 			log.Fatalf("Didn't get %s = %s\n", v, e)
 		}
@@ -222,5 +238,35 @@ func TestBreakAndEval(t *testing.T) {
 	}
 	if !ok {
 		t.Errorf("Stopped at %X expected one of %X.", status.PC, pcs2)
+	}
+
+	// Check we get the expected results calling VarByName then Value
+	// for the variables in expectedVarValues.
+	for name, exp := range expectedVarValues {
+		if v, err := prog.VarByName(name); err != nil {
+			t.Errorf("VarByName(%s): %s", name, err)
+		} else if val, err := prog.Value(v); err != nil {
+			t.Errorf("Value for %s: %s", name, err)
+		} else if val != exp {
+			t.Errorf("Value for %s: got %T(%v) want %T(%v)", name, val, val, exp, exp)
+		}
+	}
+
+	// Check some error cases for VarByName and Value.
+	if _, err = prog.VarByName("not a real name"); err == nil {
+		t.Error("VarByName for invalid name: expected error")
+	}
+	if _, err = prog.Value(program.Var{}); err == nil {
+		t.Error("Value of invalid var: expected error")
+	}
+	if v, err := prog.VarByName("main.Z_int16"); err != nil {
+		t.Error("VarByName(main.Z_int16) error:", err)
+	} else {
+		v.Address = 0
+		// v now has a valid type but a bad address.
+		_, err = prog.Value(v)
+		if err == nil {
+			t.Error("Value of invalid location: expected error")
+		}
 	}
 }

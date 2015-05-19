@@ -86,7 +86,24 @@ type Program interface {
 	// Frames returns up to count stack frames from where the program
 	// is currently stopped.
 	Frames(count int) ([]Frame, error)
+
+	// VarByName returns a Var referring to a global variable with the given name.
+	// TODO: local variables
+	VarByName(name string) (Var, error)
+
+	// Value gets the value of a variable by reading the program's memory.
+	Value(v Var) (Value, error)
 }
+
+// A reference to a variable in a program.
+// TODO: handle variables stored in registers
+type Var struct {
+	TypeID  uint64 // A type identifier, opaque to the user.
+	Address uint64 // The address of the variable.
+}
+
+// A value read from a remote program.
+type Value interface{}
 
 // The File interface provides access to file-like resources in the program.
 // It implements only ReaderAt and WriterAt, not Reader and Writer, because

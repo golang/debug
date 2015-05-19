@@ -227,6 +227,20 @@ func (p *Program) Frames(count int) ([]program.Frame, error) {
 	return resp.Frames, err
 }
 
+func (p *Program) VarByName(name string) (program.Var, error) {
+	req := proxyrpc.VarByNameRequest{Name: name}
+	var resp proxyrpc.VarByNameResponse
+	err := p.client.Call("Server.VarByName", &req, &resp)
+	return resp.Var, err
+}
+
+func (p *Program) Value(v program.Var) (program.Value, error) {
+	req := proxyrpc.ValueRequest{Var: v}
+	var resp proxyrpc.ValueResponse
+	err := p.client.Call("Server.Value", &req, &resp)
+	return resp.Value, err
+}
+
 // File implements the program.File interface, providing access
 // to file-like resources associated with the target program.
 type File struct {

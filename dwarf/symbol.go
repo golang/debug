@@ -65,11 +65,20 @@ func (d *Data) LookupFunction(name string) (uint64, error) {
 func (d *Data) LookupVariable(name string) (uint64, error) {
 	entry, err := d.lookupEntry(name, TagVariable)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("variable %s: %s", name, err)
 	}
-	loc, _ := entry.Val(AttrLocation).([]byte)
+	loc, err := d.EntryLocation(entry)
+	if err != nil {
+		return 0, fmt.Errorf("variable %s: %s", name, err)
+	}
+	return loc, nil
+}
+
+// EntryLocation returns the address of the object referred to by the given Entry.
+func (d *Data) EntryLocation(e *Entry) (uint64, error) {
+	loc, _ := e.Val(AttrLocation).([]byte)
 	if len(loc) == 0 {
-		return 0, fmt.Errorf("name %q has no Location attribute", name)
+		return 0, fmt.Errorf("DWARF entry has no Location attribute")
 	}
 	// TODO: implement the DWARF Location bytecode. What we have here only
 	// recognizes a program with a single literal opAddr bytecode.
@@ -85,7 +94,20 @@ func (d *Data) LookupVariable(name string) (uint64, error) {
 			return d.order.Uint64(loc[1:]), nil
 		}
 	}
-	return 0, fmt.Errorf("DWARF: unimplemented Location op")
+	return 0, fmt.Errorf("DWARF entry has an unimplemented Location op")
+}
+
+// EntryTypeOffset returns the offset in the given Entry's type attribute.
+func (d *Data) EntryTypeOffset(e *Entry) (Offset, error) {
+	v := e.Val(AttrType)
+	if v == nil {
+		return 0, fmt.Errorf("DWARF entry has no Type attribute")
+	}
+	off, ok := v.(Offset)
+	if !ok {
+		return 0, fmt.Errorf("DWARF entry has an invalid Type attribute")
+	}
+	return off, nil
 }
 
 // LookupPC returns the name of a symbol at the specified PC.

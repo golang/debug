@@ -164,6 +164,10 @@ func (s *Server) dispatch(c call) {
 		c.errc <- s.handleResume(req, c.resp.(*proxyrpc.ResumeResponse))
 	case *proxyrpc.RunRequest:
 		c.errc <- s.handleRun(req, c.resp.(*proxyrpc.RunResponse))
+	case *proxyrpc.VarByNameRequest:
+		c.errc <- s.handleVarByName(req, c.resp.(*proxyrpc.VarByNameResponse))
+	case *proxyrpc.ValueRequest:
+		c.errc <- s.handleValue(req, c.resp.(*proxyrpc.ValueResponse))
 	default:
 		panic(fmt.Sprintf("unexpected call request type %T", c.req))
 	}
@@ -696,4 +700,42 @@ func (s *Server) topOfStack(funcEntry uint64) bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) VarByName(req *proxyrpc.VarByNameRequest, resp *proxyrpc.VarByNameResponse) error {
+	return s.call(s.otherc, req, resp)
+}
+
+func (s *Server) handleVarByName(req *proxyrpc.VarByNameRequest, resp *proxyrpc.VarByNameResponse) error {
+	entry, err := s.dwarfData.LookupEntry(req.Name)
+	if err != nil {
+		return fmt.Errorf("variable %s: %s", req.Name, err)
+	}
+
+	loc, err := s.dwarfData.EntryLocation(entry)
+	if err != nil {
+		return fmt.Errorf("variable %s: %s", req.Name, err)
+	}
+
+	off, err := s.dwarfData.EntryTypeOffset(entry)
+	if err != nil {
+		return fmt.Errorf("variable %s: %s", req.Name, err)
+	}
+
+	resp.Var.TypeID = uint64(off)
+	resp.Var.Address = loc
+	return nil
+}
+
+func (s *Server) Value(req *proxyrpc.ValueRequest, resp *proxyrpc.ValueResponse) error {
+	return s.call(s.otherc, req, resp)
+}
+
+func (s *Server) handleValue(req *proxyrpc.ValueRequest, resp *proxyrpc.ValueResponse) error {
+	t, err := s.dwarfData.Type(dwarf.Offset(req.Var.TypeID))
+	if err != nil {
+		return err
+	}
+	resp.Value, err = s.value(t, req.Var.Address)
+	return err
 }
