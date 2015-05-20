@@ -431,7 +431,8 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		// Multi-dimensional array.  (DWARF v2 §5.4)
 		// Attributes:
 		//	AttrType:subtype [required]
-		//	AttrStrideSize: size in bits of each element of the array
+		//	AttrStrideSize: distance in bits between each element of the array
+		//	AttrStride: distance in bytes between each element of the array
 		//	AttrByteSize: size of entire array
 		// Children:
 		//	TagSubrangeType or TagEnumerationType giving one dimension.
@@ -443,7 +444,15 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		if t.Type = typeOf(e, AttrType); err != nil {
 			goto Error
 		}
-		t.StrideBitSize, _ = e.Val(AttrStrideSize).(int64)
+		if bytes, ok := e.Val(AttrStride).(int64); ok {
+			t.StrideBitSize = 8 * bytes
+		} else if bits, ok := e.Val(AttrStrideSize).(int64); ok {
+			t.StrideBitSize = bits
+		} else {
+			// If there's no stride specified, assume it's the size of the
+			// array's element type.
+			t.StrideBitSize = 8 * t.Type.Size()
+		}
 
 		// Accumulate dimensions,
 		ndim := 0
