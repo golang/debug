@@ -7,6 +7,7 @@ package arch // import "golang.org/x/debug/ogle/arch"
 
 import (
 	"encoding/binary"
+	"math"
 )
 
 const MaxBreakpointSize = 4 // TODO
@@ -20,7 +21,9 @@ type Architecture struct {
 	// PointerSize is the size of a pointer, in bytes.
 	PointerSize int
 	// ByteOrder is the byte order for ints and pointers.
-	ByteOrder       binary.ByteOrder
+	ByteOrder binary.ByteOrder
+	// FloatByteOrder is the byte order for floats.
+	FloatByteOrder  binary.ByteOrder
 	BreakpointInstr [MaxBreakpointSize]byte
 }
 
@@ -71,17 +74,17 @@ func (a *Architecture) IntN(buf []byte) int64 {
 	}
 	x := int64(0)
 	if a.ByteOrder == binary.LittleEndian {
-		i := len(buf)-1
-		x = int64(int8(buf[i]))  // sign-extended
+		i := len(buf) - 1
+		x = int64(int8(buf[i])) // sign-extended
 		for i--; i >= 0; i-- {
 			x <<= 8
-			x |= int64(buf[i])  // not sign-extended
+			x |= int64(buf[i]) // not sign-extended
 		}
 	} else {
-		x = int64(int8(buf[0]))    // sign-extended
+		x = int64(int8(buf[0])) // sign-extended
 		for i := 1; i < len(buf); i++ {
 			x <<= 8
-			x |= int64(buf[i])  // not sign-extended
+			x |= int64(buf[i]) // not sign-extended
 		}
 	}
 	return x
@@ -117,11 +120,40 @@ func (a *Architecture) Uintptr(buf []byte) uint64 {
 	panic("no PointerSize")
 }
 
+func (a *Architecture) Float32(buf []byte) float32 {
+	if len(buf) != 4 {
+		panic("bad float32 size")
+	}
+	return math.Float32frombits(a.FloatByteOrder.Uint32(buf))
+}
+
+func (a *Architecture) Float64(buf []byte) float64 {
+	if len(buf) != 8 {
+		panic("bad float64 size")
+	}
+	return math.Float64frombits(a.FloatByteOrder.Uint64(buf))
+}
+
+func (a *Architecture) Complex64(buf []byte) complex64 {
+	if len(buf) != 8 {
+		panic("bad complex64 size")
+	}
+	return complex(a.Float32(buf[0:4]), a.Float32(buf[4:8]))
+}
+
+func (a *Architecture) Complex128(buf []byte) complex128 {
+	if len(buf) != 16 {
+		panic("bad complex128 size")
+	}
+	return complex(a.Float64(buf[0:8]), a.Float64(buf[8:16]))
+}
+
 var AMD64 = Architecture{
 	BreakpointSize:  1,
 	IntSize:         8,
 	PointerSize:     8,
 	ByteOrder:       binary.LittleEndian,
+	FloatByteOrder:  binary.LittleEndian,
 	BreakpointInstr: [MaxBreakpointSize]byte{0xCC}, // INT 3
 }
 
@@ -130,6 +162,7 @@ var X86 = Architecture{
 	IntSize:         4,
 	PointerSize:     4,
 	ByteOrder:       binary.LittleEndian,
+	FloatByteOrder:  binary.LittleEndian,
 	BreakpointInstr: [MaxBreakpointSize]byte{0xCC}, // INT 3
 }
 
@@ -138,5 +171,6 @@ var ARM = Architecture{
 	IntSize:         4,
 	PointerSize:     4,
 	ByteOrder:       binary.LittleEndian,
+	FloatByteOrder:  binary.LittleEndian,                             // TODO
 	BreakpointInstr: [MaxBreakpointSize]byte{0x00, 0x00, 0x00, 0x00}, // TODO
 }
