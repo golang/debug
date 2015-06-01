@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/debug/ogle/program"
 	"golang.org/x/debug/ogle/program/client"
+	"golang.org/x/debug/ogle/program/local"
 )
 
 var expectedVarValues = map[string]interface{}{
@@ -119,14 +120,11 @@ func matches(p, s string) bool {
 	return j == len(s)
 }
 
-func run(t *testing.T, name string, args ...string) {
+func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	return cmd.Run()
 }
 
 const (
@@ -136,24 +134,43 @@ const (
 	traceeBinary = "./tracee"
 )
 
-func TestBreakAndEval(t *testing.T) {
-	run(t, "go", "build", "-o", proxyBinary, proxySrc)
-	defer os.Remove(proxyBinary)
+func TestMain(m *testing.M) {
+	os.Exit(buildAndRunTests(m))
+}
 
-	run(t, "go", "build", "-o", traceeBinary, traceeSrc)
-	defer os.Remove(traceeBinary)
-
-	client.OgleproxyCmd = proxyBinary
-	var (
-		prog program.Program
-		err  error
-	)
-	prog, err = client.New("localhost", traceeBinary)
-	if err != nil {
-		log.Fatalf("New: %v", err)
+func buildAndRunTests(m *testing.M) int {
+	if err := run("go", "build", "-o", proxyBinary, proxySrc); err != nil {
+		fmt.Println(err)
+		return 1
 	}
+	client.OgleproxyCmd = proxyBinary
+	defer os.Remove(proxyBinary)
+	if err := run("go", "build", "-o", traceeBinary, traceeSrc); err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	defer os.Remove(traceeBinary)
+	return m.Run()
+}
 
-	_, err = prog.Run("some", "arguments")
+func TestLocalProgram(t *testing.T) {
+	prog, err := local.New(traceeBinary)
+	if err != nil {
+		t.Fatal("local.New:", err)
+	}
+	testProgram(t, prog)
+}
+
+func TestRemoteProgram(t *testing.T) {
+	prog, err := client.New("localhost", traceeBinary)
+	if err != nil {
+		t.Fatal("client.New:", err)
+	}
+	testProgram(t, prog)
+}
+
+func testProgram(t *testing.T, prog program.Program) {
+	_, err := prog.Run("some", "arguments")
 	if err != nil {
 		log.Fatalf("Run: %v", err)
 	}
