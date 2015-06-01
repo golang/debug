@@ -28,6 +28,7 @@ type CommonType struct {
 	ByteSize    int64        // size of value of this type, in bytes
 	Name        string       // name that can be used to refer to type
 	ReflectKind reflect.Kind // the reflect kind of the type.
+	Offset      Offset       // the offset at which this type was read
 }
 
 func (c *CommonType) Common() *CommonType { return c }
@@ -788,6 +789,8 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 	if err != nil {
 		goto Error
 	}
+
+	typ.Common().Offset = off
 
 	{
 		b, ok := e.Val(AttrByteSize).(int64)
