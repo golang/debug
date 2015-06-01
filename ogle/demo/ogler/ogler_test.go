@@ -19,14 +19,20 @@ import (
 )
 
 var expectedVarValues = map[string]interface{}{
-	`main.Z_int16`:  int16(-32321),
-	`main.Z_int32`:  int32(-1987654321),
-	`main.Z_int64`:  int64(-9012345678987654321),
-	`main.Z_int8`:   int8(-121),
-	`main.Z_uint16`: uint16(54321),
-	`main.Z_uint32`: uint32(3217654321),
-	`main.Z_uint64`: uint64(12345678900987654321),
-	`main.Z_uint8`:  uint8(231),
+	`main.Z_bool_false`: false,
+	`main.Z_bool_true`:  true,
+	`main.Z_complex128`: complex128(1.987654321 - 2.987654321i),
+	`main.Z_complex64`:  complex64(1.54321 + 2.54321i),
+	`main.Z_float32`:    float32(1.54321),
+	`main.Z_float64`:    float64(1.987654321),
+	`main.Z_int16`:      int16(-32321),
+	`main.Z_int32`:      int32(-1987654321),
+	`main.Z_int64`:      int64(-9012345678987654321),
+	`main.Z_int8`:       int8(-121),
+	`main.Z_uint16`:     uint16(54321),
+	`main.Z_uint32`:     uint32(3217654321),
+	`main.Z_uint64`:     uint64(12345678900987654321),
+	`main.Z_uint8`:      uint8(231),
 }
 
 var expectedVars = map[string]string{
@@ -269,4 +275,75 @@ func TestBreakAndEval(t *testing.T) {
 			t.Error("Value of invalid location: expected error")
 		}
 	}
+
+	// checkValue tests that we can get a Var for a variable with the given name,
+	// that we can then get the value of that Var, and that calling fn for that
+	// value succeeds.
+	checkValue := func(name string, fn func(val program.Value) error) {
+		if v, err := prog.VarByName(name); err != nil {
+			t.Errorf("VarByName(%s): %s", name, err)
+		} else if val, err := prog.Value(v); err != nil {
+			t.Errorf("value for %s: %s", name, err)
+		} else if err := fn(val); err != nil {
+			t.Errorf("value for %s: %s", name, err)
+		}
+	}
+
+	checkValue("main.Z_uintptr", func(val program.Value) error {
+		if val != uint32(21) && val != uint64(21) {
+			// Z_uintptr should be an unsigned integer with size equal to the debugged
+			// program's address size.
+			return fmt.Errorf("got %T(%v) want 21", val, val)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_int", func(val program.Value) error {
+		if val != int32(-21) && val != int64(-21) {
+			return fmt.Errorf("got %T(%v) want -21", val, val)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_uint", func(val program.Value) error {
+		if val != uint32(21) && val != uint64(21) {
+			return fmt.Errorf("got %T(%v) want 21", val, val)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_pointer", func(val program.Value) error {
+		if _, ok := val.(program.Pointer); !ok {
+			return fmt.Errorf("got %T(%v) expected Pointer", val, val)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_pointer_nil", func(val program.Value) error {
+		if p, ok := val.(program.Pointer); !ok {
+			return fmt.Errorf("got %T(%v) expected Pointer", val, val)
+		} else if p.Address != 0 {
+			return fmt.Errorf("got %T(%v) expected nil pointer", val, val)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_array", func(val program.Value) error {
+		a, ok := val.(program.Array)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Array", val, val)
+		}
+		if a.Len() != 5 {
+			return fmt.Errorf("got array length %d expected 5", a.Len())
+		}
+		expected := [5]int8{-121, 121, 3, 2, 1}
+		for i := uint64(0); i < 5; i++ {
+			if v, err := prog.Value(a.Element(i)); err != nil {
+				return fmt.Errorf("reading element %d: %s", i, err)
+			} else if v != expected[i] {
+				return fmt.Errorf("element %d: got %T(%v) want %T(%d)", i, v, v, expected[i], expected[i])
+			}
+		}
+		return nil
+	})
 }

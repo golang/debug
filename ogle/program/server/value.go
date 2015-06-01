@@ -12,10 +12,10 @@ import (
 
 // value peeks the program's memory at the given address, parsing it as a value of type t.
 func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
-	// readInt reads the memory for an n-byte integer or unsigned integer.
-	readInt := func(n int64) ([]byte, error) {
+	// readBasic reads the memory for a basic type of size n bytes.
+	readBasic := func(n int64) ([]byte, error) {
 		switch n {
-		case 1, 2, 4, 8:
+		case 1, 2, 4, 8, 16:
 		default:
 			return nil, fmt.Errorf("invalid size: %d", n)
 		}
@@ -27,9 +27,9 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 	}
 
 	switch t := t.(type) {
-	case *dwarf.IntType:
+	case *dwarf.CharType, *dwarf.IntType:
 		bs := t.Common().ByteSize
-		buf, err := readInt(bs)
+		buf, err := readBasic(bs)
 		if err != nil {
 			return nil, fmt.Errorf("reading integer: %s", err)
 		}
@@ -43,10 +43,12 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 			return int32(x), nil
 		case 8:
 			return int64(x), nil
+		default:
+			return nil, fmt.Errorf("invalid integer size: %d", bs)
 		}
-	case *dwarf.UintType:
+	case *dwarf.UcharType, *dwarf.UintType, *dwarf.AddrType:
 		bs := t.Common().ByteSize
-		buf, err := readInt(bs)
+		buf, err := readBasic(bs)
 		if err != nil {
 			return nil, fmt.Errorf("reading unsigned integer: %s", err)
 		}
@@ -60,7 +62,88 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 			return uint32(x), nil
 		case 8:
 			return uint64(x), nil
+		default:
+			return nil, fmt.Errorf("invalid unsigned integer size: %d", bs)
 		}
+	case *dwarf.BoolType:
+		bs := t.Common().ByteSize
+		buf, err := readBasic(bs)
+		if err != nil {
+			return nil, fmt.Errorf("reading boolean: %s", err)
+		}
+		for _, b := range buf {
+			if b != 0 {
+				return true, nil
+			}
+		}
+		return false, nil
+	case *dwarf.FloatType:
+		bs := t.Common().ByteSize
+		buf, err := readBasic(bs)
+		if err != nil {
+			return nil, fmt.Errorf("reading float: %s", err)
+		}
+		switch bs {
+		case 4:
+			return s.arch.Float32(buf), nil
+		case 8:
+			return s.arch.Float64(buf), nil
+		default:
+			return nil, fmt.Errorf("invalid float size: %d", bs)
+		}
+	case *dwarf.ComplexType:
+		bs := t.Common().ByteSize
+		buf, err := readBasic(bs)
+		if err != nil {
+			return nil, fmt.Errorf("reading complex: %s", err)
+		}
+		switch bs {
+		case 8:
+			return s.arch.Complex64(buf), nil
+		case 16:
+			return s.arch.Complex128(buf), nil
+		default:
+			return nil, fmt.Errorf("invalid complex size: %d", bs)
+		}
+	case *dwarf.PtrType:
+		bs := t.Common().ByteSize
+		if bs != int64(s.arch.PointerSize) {
+			return nil, fmt.Errorf("invalid pointer size: %d", bs)
+		}
+		buf, err := readBasic(bs)
+		if err != nil {
+			return nil, fmt.Errorf("reading pointer: %s", err)
+		}
+		return program.Pointer{
+			TypeID:  uint64(t.Type.Common().Offset),
+			Address: uint64(s.arch.Uintptr(buf)),
+		}, nil
+	case *dwarf.ArrayType:
+		length := t.Count
+		stride := t.StrideBitSize
+		if stride%8 != 0 {
+			return nil, fmt.Errorf("array is not byte-aligned")
+		}
+		return program.Array{
+			ElementTypeID: uint64(t.Type.Common().Offset),
+			Address:       uint64(addr),
+			Length:        uint64(length),
+			StrideBits:    uint64(stride),
+		}, nil
+	case *dwarf.StructType:
+		fields := make([]program.StructField, len(t.Field))
+		for i, field := range t.Field {
+			fields[i] = program.StructField{
+				Name: field.Name,
+				Var: program.Var{
+					TypeID:  uint64(field.Type.Common().Offset),
+					Address: uint64(addr) + uint64(field.ByteOffset),
+				},
+			}
+		}
+		return program.Struct{fields}, nil
+	case *dwarf.TypedefType:
+		return s.value(t.Type, addr)
 		// TODO: more types
 	}
 	return nil, fmt.Errorf("Unsupported type %T", t)

@@ -6,7 +6,18 @@
 // used to the ogleproxy.
 package proxyrpc // import "golang.org/x/debug/ogle/program/proxyrpc"
 
-import "golang.org/x/debug/ogle/program"
+import (
+	"encoding/gob"
+
+	"golang.org/x/debug/ogle/program"
+)
+
+func init() {
+	// Register implementations of program.Var with gob.
+	gob.Register(program.Pointer{})
+	gob.Register(program.Array{})
+	gob.Register(program.Struct{})
+}
 
 // For regularity, each method has a unique Request and a Response type even
 // when not strictly necessary.

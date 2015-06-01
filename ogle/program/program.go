@@ -105,6 +105,41 @@ type Var struct {
 // A value read from a remote program.
 type Value interface{}
 
+// Pointer is a Var representing a pointer.
+type Pointer Var
+
+// Array is a Var representing an array.
+type Array struct {
+	ElementTypeID uint64
+	Address       uint64
+	Length        uint64 // Number of elements in the array
+	StrideBits    uint64 // Number of bits between array entries
+}
+
+// Len returns the number of elements in the array.
+func (a Array) Len() uint64 {
+	return a.Length
+}
+
+// Element returns a Var referring to the given element of the array.
+func (a Array) Element(index uint64) Var {
+	return Var{
+		TypeID:  a.ElementTypeID,
+		Address: a.Address + index*(a.StrideBits/8),
+	}
+}
+
+// Struct is a Var representing a struct.
+type Struct struct {
+	Fields []StructField
+}
+
+// StructField represents a field in a struct object.
+type StructField struct {
+	Name string
+	Var  Var
+}
+
 // The File interface provides access to file-like resources in the program.
 // It implements only ReaderAt and WriterAt, not Reader and Writer, because
 // random access is a far more common pattern for things like symbol tables,
