@@ -148,12 +148,12 @@ func TestBreakAndEval(t *testing.T) {
 		prog program.Program
 		err  error
 	)
-	prog, err = client.Run("localhost", traceeBinary)
+	prog, err = client.New("localhost", traceeBinary)
 	if err != nil {
-		log.Fatalf("Run: %v", err)
+		log.Fatalf("New: %v", err)
 	}
 
-	_, err = prog.Run()
+	_, err = prog.Run("some", "arguments")
 	if err != nil {
 		log.Fatalf("Run: %v", err)
 	}

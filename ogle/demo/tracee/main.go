@@ -8,6 +8,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"time"
 	"unsafe"
 )
@@ -100,6 +102,11 @@ func bar() {
 }
 
 func main() {
+	args := os.Args[1:]
+	expected := []string{"some", "arguments"}
+	if len(args) != 2 || args[0] != expected[0] || args[1] != expected[1] {
+		log.Fatalf("Got command-line args %v, expected %v", args, expected)
+	}
 	for ; ; time.Sleep(2 * time.Second) {
 		bar()
 	}

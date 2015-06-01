@@ -267,7 +267,8 @@ func (s *Server) handleRun(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse)
 		s.stoppedRegs = syscall.PtraceRegs{}
 		s.topOfStackAddrs = nil
 	}
-	p, err := s.startProcess(s.executable, nil, &os.ProcAttr{
+	argv := append([]string{s.executable}, req.Args...)
+	p, err := s.startProcess(s.executable, argv, &os.ProcAttr{
 		Files: []*os.File{
 			nil,       // TODO: be able to feed the target's stdin.
 			os.Stderr, // TODO: be able to capture the target's stdout.

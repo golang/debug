@@ -25,19 +25,9 @@ var _ program.File = (*File)(nil)
 var OgleproxyCmd = "ogleproxy"
 
 // New connects to the specified host using SSH, starts an ogle proxy
-// there, and creates a new program from the specified file with the specified
-// arguments, which include the program name the first argument.
-// The program is created but stops before executing the first instruction,
-// ready for debugging.
-func New(host string, textFile string, args ...string) (*Program, error) {
-	panic("unimplemented")
-}
-
-// Run connects to the specified host using SSH, starts an ogle proxy
-// there, and runs a new program from the specified file with the specified
-// arguments, which include the program name the first argument.
-// It is similar to New except that the program is allowed to run.
-func Run(host string, textFile string, args ...string) (*Program, error) {
+// there, and creates a new program from the specified file.
+// The program can then be started by the Run method.
+func New(host string, textFile string) (*Program, error) {
 	// TODO: add args.
 	cmdStrs := []string{"/usr/bin/ssh", host, OgleproxyCmd, "-text", textFile}
 	if host == "localhost" {
@@ -162,12 +152,8 @@ func (p *Program) Open(name string, mode string) (program.File, error) {
 	return f, nil
 }
 
-func (p *Program) SetArguments(args ...string) {
-	panic("unimplemented")
-}
-
-func (p *Program) Run() (program.Status, error) {
-	req := proxyrpc.RunRequest{}
+func (p *Program) Run(args ...string) (program.Status, error) {
+	req := proxyrpc.RunRequest{args}
 	var resp proxyrpc.RunResponse
 	err := p.client.Call("Server.Run", &req, &resp)
 	if err != nil {

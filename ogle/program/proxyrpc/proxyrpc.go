@@ -63,6 +63,7 @@ type OpenResponse struct {
 }
 
 type RunRequest struct {
+	Args []string
 }
 
 type RunResponse struct {

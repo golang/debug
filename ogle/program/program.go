@@ -23,20 +23,14 @@ type Program interface {
 	// file in the new process.
 	Open(name string, mode string) (File, error)
 
-	// SetArguments sets the command-line arguments for
-	// the next running of the target binary, excluding the
-	// target's binary name. That is, while debugging the
-	// echo command, to prepare a run of "echo hi" call
-	//	SetArguments("hi")
-	SetArguments(args ...string)
-
 	// Run abandons the current running process, if any,
 	// and execs a new instance of the target binary file
 	// (which may have changed underfoot).
 	// Breakpoints and open files are re-established.
 	// The call hangs until the program stops executing,
 	// at which point it returns the program status.
-	Run() (Status, error)
+	// args contains the command-line arguments for the process.
+	Run(args ...string) (Status, error)
 
 	// Stop stops execution of the current process but
 	// does not kill it.
