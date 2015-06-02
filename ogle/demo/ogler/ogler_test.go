@@ -191,6 +191,37 @@ func testProgram(t *testing.T, prog program.Program) {
 		log.Fatalf("prog.Frames error: %v", err)
 	}
 	fmt.Printf("%#v\n", frames)
+	if len(frames) == 0 {
+		t.Fatalf("no stack frames returned")
+	}
+	if frames[0].Function != "main.foo" {
+		t.Errorf("function name: got %s expected main.foo", frames[0].Function)
+	}
+	if len(frames[0].Params) != 2 {
+		t.Errorf("got %d parameters, expected 2", len(frames[0].Params))
+	} else {
+		x := frames[0].Params[0]
+		y := frames[0].Params[1]
+		if x.Name != "x" {
+			x, y = y, x
+		}
+		if x.Name != "x" {
+			t.Errorf("parameter name: got %s expected x", x.Name)
+		}
+		if y.Name != "y" {
+			t.Errorf("parameter name: got %s expected y", y.Name)
+		}
+		if val, err := prog.Value(x.Var); err != nil {
+			t.Errorf("value of x: %s", err)
+		} else if val != int16(42) {
+			t.Errorf("value of x: got %T(%v) expected int16(42)", val, val)
+		}
+		if val, err := prog.Value(y.Var); err != nil {
+			t.Errorf("value of y: %s", err)
+		} else if val != float32(1.5) {
+			t.Errorf("value of y: got %T(%v) expected float32(1.5)", val, val)
+		}
+	}
 
 	varnames, err := prog.Eval(`re:main\.Z_.*`)
 	if err != nil {
@@ -207,25 +238,25 @@ func testProgram(t *testing.T, prog program.Program) {
 		} else {
 			fmt.Printf("%s = %v\n", v, val)
 			if seen[v] {
-				log.Fatalf("Repeated variable %s\n", v)
+				log.Fatalf("repeated variable %s\n", v)
 			}
 			seen[v] = true
 			if len(val) != 1 {
-				log.Fatalf("Should be one value for %s\n", v)
+				log.Fatalf("should be one value for %s\n", v)
 			}
 			expected, ok := expectedVars[v]
 			if !ok {
-				log.Fatalf("Unexpected variable %s\n", v)
+				log.Fatalf("unexpected variable %s\n", v)
 			} else {
 				if !matches(expected, val[0]) {
-					log.Fatalf("Expected %s = %s\n", v, expected)
+					log.Fatalf("expected %s = %s\n", v, expected)
 				}
 			}
 		}
 	}
 	for v, e := range expectedVars {
 		if !seen[v] {
-			log.Fatalf("Didn't get %s = %s\n", v, e)
+			log.Fatalf("didn't get %s = %s\n", v, e)
 		}
 	}
 
@@ -260,7 +291,7 @@ func testProgram(t *testing.T, prog program.Program) {
 		}
 	}
 	if !ok {
-		t.Errorf("Stopped at %X expected one of %X.", status.PC, pcs2)
+		t.Errorf("stopped at %X expected one of %X.", status.PC, pcs2)
 	}
 
 	// Check we get the expected results calling VarByName then Value
@@ -269,9 +300,9 @@ func testProgram(t *testing.T, prog program.Program) {
 		if v, err := prog.VarByName(name); err != nil {
 			t.Errorf("VarByName(%s): %s", name, err)
 		} else if val, err := prog.Value(v); err != nil {
-			t.Errorf("Value for %s: %s", name, err)
+			t.Errorf("value of %s: %s", name, err)
 		} else if val != exp {
-			t.Errorf("Value for %s: got %T(%v) want %T(%v)", name, val, val, exp, exp)
+			t.Errorf("value of %s: got %T(%v) want %T(%v)", name, val, val, exp, exp)
 		}
 	}
 
@@ -280,7 +311,7 @@ func testProgram(t *testing.T, prog program.Program) {
 		t.Error("VarByName for invalid name: expected error")
 	}
 	if _, err = prog.Value(program.Var{}); err == nil {
-		t.Error("Value of invalid var: expected error")
+		t.Error("value of invalid var: expected error")
 	}
 	if v, err := prog.VarByName("main.Z_int16"); err != nil {
 		t.Error("VarByName(main.Z_int16) error:", err)
@@ -289,7 +320,7 @@ func testProgram(t *testing.T, prog program.Program) {
 		// v now has a valid type but a bad address.
 		_, err = prog.Value(v)
 		if err == nil {
-			t.Error("Value of invalid location: expected error")
+			t.Error("value of invalid location: expected error")
 		}
 	}
 
@@ -300,9 +331,9 @@ func testProgram(t *testing.T, prog program.Program) {
 		if v, err := prog.VarByName(name); err != nil {
 			t.Errorf("VarByName(%s): %s", name, err)
 		} else if val, err := prog.Value(v); err != nil {
-			t.Errorf("value for %s: %s", name, err)
+			t.Errorf("value of %s: %s", name, err)
 		} else if err := fn(val); err != nil {
-			t.Errorf("value for %s: %s", name, err)
+			t.Errorf("value of %s: %s", name, err)
 		}
 	}
 

@@ -70,7 +70,7 @@ var (
 	Z_unsafe_pointer_nil  unsafe.Pointer
 )
 
-func foo() {
+func foo(x int16, y float32) {
 	fmt.Println(Z_bool_false, Z_bool_true)
 	fmt.Println(Z_int, Z_int8, Z_int16, Z_int32, Z_int64)
 	fmt.Println(Z_uint, Z_uint8, Z_uint16, Z_uint32, Z_uint64, Z_uintptr)
@@ -97,7 +97,7 @@ func f2() {
 }
 
 func bar() {
-	foo()
+	foo(42, 1.5)
 	fmt.Print()
 }
 
@@ -105,7 +105,7 @@ func main() {
 	args := os.Args[1:]
 	expected := []string{"some", "arguments"}
 	if len(args) != 2 || args[0] != expected[0] || args[1] != expected[1] {
-		log.Fatalf("Got command-line args %v, expected %v", args, expected)
+		log.Fatalf("got command-line args %v, expected %v", args, expected)
 	}
 	for ; ; time.Sleep(2 * time.Second) {
 		bar()

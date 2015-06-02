@@ -5,6 +5,7 @@
 package server
 
 import (
+	"errors"
 	"regexp"
 
 	"golang.org/x/debug/dwarf"
@@ -51,22 +52,40 @@ func (s *Server) entryForPC(pc uint64) (entry *dwarf.Entry, lowpc uint64, err er
 	return s.dwarfData.EntryForPC(pc)
 }
 
-// TODO: signedness? Return (x int64, ok bool)??
-func evalLocation(v []uint8) int64 {
+// evalLocation parses a DWARF location description encoded in v.  It works for
+// cases where the variable is stored at an offset from the Canonical Frame
+// Address.  The return value is this offset.
+// TODO: a more general location-description-parsing function.
+func evalLocation(v []uint8) (int64, error) {
+	// Some DWARF constants.
+	const (
+		opConsts       = 0x11
+		opPlus         = 0x22
+		opCallFrameCFA = 0x9C
+	)
 	if len(v) == 0 {
-		return 0
+		return 0, errors.New("empty location specifier")
 	}
-	if v[0] != 0x9C { // DW_OP_call_frame_cfa
-		return 0
+	if v[0] != opCallFrameCFA {
+		return 0, errors.New("unsupported location specifier")
 	}
 	if len(v) == 1 {
-		return 0
+		// The location description was just DW_OP_call_frame_cfa, so the location is exactly the CFA.
+		return 0, nil
 	}
-	v = v[1:]
-	if v[0] != 0x11 { // DW_OP_consts
-		return 0
+	if v[1] != opConsts {
+		return 0, errors.New("unsupported location specifier")
 	}
-	return sleb128(v[1:])
+	offset, v, err := sleb128(v[2:])
+	if err != nil {
+		return 0, err
+	}
+	if len(v) == 1 && v[0] == opPlus {
+		// The location description was DW_OP_call_frame_cfa, DW_OP_consts <offset>, DW_OP_plus.
+		// So return the offset.
+		return offset, nil
+	}
+	return 0, errors.New("unsupported location specifier")
 }
 
 func uleb128(v []uint8) (u uint64) {
@@ -81,10 +100,14 @@ func uleb128(v []uint8) (u uint64) {
 	return u
 }
 
-func sleb128(v []uint8) (s int64) {
+// sleb128 parses a signed integer encoded with sleb128 at the start of v, and
+// returns the integer and the remainder of v.
+func sleb128(v []uint8) (s int64, rest []uint8, err error) {
 	var shift uint
 	var sign int64 = -1
-	for _, x := range v {
+	var i int
+	var x uint8
+	for i, x = range v {
 		s |= (int64(x) & 0x7F) << shift
 		shift += 7
 		sign <<= 7
@@ -95,6 +118,8 @@ func sleb128(v []uint8) (s int64) {
 			break
 		}
 	}
-	// Sign extend?
-	return s
+	if i == len(v) {
+		return 0, nil, errors.New("truncated sleb128")
+	}
+	return s, v[i+1:], nil
 }

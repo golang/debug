@@ -154,14 +154,25 @@ type Frame struct {
 	PC uint64
 	// SP is the hardware stack pointer.
 	SP uint64
-
 	// File and Line are the source code location of the PC.
 	File string
 	Line int
+	// Function is the name of this frame's function.
+	Function string
+	// Params contains the function's parameters.
+	Params []Param
+	// Vars contains the function's local variables.
+	Vars []LocalVar
+}
 
-	// TODO: add arguments and return values.
+// Param is a parameter of a function.
+type Param struct {
+	Name string
+	Var  Var
+}
 
-	// S is an unstructured string value used for debugging the ogle
-	// library. It is not guaranteed to be in any particular format.
-	S string
+// LocalVar is a local variable of a function.
+type LocalVar struct {
+	Name string
+	Var  Var
 }

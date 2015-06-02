@@ -587,6 +587,13 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 		if err != nil {
 			return err
 		}
+		frame := program.Frame{
+			PC:   pc,
+			SP:   sp,
+			File: file,
+			Line: line,
+		}
+		frame.Function, _ = entry.Val(dwarf.AttrName).(string)
 		r.Seek(entry.Offset)
 		for {
 			entry, err := r.Next()
@@ -596,38 +603,19 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 			if entry.Tag == 0 {
 				break
 			}
-			if entry.Tag != dwarf.TagFormalParameter {
-				continue
-			}
-			if entry.Children {
-				// TODO: handle this??
-				return fmt.Errorf("FormalParameter has children, expected none")
-			}
-
-			offset := int64(0)
-			name := "arg"
-			for _, f := range entry.Field {
-				switch f.Attr {
-				case dwarf.AttrLocation:
-					offset = evalLocation(f.Val.([]uint8))
-				case dwarf.AttrName:
-					name = f.Val.(string)
+			// TODO: report variables we couldn't parse?
+			if entry.Tag == dwarf.TagFormalParameter {
+				if v, err := s.parseParameterOrLocal(entry, fp); err == nil {
+					frame.Params = append(frame.Params, program.Param(v))
 				}
 			}
-			str, err := s.printer.SprintEntry(entry, address(fp)+address(offset))
-			fmt.Fprintf(b, "%s (%d(FP)) = %s ", name, offset, str)
-			if err != nil {
-				fmt.Fprintf(b, "(%s) ", err)
+			if entry.Tag == dwarf.TagVariable {
+				if v, err := s.parseParameterOrLocal(entry, fp); err == nil {
+					frame.Vars = append(frame.Vars, v)
+				}
 			}
 		}
-		resp.Frames = append(resp.Frames, program.Frame{
-			PC:   pc,
-			SP:   sp,
-			File: file,
-			Line: line,
-			// TODO: delete the Frame.S field.
-			S: b.String(),
-		})
+		resp.Frames = append(resp.Frames, frame)
 
 		// Walk to the caller's PC and SP.
 		if s.topOfStack(funcEntry) {
@@ -640,6 +628,29 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 		pc, sp = s.arch.Uintptr(buf[:s.arch.PointerSize]), fp
 	}
 	return nil
+}
+
+// parseParameterOrLocal parses the entry for a function parameter or local
+// variable, which are both specified the same way. fp contains the frame
+// pointer, which is used to calculate the variable location.
+func (s *Server) parseParameterOrLocal(entry *dwarf.Entry, fp uint64) (program.LocalVar, error) {
+	var v program.LocalVar
+	v.Name, _ = entry.Val(dwarf.AttrName).(string)
+	if off, err := s.dwarfData.EntryTypeOffset(entry); err != nil {
+		return v, err
+	} else {
+		v.Var.TypeID = uint64(off)
+	}
+	if i := entry.Val(dwarf.AttrLocation); i == nil {
+		return v, fmt.Errorf("missing location description")
+	} else if locationDescription, ok := i.([]uint8); !ok {
+		return v, fmt.Errorf("unsupported location description")
+	} else if offset, err := evalLocation(locationDescription); err != nil {
+		return v, err
+	} else {
+		v.Var.Address = fp + uint64(offset)
+	}
+	return v, nil
 }
 
 func (s *Server) evaluateTopOfStackAddrs() error {
