@@ -148,6 +148,10 @@ func (s *Server) dispatch(c call) {
 	switch req := c.req.(type) {
 	case *proxyrpc.BreakpointRequest:
 		c.errc <- s.handleBreakpoint(req, c.resp.(*proxyrpc.BreakpointResponse))
+	case *proxyrpc.BreakpointAtFunctionRequest:
+		c.errc <- s.handleBreakpointAtFunction(req, c.resp.(*proxyrpc.BreakpointResponse))
+	case *proxyrpc.BreakpointAtLineRequest:
+		c.errc <- s.handleBreakpointAtLine(req, c.resp.(*proxyrpc.BreakpointResponse))
 	case *proxyrpc.DeleteBreakpointsRequest:
 		c.errc <- s.handleDeleteBreakpoints(req, c.resp.(*proxyrpc.DeleteBreakpointsResponse))
 	case *proxyrpc.CloseRequest:
@@ -399,29 +403,49 @@ func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.Brea
 }
 
 func (s *Server) handleBreakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.BreakpointResponse) error {
-	addrs, err := s.eval(req.Address)
+	return s.addBreakpoints([]uint64{req.Address}, resp)
+}
+
+func (s *Server) BreakpointAtFunction(req *proxyrpc.BreakpointAtFunctionRequest, resp *proxyrpc.BreakpointResponse) error {
+	return s.call(s.breakpointc, req, resp)
+}
+
+func (s *Server) handleBreakpointAtFunction(req *proxyrpc.BreakpointAtFunctionRequest, resp *proxyrpc.BreakpointResponse) error {
+	pc, err := s.lookupFunction(req.Function)
 	if err != nil {
 		return err
 	}
-	var bp breakpoint
-	for _, addr := range addrs {
-		pc, err := s.evalAddress(addr)
-		if err != nil {
-			return err
-		}
-		if _, alreadySet := s.breakpoints[pc]; alreadySet {
-			return fmt.Errorf("breakpoint already set at %#x (TODO)", pc)
-		}
+	return s.addBreakpoints([]uint64{pc}, resp)
+}
 
-		err = s.ptracePeek(s.stoppedPid, uintptr(pc), bp.origInstr[:s.arch.BreakpointSize])
-		if err != nil {
+func (s *Server) BreakpointAtLine(req *proxyrpc.BreakpointAtLineRequest, resp *proxyrpc.BreakpointResponse) error {
+	return s.call(s.breakpointc, req, resp)
+}
+
+func (s *Server) handleBreakpointAtLine(req *proxyrpc.BreakpointAtLineRequest, resp *proxyrpc.BreakpointResponse) error {
+	return fmt.Errorf("not implemented")
+}
+
+// addBreakpoints adds breakpoints at the addresses in pcs, then stores pcs in the response.
+func (s *Server) addBreakpoints(pcs []uint64, resp *proxyrpc.BreakpointResponse) error {
+	// Get the original code at each address with ptracePeek.
+	bps := make([]breakpoint, 0, len(pcs))
+	for _, pc := range pcs {
+		if _, alreadySet := s.breakpoints[pc]; alreadySet {
+			continue
+		}
+		var bp breakpoint
+		if err := s.ptracePeek(s.stoppedPid, uintptr(pc), bp.origInstr[:s.arch.BreakpointSize]); err != nil {
 			return fmt.Errorf("ptracePeek: %v", err)
 		}
 		bp.pc = pc
-		s.breakpoints[pc] = bp
-		resp.PCs = append(resp.PCs, pc)
+		bps = append(bps, bp)
 	}
-
+	// If all the peeks succeeded, update the list of breakpoints.
+	for _, bp := range bps {
+		s.breakpoints[bp.pc] = bp
+	}
+	resp.PCs = pcs
 	return nil
 }
 

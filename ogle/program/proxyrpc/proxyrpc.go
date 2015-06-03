@@ -78,7 +78,16 @@ type ResumeResponse struct {
 }
 
 type BreakpointRequest struct {
-	Address string
+	Address uint64
+}
+
+type BreakpointAtFunctionRequest struct {
+	Function string
+}
+
+type BreakpointAtLineRequest struct {
+	File string
+	Line uint64
 }
 
 type BreakpointResponse struct {

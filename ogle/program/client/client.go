@@ -180,12 +180,31 @@ func (p *Program) Kill() (program.Status, error) {
 	panic("unimplemented")
 }
 
-func (p *Program) Breakpoint(address string) ([]uint64, error) {
+func (p *Program) Breakpoint(address uint64) ([]uint64, error) {
 	req := proxyrpc.BreakpointRequest{
 		Address: address,
 	}
 	var resp proxyrpc.BreakpointResponse
 	err := p.client.Call("Server.Breakpoint", &req, &resp)
+	return resp.PCs, err
+}
+
+func (p *Program) BreakpointAtFunction(name string) ([]uint64, error) {
+	req := proxyrpc.BreakpointAtFunctionRequest{
+		Function: name,
+	}
+	var resp proxyrpc.BreakpointResponse
+	err := p.client.Call("Server.BreakpointAtFunction", &req, &resp)
+	return resp.PCs, err
+}
+
+func (p *Program) BreakpointAtLine(file string, line uint64) ([]uint64, error) {
+	req := proxyrpc.BreakpointAtLineRequest{
+		File: file,
+		Line: line,
+	}
+	var resp proxyrpc.BreakpointResponse
+	err := p.client.Call("Server.BreakpointAtLine", &req, &resp)
 	return resp.PCs, err
 }
 

@@ -72,12 +72,24 @@ func (l *Local) Kill() (program.Status, error) {
 	panic("unimplemented")
 }
 
-func (l *Local) Breakpoint(address string) ([]uint64, error) {
-	req := proxyrpc.BreakpointRequest{
-		Address: address,
-	}
+func (l *Local) Breakpoint(address uint64) ([]uint64, error) {
+	req := proxyrpc.BreakpointRequest{address}
 	var resp proxyrpc.BreakpointResponse
 	err := l.s.Breakpoint(&req, &resp)
+	return resp.PCs, err
+}
+
+func (l *Local) BreakpointAtFunction(name string) ([]uint64, error) {
+	req := proxyrpc.BreakpointAtFunctionRequest{name}
+	var resp proxyrpc.BreakpointResponse
+	err := l.s.BreakpointAtFunction(&req, &resp)
+	return resp.PCs, err
+}
+
+func (l *Local) BreakpointAtLine(file string, line uint64) ([]uint64, error) {
+	req := proxyrpc.BreakpointAtLineRequest{file, line}
+	var resp proxyrpc.BreakpointResponse
+	err := l.s.BreakpointAtLine(&req, &resp)
 	return resp.PCs, err
 }
 

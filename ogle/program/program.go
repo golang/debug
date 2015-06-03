@@ -48,13 +48,13 @@ type Program interface {
 	Kill() (Status, error)
 
 	// Breakpoint sets a breakpoint at the specified address.
-	// When the target binary is re-run, breakpoints are
-	// automatically re-established in the new process by
-	// re-evaluating the address.
-	// The address is the same mini-language accepted by Eval,
-	// which permits setting multiple breakpoints using a regular
-	// expression to match a set of symbols.
-	Breakpoint(address string) (PCs []uint64, err error)
+	Breakpoint(address uint64) (PCs []uint64, err error)
+
+	// BreakpointAtFunction sets a breakpoint at the start of the specified function.
+	BreakpointAtFunction(name string) (PCs []uint64, err error)
+
+	// BreakpointAtLine sets a breakpoint at the specified source line.
+	BreakpointAtLine(file string, line uint64) (PCs []uint64, err error)
 
 	// DeleteBreakpoints removes the breakpoints at the specified addresses.
 	// Addresses where no breakpoint is set are ignored.

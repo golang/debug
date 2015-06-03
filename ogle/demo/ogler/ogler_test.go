@@ -175,9 +175,9 @@ func testProgram(t *testing.T, prog program.Program) {
 		log.Fatalf("Run: %v", err)
 	}
 
-	pcs, err := prog.Breakpoint("re:main.foo")
+	pcs, err := prog.BreakpointAtFunction("main.foo")
 	if err != nil {
-		log.Fatalf("Breakpoint: %v", err)
+		log.Fatalf("BreakpointAtFunction: %v", err)
 	}
 	fmt.Printf("breakpoints set at %x\n", pcs)
 
@@ -267,13 +267,13 @@ func testProgram(t *testing.T, prog program.Program) {
 	if err != nil {
 		log.Fatalf("DeleteBreakpoints: %v", err)
 	}
-	pcs1, err := prog.Breakpoint("re:main.f1")
+	pcs1, err := prog.BreakpointAtFunction("main.f1")
 	if err != nil {
-		log.Fatalf("Breakpoint: %v", err)
+		log.Fatalf("BreakpointAtFunction: %v", err)
 	}
-	pcs2, err := prog.Breakpoint("re:main.f2")
+	pcs2, err := prog.BreakpointAtFunction("main.f2")
 	if err != nil {
-		log.Fatalf("Breakpoint: %v", err)
+		log.Fatalf("BreakpointAtFunction: %v", err)
 	}
 	err = prog.DeleteBreakpoints(pcs1)
 	if err != nil {
