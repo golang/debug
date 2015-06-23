@@ -4,20 +4,19 @@
 
 package dwarf
 
-// This file implemetns the mapping from PC to lines.
-// TODO: Also map from line to PC.
+// This file implements the mapping from PC to lines.
 // TODO: Find a way to test this properly.
 
 // http://www.dwarfstd.org/doc/DWARF4.pdf Section 6.2 page 108
 
 import (
 	"fmt"
+	"strings"
 )
 
 // PCToLine returns the file and line number corresponding to the PC value.
-// If a correspondence cannot be found, ok will be false.
-// TODO: Return a function descriptor as well.
-func (d *Data) PCToLine(pc uint64) (file string, line int, err error) {
+// It returns an error if a correspondence cannot be found.
+func (d *Data) PCToLine(pc uint64) (file string, line uint64, err error) {
 	if len(d.line) == 0 {
 		return "", 0, fmt.Errorf("PCToLine: no line table")
 	}
@@ -27,17 +26,130 @@ func (d *Data) PCToLine(pc uint64) (file string, line int, err error) {
 		return "", 0, fmt.Errorf("no info section")
 	}
 	buf := makeBuf(d, &d.unit[0], "line", 0, d.line)
-	for len(buf.data) > 0 {
-		var found bool
-		found, err = m.evalCompilationUnit(&buf, pc)
-		if err != nil {
-			return "", 0, err
-		}
-		if found {
-			return m.prologue.file[m.file].name, int(m.line), nil
+	if err = m.parseHeader(&buf); err != nil {
+		return "", 0, err
+	}
+	state := pcSearchState{pc: pc, newSequence: true}
+	if err = m.evalCompilationUnit(&buf, state.findPC); err != nil {
+		return "", 0, err
+	}
+	if !state.found {
+		return "", 0, fmt.Errorf("no source line defined for PC %#x", pc)
+	}
+	if state.lastFile >= uint64(len(m.header.file)) {
+		return "", 0, fmt.Errorf("invalid file number in DWARF data")
+	}
+	return m.header.file[state.lastFile].name, state.lastLine, nil
+}
+
+// pcSearchState holds the state for the search PCToLine does.
+type pcSearchState struct {
+	pc uint64 // pc we are searching for.
+	// lastPC, lastFile, and lastLine are the PC, file number and line that were
+	// output most recently by the line machine.
+	lastPC   uint64
+	lastFile uint64
+	lastLine uint64
+	// found indicates that the above values correspond to the PC we're looking for.
+	found bool
+	// newSequence indicates that we are starting a new sequence of instructions,
+	// and so last{PC,File,Line} are not valid.
+	newSequence bool
+}
+
+// findPC will execute for every line in the state machine, until we find state.pc.
+// It returns a bool indicating whether to continue searching.
+func (state *pcSearchState) findPC(m *lineMachine) bool {
+	if !state.newSequence && state.lastPC < state.pc && state.pc < m.address {
+		// The PC we are looking for is between the previous PC and the current PC,
+		// so lastFile and lastLine are its source location.
+		state.found = true
+		return false
+	}
+	if m.endSequence {
+		state.newSequence = true
+		return true
+	}
+	state.newSequence = false
+	state.lastPC, state.lastFile, state.lastLine = m.address, m.file, m.line
+	if m.address == state.pc {
+		// lastFile and lastLine are the source location of pc.
+		state.found = true
+		return false
+	}
+	return true
+}
+
+// LineToPCs returns the PCs corresponding to the file and line number.
+// It returns an empty slice if no PCs were found.
+func (d *Data) LineToPCs(file string, line uint64) ([]uint64, error) {
+	if len(d.line) == 0 {
+		return nil, fmt.Errorf("LineToPCs: no line table")
+	}
+	if len(d.unit) == 0 {
+		return nil, fmt.Errorf("LineToPCs: no info section")
+	}
+
+	buf := makeBuf(d, &d.unit[0], "line", 0, d.line)
+	var m lineMachine
+	if err := m.parseHeader(&buf); err != nil {
+		return nil, err
+	}
+
+	// Find the closest match in the executable for the specified file.
+	// We choose the file with the largest number of path components matching
+	// at the end of the name, and break ties by choosing the shortest filename.
+	var bestFile struct {
+		fileNum    uint64 // Index of the file in the DWARF data.
+		components int    // Number of matching path components.
+		length     int    // Length of the filename.
+	}
+	for num, f := range m.header.file {
+		c := matchingPathComponentSuffixSize(f.name, file)
+		if c > bestFile.components || (c == bestFile.components && len(f.name) < bestFile.length) {
+			bestFile.fileNum = uint64(num)
+			bestFile.components = c
+			bestFile.length = len(f.name)
 		}
 	}
-	return "", 0, fmt.Errorf("no source line defined for PC %#x", pc)
+	if bestFile.components == 0 {
+		return nil, fmt.Errorf("couldn't find file %s", file)
+	}
+
+	// pcs will contain the PCs for every line machine output with the correct line
+	// and file number.
+	var pcs []uint64
+	// accumulatePCs will execute for every line machine output.
+	accumulatePCs := func(m *lineMachine) (cont bool) {
+		if m.line == line && m.file == bestFile.fileNum {
+			pcs = append(pcs, m.address)
+		}
+		return true
+	}
+	if err := m.evalCompilationUnit(&buf, accumulatePCs); err != nil {
+		return nil, err
+	}
+	return pcs, nil
+}
+
+// matchingPathComponentSuffixSize returns the largest n such that the last n
+// components of the paths p1 and p2 are equal.
+// e.g. matchingPathComponentSuffixSize("a/b/x/y.go", "b/a/x/y.go") returns 2.
+func matchingPathComponentSuffixSize(p1, p2 string) int {
+	// TODO: deal with other path separators.
+	c1 := strings.Split(p1, "/")
+	c2 := strings.Split(p2, "/")
+	min := len(c1)
+	if len(c2) < min {
+		min = len(c2)
+	}
+	var n int
+	for n = 0; n < min; n++ {
+		if c1[len(c1)-1-n] != c2[len(c2)-1-n] {
+			break
+		}
+	}
+	return n
 }
 
 // Standard opcodes. Figure 37, page 178.
@@ -69,10 +181,10 @@ const (
 	lineExtHiUser           = 0xff
 )
 
-// linePrologue holds the information stored in the prologue of the line
-// table for a single compilation unit. Also called the header.
+// lineHeader holds the information stored in the header of the line table for a
+// single compilation unit.
 // Section 6.2.4, page 112.
-type linePrologue struct {
+type lineHeader struct {
 	unitLength           int
 	version              int
 	headerLength         int
@@ -87,7 +199,7 @@ type linePrologue struct {
 	file                 []lineFile // entry 0 is empty.
 }
 
-// lineFile represents a file name stored in the PC/line table, usually the prologue.
+// lineFile represents a file name stored in the PC/line table, usually in the header.
 type lineFile struct {
 	name   string
 	index  int // index into include directories
@@ -162,44 +274,44 @@ type lineMachine struct {
 	// zero.
 	discriminator uint64
 
-	// The prologue for the current compilation unit.
-	// Not an actual register, but stored here for cleanlineness.
-	prologue linePrologue
+	// The header for the current compilation unit.
+	// Not an actual register, but stored here for cleanliness.
+	header lineHeader
 }
 
-// parseLinePrologue parses the prologue/header describing the compilation
-// unit in the line table starting at the specified offset.
-func (m *lineMachine) parseLinePrologue(b *buf) error {
-	m.prologue = linePrologue{}
-	m.prologue.unitLength = int(b.uint32()) // Note: We are assuming 32-bit DWARF format.
-	if m.prologue.unitLength > len(b.data) {
+// parseHeader parses the header describing the compilation unit in the line
+// table starting at the specified offset.
+func (m *lineMachine) parseHeader(b *buf) error {
+	m.header = lineHeader{}
+	m.header.unitLength = int(b.uint32()) // Note: We are assuming 32-bit DWARF format.
+	if m.header.unitLength > len(b.data) {
 		return fmt.Errorf("DWARF: bad PC/line header length")
 	}
-	m.prologue.version = int(b.uint16())
-	m.prologue.headerLength = int(b.uint32())
-	m.prologue.minInstructionLength = int(b.uint8())
-	if m.prologue.version >= 4 {
-		m.prologue.maxOpsPerInstruction = int(b.uint8())
+	m.header.version = int(b.uint16())
+	m.header.headerLength = int(b.uint32())
+	m.header.minInstructionLength = int(b.uint8())
+	if m.header.version >= 4 {
+		m.header.maxOpsPerInstruction = int(b.uint8())
 	} else {
-		m.prologue.maxOpsPerInstruction = 1
+		m.header.maxOpsPerInstruction = 1
 	}
-	m.prologue.defaultIsStmt = b.uint8() != 0
-	m.prologue.lineBase = int(int8(b.uint8()))
-	m.prologue.lineRange = int(b.uint8())
-	m.prologue.opcodeBase = b.uint8()
-	m.prologue.stdOpcodeLengths = make([]byte, m.prologue.opcodeBase-1)
-	copy(m.prologue.stdOpcodeLengths, b.bytes(int(m.prologue.opcodeBase-1)))
-	m.prologue.include = make([]string, 1) // First entry is empty; file index entries are 1-indexed.
+	m.header.defaultIsStmt = b.uint8() != 0
+	m.header.lineBase = int(int8(b.uint8()))
+	m.header.lineRange = int(b.uint8())
+	m.header.opcodeBase = b.uint8()
+	m.header.stdOpcodeLengths = make([]byte, m.header.opcodeBase-1)
+	copy(m.header.stdOpcodeLengths, b.bytes(int(m.header.opcodeBase-1)))
+	m.header.include = make([]string, 1) // First entry is empty; file index entries are 1-indexed.
 	// Includes
 	for {
 		name := b.string()
 		if name == "" {
 			break
 		}
-		m.prologue.include = append(m.prologue.include, name)
+		m.header.include = append(m.header.include, name)
 	}
 	// Files
-	m.prologue.file = make([]lineFile, 1, 10) // entries are 1-indexed in line number program.
+	m.header.file = make([]lineFile, 1, 10) // entries are 1-indexed in line number program.
 	for {
 		name := b.string()
 		if name == "" {
@@ -214,81 +326,97 @@ func (m *lineMachine) parseLinePrologue(b *buf) error {
 			time:   int(time),
 			length: int(length),
 		}
-		m.prologue.file = append(m.prologue.file, f)
+		m.header.file = append(m.header.file, f)
 	}
 	return nil
 }
 
 // Special opcodes, page 117.
-func (m *lineMachine) specialOpcode(opcode byte) {
-	adjustedOpcode := int(opcode - m.prologue.opcodeBase)
-	advance := adjustedOpcode / m.prologue.lineRange
-	delta := (int(m.opIndex) + advance) / m.prologue.maxOpsPerInstruction
-	m.address += uint64(m.prologue.minInstructionLength * delta)
-	m.opIndex = (m.opIndex + uint64(advance)) % uint64(m.prologue.maxOpsPerInstruction)
-	lineAdvance := m.prologue.lineBase + (adjustedOpcode % m.prologue.lineRange)
+// There are seven steps to processing special opcodes.  We break them up here
+// because the caller needs to output a row between steps 2 and 4, and because
+// we need to perform just step 2 for the opcode DW_LNS_const_add_pc.
+
+func (m *lineMachine) specialOpcodeStep1(opcode byte) {
+	adjustedOpcode := int(opcode - m.header.opcodeBase)
+	lineAdvance := m.header.lineBase + (adjustedOpcode % m.header.lineRange)
 	m.line += uint64(lineAdvance)
+}
+
+func (m *lineMachine) specialOpcodeStep2(opcode byte) {
+	adjustedOpcode := int(opcode - m.header.opcodeBase)
+	advance := adjustedOpcode / m.header.lineRange
+	delta := (int(m.opIndex) + advance) / m.header.maxOpsPerInstruction
+	m.address += uint64(m.header.minInstructionLength * delta)
+	m.opIndex = (m.opIndex + uint64(advance)) % uint64(m.header.maxOpsPerInstruction)
+}
+
+func (m *lineMachine) specialOpcodeSteps4To7() {
 	m.basicBlock = false
 	m.prologueEnd = false
 	m.epilogueBegin = false
 	m.discriminator = 0
 }
 
-// evalCompilationUnit reads the next compilation unit to see if it contains the PC.
-// The return value reports whether the PC was found; if so, the machine's registers
-// contain the relevant information.
-func (m *lineMachine) evalCompilationUnit(b *buf, pc uint64) (bool, error) {
-	err := m.parseLinePrologue(b)
-	if err != nil {
-		return false, err
-	}
+// evalCompilationUnit reads the next compilation unit and calls f at each output row.
+// Line machine execution continues while f returns true.
+func (m *lineMachine) evalCompilationUnit(b *buf, f func(m *lineMachine) (cont bool)) error {
 	m.reset()
 	for len(b.data) > 0 {
 		op := b.uint8()
-		if op >= m.prologue.opcodeBase {
-			m.specialOpcode(op)
+		if op >= m.header.opcodeBase {
+			m.specialOpcodeStep1(op)
+			m.specialOpcodeStep2(op)
+			// Step 3 is to output a row, so we call f here.
+			if !f(m) {
+				return nil
+			}
+			m.specialOpcodeSteps4To7()
 			continue
 		}
 		switch op {
 		case lineStartExtendedOpcode:
 			if len(b.data) == 0 {
-				return false, fmt.Errorf("DWARF: short extended opcode (1)")
+				return fmt.Errorf("DWARF: short extended opcode (1)")
 			}
 			size := b.uint()
 			if uint64(len(b.data)) < size {
-				return false, fmt.Errorf("DWARF: short extended opcode (2)")
+				return fmt.Errorf("DWARF: short extended opcode (2)")
 			}
 			op = b.uint8()
 			switch op {
 			case lineExtEndSequence:
 				m.endSequence = true
+				if !f(m) {
+					return nil
+				}
+				if len(b.data) == 0 {
+					return nil
+				}
 				m.reset()
-				return false, nil
 			case lineExtSetAddress:
 				m.address = b.addr()
 				m.opIndex = 0
 			case lineExtDefineFile:
-				return false, fmt.Errorf("DWARF: unimplemented define_file op")
+				return fmt.Errorf("DWARF: unimplemented define_file op")
 			case lineExtSetDiscriminator:
 				discriminator := b.uint()
-				m.line = discriminator
+				m.discriminator = discriminator
 			default:
-				return false, fmt.Errorf("DWARF: unknown extended opcode %#x", op)
+				return fmt.Errorf("DWARF: unknown extended opcode %#x", op)
 			}
 		case lineStdCopy:
+			if !f(m) {
+				return nil
+			}
 			m.discriminator = 0
 			m.basicBlock = false
 			m.prologueEnd = false
 			m.epilogueBegin = false
-			if m.address >= pc {
-				// TODO: if m.address > pc, is this one step too far?
-				return true, nil
-			}
 		case lineStdAdvancePC:
 			advance := b.uint()
-			delta := (int(m.opIndex) + int(advance)) / m.prologue.maxOpsPerInstruction
-			m.address += uint64(m.prologue.minInstructionLength * delta)
-			m.opIndex = (m.opIndex + uint64(advance)) % uint64(m.prologue.maxOpsPerInstruction)
+			delta := (int(m.opIndex) + int(advance)) / m.header.maxOpsPerInstruction
+			m.address += uint64(m.header.minInstructionLength * delta)
+			m.opIndex = (m.opIndex + uint64(advance)) % uint64(m.header.maxOpsPerInstruction)
 			m.basicBlock = false
 			m.prologueEnd = false
 			m.epilogueBegin = false
@@ -316,13 +444,13 @@ func (m *lineMachine) evalCompilationUnit(b *buf, pc uint64) (bool, error) {
 		case lineStdSetISA:
 			m.isa = b.uint()
 		case lineStdConstAddPC:
-			// TODO: Is this right? Seems crazy - why not just use 255 as a special opcode?
-			m.specialOpcode(255)
+			// Update the the address and op_index registers.
+			m.specialOpcodeStep2(255)
 		default:
 			panic("not reached")
 		}
 	}
-	panic("not reached")
+	return fmt.Errorf("DWARF: unexpected end of line number information")
 }
 
 // reset sets the machine's registers to the initial state. Page 111.
@@ -332,7 +460,7 @@ func (m *lineMachine) reset() {
 	m.file = 1
 	m.line = 1
 	m.column = 0
-	m.isStmt = m.prologue.defaultIsStmt
+	m.isStmt = m.header.defaultIsStmt
 	m.basicBlock = false
 	m.endSequence = false
 	m.prologueEnd = false

@@ -260,10 +260,37 @@ func testProgram(t *testing.T, prog program.Program) {
 		}
 	}
 
-	// Remove the breakpoint at main.foo, set a breakpoint at main.f1 and main.f2,
+	// Remove the breakpoint at main.foo.
+	err = prog.DeleteBreakpoints(pcs)
+	if err != nil {
+		log.Fatalf("DeleteBreakpoints: %v", err)
+	}
+
+	// Set a breakpoint at line 80, resume, and check we stopped there.
+	pcsLine80, err := prog.BreakpointAtLine("tracee/main.go", 80)
+	if err != nil {
+		t.Fatal("BreakpointAtLine:", err)
+	}
+	status, err := prog.Resume()
+	if err != nil {
+		log.Fatalf("Resume: %v", err)
+	}
+	stoppedAt := func(pcs []uint64) bool {
+		for _, pc := range pcs {
+			if status.PC == pc {
+				return true
+			}
+		}
+		return false
+	}
+	if !stoppedAt(pcsLine80) {
+		t.Errorf("stopped at %X; expected one of %X.", status.PC, pcsLine80)
+	}
+
+	// Remove the breakpoint at line 80, set a breakpoint at main.f1 and main.f2,
 	// then delete the breakpoint at main.f1.  Resume, then check we stopped at
 	// main.f2.
-	err = prog.DeleteBreakpoints(pcs)
+	err = prog.DeleteBreakpoints(pcsLine80)
 	if err != nil {
 		log.Fatalf("DeleteBreakpoints: %v", err)
 	}
@@ -279,19 +306,12 @@ func testProgram(t *testing.T, prog program.Program) {
 	if err != nil {
 		log.Fatalf("DeleteBreakpoints: %v", err)
 	}
-	status, err := prog.Resume()
+	status, err = prog.Resume()
 	if err != nil {
 		log.Fatalf("Resume: %v", err)
 	}
-	ok := false
-	for _, pc := range pcs2 {
-		if status.PC == pc {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		t.Errorf("stopped at %X expected one of %X.", status.PC, pcs2)
+	if !stoppedAt(pcs2) {
+		t.Errorf("stopped at %X; expected one of %X.", status.PC, pcs2)
 	}
 
 	// Check we get the expected results calling VarByName then Value

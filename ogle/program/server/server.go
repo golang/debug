@@ -423,7 +423,14 @@ func (s *Server) BreakpointAtLine(req *proxyrpc.BreakpointAtLineRequest, resp *p
 }
 
 func (s *Server) handleBreakpointAtLine(req *proxyrpc.BreakpointAtLineRequest, resp *proxyrpc.BreakpointResponse) error {
-	return fmt.Errorf("not implemented")
+	if s.dwarfData == nil {
+		return fmt.Errorf("no DWARF data")
+	}
+	if pcs, err := s.dwarfData.LineToPCs(req.File, req.Line); err != nil {
+		return err
+	} else {
+		return s.addBreakpoints(pcs, resp)
+	}
 }
 
 // addBreakpoints adds breakpoints at the addresses in pcs, then stores pcs in the response.
@@ -545,7 +552,7 @@ func (s *Server) eval(expr string) ([]string, error) {
 	return nil, fmt.Errorf("bad expression syntax: %q", expr)
 }
 
-func (s *Server) lookupSource(pc uint64) (file string, line int, err error) {
+func (s *Server) lookupSource(pc uint64) (file string, line uint64, err error) {
 	if s.dwarfData == nil {
 		return
 	}

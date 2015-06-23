@@ -156,7 +156,7 @@ type Frame struct {
 	SP uint64
 	// File and Line are the source code location of the PC.
 	File string
-	Line int
+	Line uint64
 	// Function is the name of this frame's function.
 	Function string
 	// Params contains the function's parameters.
