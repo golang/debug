@@ -258,7 +258,13 @@ func (m *frameMachine) run(b *buf, pc uint64) (int64, error) {
 
 		// Register Rule instructions (6.4.2.3)
 		case frameOffsetExtended: // ops: ULEB128 register ULEB128 offset
-			return 0, fmt.Errorf("unimplemented frameOffsetExtended")
+			// The same as frameOffset, but with the register specified in an operand.
+			reg := b.uint()
+			// For Go binaries we only see this in the CIE for the return address register.
+			if reg != uint64(m.returnAddressRegister) {
+				return 0, fmt.Errorf("invalid frameOffsetExtended: register R%d should be R%d", reg, m.returnAddressRegister)
+			}
+			m.returnRegisterOffset = int64(b.uint()) * m.dataAlignmentFactor
 		case frameRestoreExtended: // op: ULEB128 register
 			return 0, fmt.Errorf("unimplemented frameRestoreExtended")
 		case frameUndefined: // op: ULEB128 register; unimplemented
