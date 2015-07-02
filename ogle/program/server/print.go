@@ -13,13 +13,10 @@ import (
 	"golang.org/x/debug/ogle/arch"
 )
 
-// address is a type denoting addresses in the tracee.
-type address uintptr
-
 // typeAndAddress associates an address in the target with a DWARF type.
 type typeAndAddress struct {
 	Type    dwarf.Type
-	Address address
+	Address uint64
 }
 
 // Routines to print a value using DWARF type descriptions.
@@ -54,22 +51,22 @@ func (p *Printer) errorf(format string, args ...interface{}) {
 }
 
 // peek reads len bytes at addr, leaving p.tmp with the data and sized appropriately.
-func (p *Printer) peek(addr address, length int64) bool {
+func (p *Printer) peek(addr uint64, length int64) bool {
 	p.tmp = p.tmp[:length]
 	err := p.peeker.peek(uintptr(addr), p.tmp)
 	return err == nil
 }
 
 // peekPtr reads a pointer at addr.
-func (p *Printer) peekPtr(addr address) (address, bool) {
+func (p *Printer) peekPtr(addr uint64) (uint64, bool) {
 	if p.peek(addr, int64(p.arch.PointerSize)) {
-		return address(p.arch.Uintptr(p.tmp)), true
+		return p.arch.Uintptr(p.tmp), true
 	}
 	return 0, false
 }
 
 // peekUint8 reads a uint8 at addr.
-func (p *Printer) peekUint8(addr address) (uint8, bool) {
+func (p *Printer) peekUint8(addr uint64) (uint8, bool) {
 	if p.peek(addr, 1) {
 		return p.tmp[0], true
 	}
@@ -77,7 +74,7 @@ func (p *Printer) peekUint8(addr address) (uint8, bool) {
 }
 
 // peekInt reads an int of size s at addr.
-func (p *Printer) peekInt(addr address, s int64) (int64, bool) {
+func (p *Printer) peekInt(addr uint64, s int64) (int64, bool) {
 	if p.peek(addr, s) {
 		return p.arch.IntN(p.tmp), true
 	}
@@ -85,7 +82,7 @@ func (p *Printer) peekInt(addr address, s int64) (int64, bool) {
 }
 
 // peekUint reads a uint of size s at addr.
-func (p *Printer) peekUint(addr address, s int64) (uint64, bool) {
+func (p *Printer) peekUint(addr uint64, s int64) (uint64, bool) {
 	if p.peek(addr, s) {
 		return p.arch.UintN(p.tmp), true
 	}
@@ -94,7 +91,7 @@ func (p *Printer) peekUint(addr address, s int64) (uint64, bool) {
 
 // peekPtrStructField reads a pointer in the field fieldName of the struct
 // of type t at address addr.
-func (p *Printer) peekPtrStructField(t *dwarf.StructType, addr address, fieldName string) (address, bool) {
+func (p *Printer) peekPtrStructField(t *dwarf.StructType, addr uint64, fieldName string) (uint64, bool) {
 	f, err := getField(t, fieldName)
 	if err != nil {
 		p.errorf("%s", err)
@@ -105,12 +102,12 @@ func (p *Printer) peekPtrStructField(t *dwarf.StructType, addr address, fieldNam
 		p.errorf("struct field %s is not a pointer", fieldName)
 		return 0, false
 	}
-	return p.peekPtr(addr + address(f.ByteOffset))
+	return p.peekPtr(addr + uint64(f.ByteOffset))
 }
 
 // peekUintStructField reads a uint in the field fieldName of the struct
 // of type t at address addr.  The size of the uint is determined by the field.
-func (p *Printer) peekUintStructField(t *dwarf.StructType, addr address, fieldName string) (uint64, bool) {
+func (p *Printer) peekUintStructField(t *dwarf.StructType, addr uint64, fieldName string) (uint64, bool) {
 	f, err := getField(t, fieldName)
 	if err != nil {
 		return 0, false
@@ -119,12 +116,12 @@ func (p *Printer) peekUintStructField(t *dwarf.StructType, addr address, fieldNa
 	if !ok {
 		return 0, false
 	}
-	return p.peekUint(addr+address(f.ByteOffset), ut.ByteSize)
+	return p.peekUint(addr+uint64(f.ByteOffset), ut.ByteSize)
 }
 
 // peekIntStructField reads an int in the field fieldName of the struct
 // of type t at address addr.  The size of the int is determined by the field.
-func (p *Printer) peekIntStructField(t *dwarf.StructType, addr address, fieldName string) (int64, bool) {
+func (p *Printer) peekIntStructField(t *dwarf.StructType, addr uint64, fieldName string) (int64, bool) {
 	f, err := getField(t, fieldName)
 	if err != nil {
 		return 0, false
@@ -133,7 +130,7 @@ func (p *Printer) peekIntStructField(t *dwarf.StructType, addr address, fieldNam
 	if !ok {
 		return 0, false
 	}
-	return p.peekInt(addr+address(f.ByteOffset), it.ByteSize)
+	return p.peekInt(addr+uint64(f.ByteOffset), it.ByteSize)
 }
 
 // Peeker is like a read that probes the remote address space.
@@ -173,7 +170,7 @@ func (p *Printer) Sprint(name string) (string, error) {
 	p.reset()
 	switch entry.Tag {
 	case dwarf.TagVariable: // TODO: What other entries have global location attributes?
-		var a address
+		var a uint64
 		iface := entry.Val(dwarf.AttrLocation)
 		if iface != nil {
 			a = p.decodeLocation(iface.([]byte))
@@ -191,10 +188,10 @@ const (
 )
 
 // decodeLocation decodes the dwarf data describing an address.
-func (p *Printer) decodeLocation(data []byte) address {
+func (p *Printer) decodeLocation(data []byte) uint64 {
 	switch data[0] {
 	case locationAddr:
-		return address(p.arch.Uintptr(data[1:]))
+		return p.arch.Uintptr(data[1:])
 	default:
 		p.errorf("unimplemented location type %#x", data[0])
 	}
@@ -202,15 +199,15 @@ func (p *Printer) decodeLocation(data []byte) address {
 }
 
 // SprintEntry returns the pretty-printed value of the item with the specified DWARF Entry and address.
-func (p *Printer) SprintEntry(entry *dwarf.Entry, a address) (string, error) {
+func (p *Printer) SprintEntry(entry *dwarf.Entry, a uint64) (string, error) {
 	p.reset()
 	p.printEntryValueAt(entry, a)
 	return p.printBuf.String(), p.err
 }
 
-// printEntryValueAt pretty-prints the data at the specified addresss
+// printEntryValueAt pretty-prints the data at the specified address.
 // using the type information in the Entry.
-func (p *Printer) printEntryValueAt(entry *dwarf.Entry, a address) {
+func (p *Printer) printEntryValueAt(entry *dwarf.Entry, a uint64) {
 	if a == 0 {
 		p.printf("<nil>")
 		return
@@ -235,9 +232,9 @@ func (p *Printer) printEntryValueAt(entry *dwarf.Entry, a address) {
 	p.printValueAt(typ, a)
 }
 
-// printValueAt pretty-prints the data at the specified addresss
+// printValueAt pretty-prints the data at the specified address.
 // using the provided type information.
-func (p *Printer) printValueAt(typ dwarf.Type, a address) {
+func (p *Printer) printValueAt(typ dwarf.Type, a uint64) {
 	if a != 0 {
 		// Check if we are repeating the same type and address.
 		ta := typeAndAddress{typ, a}
@@ -318,7 +315,7 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 			if i != 0 {
 				p.printf(", ")
 			}
-			p.printValueAt(field.Type, a+address(field.ByteOffset))
+			p.printValueAt(field.Type, a+uint64(field.ByteOffset))
 		}
 		p.printf("}")
 	case *dwarf.ArrayType:
@@ -344,7 +341,7 @@ func (p *Printer) printValueAt(typ dwarf.Type, a address) {
 	}
 }
 
-func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a address) {
+func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a uint64) {
 	elemType := typ.Type
 	length := typ.Count
 	stride, ok := p.arrayStride(typ)
@@ -361,7 +358,7 @@ func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a address) {
 			p.printf(", ")
 		}
 		p.printValueAt(elemType, a)
-		a += address(stride) // TODO: Alignment and padding - not given by Type
+		a += stride // TODO: Alignment and padding - not given by Type
 	}
 	if n < length {
 		p.printf(", ...")
@@ -369,7 +366,7 @@ func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a address) {
 	p.printf("}")
 }
 
-func (p *Printer) printInterfaceAt(t *dwarf.InterfaceType, a address) {
+func (p *Printer) printInterfaceAt(t *dwarf.InterfaceType, a uint64) {
 	// t should be a typedef binding a typedef binding a struct.
 	tt, ok := t.TypedefType.Type.(*dwarf.TypedefType)
 	if !ok {
@@ -406,7 +403,7 @@ func (p *Printer) printInterfaceAt(t *dwarf.InterfaceType, a address) {
 }
 
 // printTypeOfInterface prints the type of the given tab pointer.
-func (p *Printer) printTypeOfInterface(t dwarf.Type, a address) {
+func (p *Printer) printTypeOfInterface(t dwarf.Type, a uint64) {
 	if a == 0 {
 		p.printf("<nil>")
 		return
@@ -481,7 +478,7 @@ func (p *Printer) printTypeOfInterface(t dwarf.Type, a address) {
 // truncated to "...".
 const maxMapValuesToPrint = 8
 
-func (p *Printer) printMapAt(typ *dwarf.MapType, a address) {
+func (p *Printer) printMapAt(typ *dwarf.MapType, a uint64) {
 	// Maps are pointers to structs.
 	pt, ok := typ.Type.(*dwarf.PtrType)
 	if !ok {
@@ -520,7 +517,7 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, a address) {
 
 	p.printf("{")
 	// Limit how many values are printed per map.
-	numValues := address(0)
+	numValues := uint64(0)
 	{
 		bf, err := getField(st, "buckets")
 		if err != nil {
@@ -540,7 +537,7 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, a address) {
 	p.printf("}")
 }
 
-func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValues *address) {
+func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets uint64, numValues *uint64) {
 	if *numValues > maxMapValuesToPrint {
 		return
 	}
@@ -606,12 +603,12 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValu
 		valuesStride = 1
 	}
 
-	for i := address(0); i < numBuckets; i++ {
+	for i := uint64(0); i < numBuckets; i++ {
 		bucketAddr := a + i*bucketSize
 		// TODO: check for repeated bucket pointers.
 		for bucketAddr != 0 {
-			for j := address(0); j < bucketCnt; j++ {
-				tophash, ok := p.peekUint8(bucketAddr + address(tophashField.ByteOffset) + j)
+			for j := uint64(0); j < bucketCnt; j++ {
+				tophash, ok := p.peekUint8(bucketAddr + uint64(tophashField.ByteOffset) + j)
 				if !ok {
 					p.errorf("couldn't read map")
 					return
@@ -631,10 +628,10 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValu
 				}
 
 				p.printValueAt(keysType.Type,
-					bucketAddr+address(keysField.ByteOffset)+j*keysStride)
+					bucketAddr+uint64(keysField.ByteOffset)+j*keysStride)
 				p.printf(":")
 				p.printValueAt(valuesType.Type,
-					bucketAddr+address(valuesField.ByteOffset)+j*valuesStride)
+					bucketAddr+uint64(valuesField.ByteOffset)+j*valuesStride)
 			}
 
 			var ok bool
@@ -647,7 +644,7 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets address, numValu
 	}
 }
 
-func (p *Printer) printChannelAt(ct *dwarf.ChanType, a address) {
+func (p *Printer) printChannelAt(ct *dwarf.ChanType, a uint64) {
 	p.printf("(chan %s ", ct.ElemType)
 	defer p.printf(")")
 
@@ -691,7 +688,7 @@ func (p *Printer) printChannelAt(ct *dwarf.ChanType, a address) {
 	}
 }
 
-func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
+func (p *Printer) printSliceAt(typ *dwarf.SliceType, a uint64) {
 	// Slices look like a struct with fields array *elemtype, len uint32/64, cap uint32/64.
 	// BUG: Slice header appears to have fields with ByteSize == 0
 	ptr, ok1 := p.peekPtrStructField(&typ.StructType, a, "array")
@@ -721,12 +718,12 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a address) {
 			p.printf(", ")
 		}
 		p.printValueAt(elemType, ptr)
-		ptr += address(size) // TODO: Alignment and padding - not given by Type
+		ptr += size // TODO: Alignment and padding - not given by Type
 	}
 	p.printf("}")
 }
 
-func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
+func (p *Printer) printStringAt(typ *dwarf.StringType, a uint64) {
 	// BUG: String header appears to have fields with ByteSize == 0
 	ptr, ok := p.peekPtrStructField(&typ.StructType, a, "str")
 	if !ok {
@@ -739,14 +736,14 @@ func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
 		return
 	}
 	if length > int64(cap(p.tmp)) {
-		if p.peek(address(ptr), int64(cap(p.tmp))) {
+		if p.peek(ptr, int64(cap(p.tmp))) {
 			p.printf("%q...", p.tmp)
 		} else {
 			p.errorf("couldn't read string")
 			return
 		}
 	} else {
-		if p.peek(address(ptr), int64(length)) {
+		if p.peek(ptr, int64(length)) {
 			p.printf("%q", p.tmp[:length])
 		} else {
 			p.errorf("couldn't read string")
@@ -756,24 +753,24 @@ func (p *Printer) printStringAt(typ *dwarf.StringType, a address) {
 }
 
 // sizeof returns the byte size of the type.
-func (p *Printer) sizeof(typ dwarf.Type) (address, bool) {
+func (p *Printer) sizeof(typ dwarf.Type) (uint64, bool) {
 	size := typ.Size() // Will be -1 if ByteSize is not set.
 	if size >= 0 {
-		return address(size), true
+		return uint64(size), true
 	}
 	switch typ.(type) {
 	case *dwarf.PtrType:
 		// This is the only one we know of, but more may arise.
-		return address(p.arch.PointerSize), true
+		return uint64(p.arch.PointerSize), true
 	}
 	return 0, false
 }
 
 // arrayStride returns the stride of a dwarf.ArrayType in bytes.
-func (p *Printer) arrayStride(t *dwarf.ArrayType) (address, bool) {
+func (p *Printer) arrayStride(t *dwarf.ArrayType) (uint64, bool) {
 	stride := t.StrideBitSize
 	if stride > 0 {
-		return address(stride / 8), true
+		return uint64(stride / 8), true
 	}
 	return p.sizeof(t.Type)
 }
