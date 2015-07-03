@@ -22,16 +22,15 @@ type typeAndAddress struct {
 // Routines to print a value using DWARF type descriptions.
 // TODO: Does this deserve its own package? It has no dependencies on Server.
 
-// A Printer pretty-prints a values in the target address space.
+// A Printer pretty-prints values in the target address space.
 // It can be reused after each printing operation to avoid unnecessary
 // allocations. However, it is not safe for concurrent access.
 type Printer struct {
 	err      error // Sticky error value.
-	peeker   Peeker
+	server   *Server
 	dwarf    *dwarf.Data
 	arch     *arch.Architecture
 	printBuf bytes.Buffer            // Accumulates the output.
-	tmp      []byte                  // Temporary used for I/O.
 	visited  map[typeAndAddress]bool // Prevents looping on cyclic data.
 }
 
@@ -50,103 +49,14 @@ func (p *Printer) errorf(format string, args ...interface{}) {
 	p.err = fmt.Errorf(format, args...)
 }
 
-// peek reads len bytes at addr, leaving p.tmp with the data and sized appropriately.
-func (p *Printer) peek(addr uint64, length int64) bool {
-	p.tmp = p.tmp[:length]
-	err := p.peeker.peek(uintptr(addr), p.tmp)
-	return err == nil
-}
-
-// peekPtr reads a pointer at addr.
-func (p *Printer) peekPtr(addr uint64) (uint64, bool) {
-	if p.peek(addr, int64(p.arch.PointerSize)) {
-		return p.arch.Uintptr(p.tmp), true
-	}
-	return 0, false
-}
-
-// peekUint8 reads a uint8 at addr.
-func (p *Printer) peekUint8(addr uint64) (uint8, bool) {
-	if p.peek(addr, 1) {
-		return p.tmp[0], true
-	}
-	return 0, false
-}
-
-// peekInt reads an int of size s at addr.
-func (p *Printer) peekInt(addr uint64, s int64) (int64, bool) {
-	if p.peek(addr, s) {
-		return p.arch.IntN(p.tmp), true
-	}
-	return 0, false
-}
-
-// peekUint reads a uint of size s at addr.
-func (p *Printer) peekUint(addr uint64, s int64) (uint64, bool) {
-	if p.peek(addr, s) {
-		return p.arch.UintN(p.tmp), true
-	}
-	return 0, false
-}
-
-// peekPtrStructField reads a pointer in the field fieldName of the struct
-// of type t at address addr.
-func (p *Printer) peekPtrStructField(t *dwarf.StructType, addr uint64, fieldName string) (uint64, bool) {
-	f, err := getField(t, fieldName)
-	if err != nil {
-		p.errorf("%s", err)
-		return 0, false
-	}
-	_, ok := f.Type.(*dwarf.PtrType)
-	if !ok {
-		p.errorf("struct field %s is not a pointer", fieldName)
-		return 0, false
-	}
-	return p.peekPtr(addr + uint64(f.ByteOffset))
-}
-
-// peekUintStructField reads a uint in the field fieldName of the struct
-// of type t at address addr.  The size of the uint is determined by the field.
-func (p *Printer) peekUintStructField(t *dwarf.StructType, addr uint64, fieldName string) (uint64, bool) {
-	f, err := getField(t, fieldName)
-	if err != nil {
-		return 0, false
-	}
-	ut, ok := f.Type.(*dwarf.UintType)
-	if !ok {
-		return 0, false
-	}
-	return p.peekUint(addr+uint64(f.ByteOffset), ut.ByteSize)
-}
-
-// peekIntStructField reads an int in the field fieldName of the struct
-// of type t at address addr.  The size of the int is determined by the field.
-func (p *Printer) peekIntStructField(t *dwarf.StructType, addr uint64, fieldName string) (int64, bool) {
-	f, err := getField(t, fieldName)
-	if err != nil {
-		return 0, false
-	}
-	it, ok := f.Type.(*dwarf.IntType)
-	if !ok {
-		return 0, false
-	}
-	return p.peekInt(addr+uint64(f.ByteOffset), it.ByteSize)
-}
-
-// Peeker is like a read that probes the remote address space.
-type Peeker interface {
-	peek(offset uintptr, buf []byte) error
-}
-
-// NewPrinter returns a printer that can use the Peeker to access and print
+// NewPrinter returns a printer that can use the Server to access and print
 // values of the specified architecture described by the provided DWARF data.
-func NewPrinter(arch *arch.Architecture, dwarf *dwarf.Data, peeker Peeker) *Printer {
+func NewPrinter(arch *arch.Architecture, dwarf *dwarf.Data, server *Server) *Printer {
 	return &Printer{
-		peeker:  peeker,
+		server:  server,
 		arch:    arch,
 		dwarf:   dwarf,
 		visited: make(map[typeAndAddress]bool),
-		tmp:     make([]byte, 100), // Enough for a largish string.
 	}
 }
 
@@ -250,56 +160,58 @@ func (p *Printer) printValueAt(typ dwarf.Type, a uint64) {
 			p.errorf("unrecognized bool size %d", typ.ByteSize)
 			return
 		}
-		if b, ok := p.peekUint8(a); ok {
-			p.printf("%t", b != 0)
+		if b, err := p.server.peekUint8(a); err != nil {
+			p.errorf("reading bool: %s", err)
 		} else {
-			p.errorf("couldn't read bool")
+			p.printf("%t", b != 0)
 		}
 	case *dwarf.PtrType:
-		if ptr, ok := p.peekPtr(a); ok {
-			p.printf("%#x", ptr)
+		if ptr, err := p.server.peekPtr(a); err != nil {
+			p.errorf("reading pointer: %s", err)
 		} else {
-			p.errorf("couldn't read pointer")
+			p.printf("%#x", ptr)
 		}
 	case *dwarf.IntType:
 		// Sad we can't tell a rune from an int32.
-		if i, ok := p.peekInt(a, typ.ByteSize); ok {
-			p.printf("%d", i)
+		if i, err := p.server.peekInt(a, typ.ByteSize); err != nil {
+			p.errorf("reading integer: %s", err)
 		} else {
-			p.errorf("couldn't read int")
+			p.printf("%d", i)
 		}
 	case *dwarf.UintType:
-		if u, ok := p.peekUint(a, typ.ByteSize); ok {
-			p.printf("%d", u)
+		if u, err := p.server.peekUint(a, typ.ByteSize); err != nil {
+			p.errorf("reading unsigned integer: %s", err)
 		} else {
-			p.errorf("couldn't read uint")
+			p.printf("%d", u)
 		}
 	case *dwarf.FloatType:
-		if !p.peek(a, typ.ByteSize) {
-			p.errorf("couldn't read float")
+		buf := make([]byte, typ.ByteSize)
+		if err := p.server.peekBytes(a, buf); err != nil {
+			p.errorf("reading float: %s", err)
 			return
 		}
 		switch typ.ByteSize {
 		case 4:
-			p.printf("%g", math.Float32frombits(uint32(p.arch.UintN(p.tmp))))
+			p.printf("%g", math.Float32frombits(uint32(p.arch.UintN(buf))))
 		case 8:
-			p.printf("%g", math.Float64frombits(p.arch.UintN(p.tmp)))
+			p.printf("%g", math.Float64frombits(p.arch.UintN(buf)))
 		default:
 			p.errorf("unrecognized float size %d", typ.ByteSize)
 		}
 	case *dwarf.ComplexType:
-		if !p.peek(a, typ.ByteSize) {
-			p.errorf("couldn't read complex")
+		buf := make([]byte, typ.ByteSize)
+		if err := p.server.peekBytes(a, buf); err != nil {
+			p.errorf("reading complex: %s", err)
 			return
 		}
 		switch typ.ByteSize {
 		case 8:
-			r := math.Float32frombits(uint32(p.arch.UintN(p.tmp[:4])))
-			i := math.Float32frombits(uint32(p.arch.UintN(p.tmp[4:8])))
+			r := math.Float32frombits(uint32(p.arch.UintN(buf[:4])))
+			i := math.Float32frombits(uint32(p.arch.UintN(buf[4:8])))
 			p.printf("%g", complex(r, i))
 		case 16:
-			r := math.Float64frombits(p.arch.UintN(p.tmp[:8]))
-			i := math.Float64frombits(p.arch.UintN(p.tmp[8:16]))
+			r := math.Float64frombits(p.arch.UintN(buf[:8]))
+			i := math.Float64frombits(p.arch.UintN(buf[8:16]))
 			p.printf("%g", complex(r, i))
 		default:
 			p.errorf("unrecognized complex size %d", typ.ByteSize)
@@ -379,21 +291,21 @@ func (p *Printer) printInterfaceAt(t *dwarf.InterfaceType, a uint64) {
 		return
 	}
 	p.printf("(")
-	tab, ok := p.peekPtrStructField(st, a, "tab")
-	if ok {
+	tab, err := p.server.peekPtrStructField(st, a, "tab")
+	if err != nil {
+		p.errorf("reading interface type: %s", err)
+	} else {
 		f, err := getField(st, "tab")
 		if err != nil {
 			p.errorf("%s", err)
 		} else {
 			p.printTypeOfInterface(f.Type, tab)
 		}
-	} else {
-		p.errorf("couldn't read interface type")
 	}
 	p.printf(", ")
-	data, ok := p.peekPtrStructField(st, a, "data")
-	if !ok {
-		p.errorf("couldn't read interface value")
+	data, err := p.server.peekPtrStructField(st, a, "data")
+	if err != nil {
+		p.errorf("reading interface value: %s", err)
 	} else if data == 0 {
 		p.printf("<nil>")
 	} else {
@@ -461,14 +373,14 @@ func (p *Printer) printTypeOfInterface(t dwarf.Type, a uint64) {
 		p.errorf("bad type")
 		return
 	}
-	typeAddr, ok := p.peekPtrStructField(t3, a, "_type")
-	if !ok {
-		p.errorf("couldn't read type structure pointer")
+	typeAddr, err := p.server.peekPtrStructField(t3, a, "_type")
+	if err != nil {
+		p.errorf("reading interface type: %s", err)
 		return
 	}
-	stringAddr, ok := p.peekPtrStructField(t6, typeAddr, "_string")
-	if !ok {
-		p.errorf("couldn't read type name")
+	stringAddr, err := p.server.peekPtrStructField(t6, typeAddr, "_string")
+	if err != nil {
+		p.errorf("reading interface type: %s", err)
 		return
 	}
 	p.printStringAt(stringType, stringAddr)
@@ -490,28 +402,28 @@ func (p *Printer) printMapAt(typ *dwarf.MapType, a uint64) {
 		p.errorf("bad map type: not a pointer to a struct")
 		return
 	}
-	a, ok = p.peekPtr(a)
-	if !ok {
-		p.errorf("couldn't read map pointer")
+	a, err := p.server.peekPtr(a)
+	if err != nil {
+		p.errorf("reading map pointer: %s", err)
 		return
 	}
 	if a == 0 {
 		p.printf("<nil>")
 		return
 	}
-	b, ok := p.peekUintStructField(st, a, "B")
-	if !ok {
-		p.errorf(`couldn't read map field "B"`)
+	b, err := p.server.peekUintStructField(st, a, "B")
+	if err != nil {
+		p.errorf("reading map: %s", err)
 		return
 	}
-	buckets, ok := p.peekPtrStructField(st, a, "buckets")
-	if !ok {
-		p.errorf(`couldn't read map field "buckets"`)
+	buckets, err := p.server.peekPtrStructField(st, a, "buckets")
+	if err != nil {
+		p.errorf("reading map: %s", err)
 		return
 	}
-	oldbuckets, ok := p.peekPtrStructField(st, a, "oldbuckets")
-	if !ok {
-		p.errorf(`couldn't read map field "oldbuckets"`)
+	oldbuckets, err := p.server.peekPtrStructField(st, a, "oldbuckets")
+	if err != nil {
+		p.errorf("reading map: %s", err)
 		return
 	}
 
@@ -608,9 +520,9 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets uint64, numValue
 		// TODO: check for repeated bucket pointers.
 		for bucketAddr != 0 {
 			for j := uint64(0); j < bucketCnt; j++ {
-				tophash, ok := p.peekUint8(bucketAddr + uint64(tophashField.ByteOffset) + j)
-				if !ok {
-					p.errorf("couldn't read map")
+				tophash, err := p.server.peekUint8(bucketAddr + uint64(tophashField.ByteOffset) + j)
+				if err != nil {
+					p.errorf("reading map: ", err)
 					return
 				}
 				if tophash < minTopHash {
@@ -634,10 +546,9 @@ func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets uint64, numValue
 					bucketAddr+uint64(valuesField.ByteOffset)+j*valuesStride)
 			}
 
-			var ok bool
-			bucketAddr, ok = p.peekPtrStructField(bt, bucketAddr, "overflow")
-			if !ok {
-				p.errorf("couldn't read map")
+			bucketAddr, err = p.server.peekPtrStructField(bt, bucketAddr, "overflow")
+			if err != nil {
+				p.errorf("reading map: ", err)
 				return
 			}
 		}
@@ -648,9 +559,9 @@ func (p *Printer) printChannelAt(ct *dwarf.ChanType, a uint64) {
 	p.printf("(chan %s ", ct.ElemType)
 	defer p.printf(")")
 
-	a, ok := p.peekPtr(a)
-	if !ok {
-		p.errorf("couldn't read channel")
+	a, err := p.server.peekPtr(a)
+	if err != nil {
+		p.errorf("reading channel: %s", err)
 		return
 	}
 	if a == 0 {
@@ -673,14 +584,14 @@ func (p *Printer) printChannelAt(ct *dwarf.ChanType, a uint64) {
 
 	// Print the channel buffer's length (qcount) and capacity (dataqsiz),
 	// if not 0/0.
-	qcount, ok := p.peekUintStructField(st, a, "qcount")
-	if !ok {
-		p.errorf(`couldn't read channel field "qcount"`)
+	qcount, err := p.server.peekUintStructField(st, a, "qcount")
+	if err != nil {
+		p.errorf("reading channel: %s", err)
 		return
 	}
-	dataqsiz, ok := p.peekUintStructField(st, a, "dataqsiz")
-	if !ok {
-		p.errorf(`couldn't read channel field "dataqsiz"`)
+	dataqsiz, err := p.server.peekUintStructField(st, a, "dataqsiz")
+	if err != nil {
+		p.errorf("reading channel: %s", err)
 		return
 	}
 	if qcount != 0 || dataqsiz != 0 {
@@ -691,21 +602,29 @@ func (p *Printer) printChannelAt(ct *dwarf.ChanType, a uint64) {
 func (p *Printer) printSliceAt(typ *dwarf.SliceType, a uint64) {
 	// Slices look like a struct with fields array *elemtype, len uint32/64, cap uint32/64.
 	// BUG: Slice header appears to have fields with ByteSize == 0
-	ptr, ok1 := p.peekPtrStructField(&typ.StructType, a, "array")
-	length, ok2 := p.peekIntStructField(&typ.StructType, a, "len")
-	if !ok2 {
+	ptr, err := p.server.peekPtrStructField(&typ.StructType, a, "array")
+	if err != nil {
+		p.errorf("reading slice: %s", err)
+		return
+	}
+	length, err := p.server.peekIntStructField(&typ.StructType, a, "len")
+	if err != nil {
 		var u uint64
-		u, ok2 = p.peekUintStructField(&typ.StructType, a, "len")
+		u, err = p.server.peekUintStructField(&typ.StructType, a, "len")
+		if err != nil {
+			p.errorf("reading slice: %s", err)
+			return
+		}
 		length = int64(u)
 	}
 	// Capacity is not used yet.
-	_, ok3 := p.peekIntStructField(&typ.StructType, a, "cap")
-	if !ok3 {
-		_, ok3 = p.peekUintStructField(&typ.StructType, a, "cap")
-	}
-	if !ok1 || !ok2 || !ok3 {
-		p.errorf("couldn't read slice")
-		return
+	_, err = p.server.peekIntStructField(&typ.StructType, a, "cap")
+	if err != nil {
+		_, err = p.server.peekUintStructField(&typ.StructType, a, "cap")
+		if err != nil {
+			p.errorf("reading slice: %s", err)
+			return
+		}
 	}
 	elemType := typ.ElemType
 	size, ok := p.sizeof(typ.ElemType)
@@ -725,29 +644,30 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a uint64) {
 
 func (p *Printer) printStringAt(typ *dwarf.StringType, a uint64) {
 	// BUG: String header appears to have fields with ByteSize == 0
-	ptr, ok := p.peekPtrStructField(&typ.StructType, a, "str")
-	if !ok {
-		p.errorf("couldn't read string")
+	ptr, err := p.server.peekPtrStructField(&typ.StructType, a, "str")
+	if err != nil {
+		p.errorf("reading string: %s", err)
 		return
 	}
-	length, ok := p.peekIntStructField(&typ.StructType, a, "len")
-	if !ok {
-		p.errorf("couldn't read string")
+	length, err := p.server.peekIntStructField(&typ.StructType, a, "len")
+	if err != nil {
+		p.errorf("reading string: %s", err)
 		return
 	}
-	if length > int64(cap(p.tmp)) {
-		if p.peek(ptr, int64(cap(p.tmp))) {
-			p.printf("%q...", p.tmp)
+	const maxStringSize = 100
+	if length > maxStringSize {
+		buf := make([]byte, maxStringSize)
+		if err := p.server.peekBytes(ptr, buf); err != nil {
+			p.errorf("reading string: %s", err)
 		} else {
-			p.errorf("couldn't read string")
-			return
+			p.printf("%q...", string(buf))
 		}
 	} else {
-		if p.peek(ptr, int64(length)) {
-			p.printf("%q", p.tmp[:length])
+		buf := make([]byte, length)
+		if err := p.server.peekBytes(ptr, buf); err != nil {
+			p.errorf("reading string: %s", err)
 		} else {
-			p.errorf("couldn't read string")
-			return
+			p.printf("%q", string(buf))
 		}
 	}
 }
