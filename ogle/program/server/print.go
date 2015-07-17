@@ -7,7 +7,6 @@ package server
 import (
 	"bytes"
 	"fmt"
-	"math"
 
 	"golang.org/x/debug/dwarf"
 	"golang.org/x/debug/ogle/arch"
@@ -192,9 +191,9 @@ func (p *Printer) printValueAt(typ dwarf.Type, a uint64) {
 		}
 		switch typ.ByteSize {
 		case 4:
-			p.printf("%g", math.Float32frombits(uint32(p.arch.UintN(buf))))
+			p.printf("%g", p.arch.Float32(buf))
 		case 8:
-			p.printf("%g", math.Float64frombits(p.arch.UintN(buf)))
+			p.printf("%g", p.arch.Float64(buf))
 		default:
 			p.errorf("unrecognized float size %d", typ.ByteSize)
 		}
@@ -206,13 +205,9 @@ func (p *Printer) printValueAt(typ dwarf.Type, a uint64) {
 		}
 		switch typ.ByteSize {
 		case 8:
-			r := math.Float32frombits(uint32(p.arch.UintN(buf[:4])))
-			i := math.Float32frombits(uint32(p.arch.UintN(buf[4:8])))
-			p.printf("%g", complex(r, i))
+			p.printf("%g", p.arch.Complex64(buf))
 		case 16:
-			r := math.Float64frombits(p.arch.UintN(buf[:8]))
-			i := math.Float64frombits(p.arch.UintN(buf[8:16]))
-			p.printf("%g", complex(r, i))
+			p.printf("%g", p.arch.Complex128(buf))
 		default:
 			p.errorf("unrecognized complex size %d", typ.ByteSize)
 		}
