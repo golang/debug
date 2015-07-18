@@ -391,168 +391,28 @@ func (p *Printer) printTypeOfInterface(t dwarf.Type, a uint64) {
 const maxMapValuesToPrint = 8
 
 func (p *Printer) printMapAt(typ *dwarf.MapType, a uint64) {
-	// Maps are pointers to structs.
-	pt, ok := typ.Type.(*dwarf.PtrType)
-	if !ok {
-		p.errorf("bad map type: not a pointer")
-		return
-	}
-	st, ok := pt.Type.(*dwarf.StructType)
-	if !ok {
-		p.errorf("bad map type: not a pointer to a struct")
-		return
-	}
-	a, err := p.server.peekPtr(a)
-	if err != nil {
-		p.errorf("reading map pointer: %s", err)
-		return
-	}
-	if a == 0 {
-		p.printf("<nil>")
-		return
-	}
-	b, err := p.server.peekUintStructField(st, a, "B")
-	if err != nil {
-		p.errorf("reading map: %s", err)
-		return
-	}
-	buckets, err := p.server.peekPtrStructField(st, a, "buckets")
-	if err != nil {
-		p.errorf("reading map: %s", err)
-		return
-	}
-	oldbuckets, err := p.server.peekPtrStructField(st, a, "oldbuckets")
-	if err != nil {
-		p.errorf("reading map: %s", err)
-		return
-	}
-
-	p.printf("{")
-	// Limit how many values are printed per map.
-	numValues := uint64(0)
-	{
-		bf, err := getField(st, "buckets")
-		if err != nil {
-			p.errorf("%s", err)
-		} else {
-			p.printMapBucketsAt(bf.Type, buckets, 1<<b, &numValues)
+	count := 0
+	fn := func(keyAddr, valAddr uint64, keyType, valType dwarf.Type) (stop bool) {
+		count++
+		if count > maxMapValuesToPrint {
+			return false
 		}
-	}
-	if b > 0 {
-		bf, err := getField(st, "oldbuckets")
-		if err != nil {
-			p.errorf("%s", err)
-		} else {
-			p.printMapBucketsAt(bf.Type, oldbuckets, 1<<(b-1), &numValues)
+		if count > 1 {
+			p.printf(" ")
 		}
+		p.printValueAt(keyType, keyAddr)
+		p.printf(":")
+		p.printValueAt(valType, valAddr)
+		return true
 	}
-	p.printf("}")
-}
-
-func (p *Printer) printMapBucketsAt(t dwarf.Type, a, numBuckets uint64, numValues *uint64) {
-	if *numValues > maxMapValuesToPrint {
-		return
+	p.printf("map[")
+	if err := p.server.peekMapValues(typ, a, fn); err != nil {
+		p.errorf("reading map values: %s", err)
 	}
-	if a == 0 {
-		return
+	if count > maxMapValuesToPrint {
+		p.printf(" ...")
 	}
-	// From runtime/hashmap.go
-	const minTopHash = 4
-	// t is a pointer to a struct.
-	bucketPtrType, ok := t.(*dwarf.PtrType)
-	if !ok {
-		p.errorf("bad map bucket type: not a pointer")
-		return
-	}
-	bt, ok := bucketPtrType.Type.(*dwarf.StructType)
-	if !ok {
-		p.errorf("bad map bucket type: not a pointer to a struct")
-		return
-	}
-	bucketSize, ok := p.sizeof(bucketPtrType.Type)
-	if !ok {
-		p.errorf("can't get bucket size")
-		return
-	}
-	tophashField, err := getField(bt, "tophash")
-	if err != nil {
-		p.errorf("%s", err)
-		return
-	}
-	bucketCnt, ok := p.sizeof(tophashField.Type)
-	if !ok {
-		p.errorf("can't get tophash size")
-		return
-	}
-	keysField, err := getField(bt, "keys")
-	if err != nil {
-		p.errorf("%s", err)
-		return
-	}
-	keysType, ok := keysField.Type.(*dwarf.ArrayType)
-	if !ok {
-		p.errorf(`bad map bucket type: "keys" is not an array`)
-		return
-	}
-	keysStride, ok := p.arrayStride(keysType)
-	if !ok {
-		p.errorf("unknown key size")
-		keysStride = 1
-	}
-	valuesField, err := getField(bt, "values")
-	if err != nil {
-		p.errorf("%s", err)
-		return
-	}
-	valuesType, ok := valuesField.Type.(*dwarf.ArrayType)
-	if !ok {
-		p.errorf(`bad map bucket type: "values" is not an array`)
-		return
-	}
-	valuesStride, ok := p.arrayStride(valuesType)
-	if !ok {
-		p.errorf("unknown value size")
-		valuesStride = 1
-	}
-
-	for i := uint64(0); i < numBuckets; i++ {
-		bucketAddr := a + i*bucketSize
-		// TODO: check for repeated bucket pointers.
-		for bucketAddr != 0 {
-			for j := uint64(0); j < bucketCnt; j++ {
-				tophash, err := p.server.peekUint8(bucketAddr + uint64(tophashField.ByteOffset) + j)
-				if err != nil {
-					p.errorf("reading map: ", err)
-					return
-				}
-				if tophash < minTopHash {
-					continue
-				}
-
-				// Limit how many values are printed per map.
-				*numValues++
-				if *numValues > maxMapValuesToPrint {
-					p.printf(", ...")
-					return
-				}
-				if *numValues > 1 {
-					p.printf(", ")
-				}
-
-				p.printValueAt(keysType.Type,
-					bucketAddr+uint64(keysField.ByteOffset)+j*keysStride)
-				p.printf(":")
-				p.printValueAt(valuesType.Type,
-					bucketAddr+uint64(valuesField.ByteOffset)+j*valuesStride)
-			}
-
-			bucketAddr, err = p.server.peekPtrStructField(bt, bucketAddr, "overflow")
-			if err != nil {
-				p.errorf("reading map: ", err)
-				return
-			}
-		}
-	}
+	p.printf("]")
 }
 
 func (p *Printer) printChannelAt(ct *dwarf.ChanType, a uint64) {
