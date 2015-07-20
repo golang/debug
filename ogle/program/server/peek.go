@@ -66,6 +66,33 @@ func (s *Server) peekPtrStructField(t *dwarf.StructType, addr uint64, fieldName 
 	return s.peekPtr(addr + uint64(f.ByteOffset))
 }
 
+// peekUintOrIntStructField reads a signed or unsigned integer in the field fieldName
+// of the struct of type t at addr. If the value is negative, it returns an error.
+// This function is used when the value should be non-negative, but the DWARF
+// type of the field may be signed or unsigned.
+func (s *Server) peekUintOrIntStructField(t *dwarf.StructType, addr uint64, fieldName string) (uint64, error) {
+	f, err := getField(t, fieldName)
+	if err != nil {
+		return 0, fmt.Errorf("reading field %s: %s", fieldName, err)
+	}
+	ut, ok := f.Type.(*dwarf.UintType)
+	if ok {
+		return s.peekUint(addr+uint64(f.ByteOffset), ut.ByteSize)
+	}
+	it, ok := f.Type.(*dwarf.IntType)
+	if !ok {
+		return 0, fmt.Errorf("field %s is not an integer", fieldName)
+	}
+	i, err := s.peekInt(addr+uint64(f.ByteOffset), it.ByteSize)
+	if err != nil {
+		return 0, err
+	}
+	if i < 0 {
+		return 0, fmt.Errorf("field %s is negative", fieldName)
+	}
+	return uint64(i), nil
+}
+
 // peekUintStructField reads a uint in the field fieldName of the struct
 // of type t at addr.  The size of the uint is determined by the field.
 func (s *Server) peekUintStructField(t *dwarf.StructType, addr uint64, fieldName string) (uint64, error) {

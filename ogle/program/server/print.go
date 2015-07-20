@@ -584,12 +584,12 @@ func (p *Printer) printChannelAt(ct *dwarf.ChanType, a uint64) {
 
 	// Print the channel buffer's length (qcount) and capacity (dataqsiz),
 	// if not 0/0.
-	qcount, err := p.server.peekUintStructField(st, a, "qcount")
+	qcount, err := p.server.peekUintOrIntStructField(st, a, "qcount")
 	if err != nil {
 		p.errorf("reading channel: %s", err)
 		return
 	}
-	dataqsiz, err := p.server.peekUintStructField(st, a, "dataqsiz")
+	dataqsiz, err := p.server.peekUintOrIntStructField(st, a, "dataqsiz")
 	if err != nil {
 		p.errorf("reading channel: %s", err)
 		return
@@ -607,24 +607,16 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a uint64) {
 		p.errorf("reading slice: %s", err)
 		return
 	}
-	length, err := p.server.peekIntStructField(&typ.StructType, a, "len")
+	length, err := p.server.peekUintOrIntStructField(&typ.StructType, a, "len")
 	if err != nil {
-		var u uint64
-		u, err = p.server.peekUintStructField(&typ.StructType, a, "len")
-		if err != nil {
-			p.errorf("reading slice: %s", err)
-			return
-		}
-		length = int64(u)
+		p.errorf("reading slice: %s", err)
+		return
 	}
 	// Capacity is not used yet.
-	_, err = p.server.peekIntStructField(&typ.StructType, a, "cap")
+	_, err = p.server.peekUintOrIntStructField(&typ.StructType, a, "cap")
 	if err != nil {
-		_, err = p.server.peekUintStructField(&typ.StructType, a, "cap")
-		if err != nil {
-			p.errorf("reading slice: %s", err)
-			return
-		}
+		p.errorf("reading slice: %s", err)
+		return
 	}
 	elemType := typ.ElemType
 	size, ok := p.sizeof(typ.ElemType)
@@ -632,7 +624,7 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a uint64) {
 		p.errorf("can't determine element size")
 	}
 	p.printf("%s{", typ)
-	for i := int64(0); i < length; i++ {
+	for i := uint64(0); i < length; i++ {
 		if i != 0 {
 			p.printf(", ")
 		}
@@ -649,7 +641,7 @@ func (p *Printer) printStringAt(typ *dwarf.StringType, a uint64) {
 		p.errorf("reading string: %s", err)
 		return
 	}
-	length, err := p.server.peekIntStructField(&typ.StructType, a, "len")
+	length, err := p.server.peekUintOrIntStructField(&typ.StructType, a, "len")
 	if err != nil {
 		p.errorf("reading string: %s", err)
 		return
