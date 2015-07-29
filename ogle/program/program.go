@@ -123,6 +123,12 @@ func (a Array) Element(index uint64) Var {
 	}
 }
 
+// Slice is a Var representing a slice.
+type Slice struct {
+	Array
+	Capacity uint64
+}
+
 // Struct is a Var representing a struct.
 type Struct struct {
 	Fields []StructField

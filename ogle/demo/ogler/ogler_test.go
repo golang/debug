@@ -414,4 +414,23 @@ func testProgram(t *testing.T, prog program.Program) {
 		}
 		return nil
 	})
+
+	checkValue("main.Z_slice", func(val program.Value) error {
+		s, ok := val.(program.Slice)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Slice", val, val)
+		}
+		if s.Len() != 5 {
+			return fmt.Errorf("got slice length %d expected 5", s.Len())
+		}
+		expected := []uint8{115, 108, 105, 99, 101}
+		for i := uint64(0); i < 5; i++ {
+			if v, err := prog.Value(s.Element(i)); err != nil {
+				return fmt.Errorf("reading element %d: %s", i, err)
+			} else if v != expected[i] {
+				return fmt.Errorf("element %d: got %T(%v) want %T(%d)", i, v, v, expected[i], expected[i])
+			}
+		}
+		return nil
+	})
 }
