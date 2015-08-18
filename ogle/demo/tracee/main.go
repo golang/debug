@@ -57,6 +57,7 @@ var (
 	Z_interface_nil       FooInterface
 	Z_map                 map[int8]float32 = map[int8]float32{-21: 3.54321}
 	Z_map_2               map[int16]int8   = map[int16]int8{1024: 1}
+	Z_map_3               map[int16]int8   = map[int16]int8{1024: 1, 512: -1}
 	Z_map_empty           map[int8]float32 = map[int8]float32{}
 	Z_map_nil             map[int8]float32
 	Z_pointer             *FooStruct = &Z_struct
@@ -79,7 +80,7 @@ func foo(x int16, y float32) {
 	fmt.Println(Z_channel, Z_channel_buffered, Z_channel_nil)
 	fmt.Println(Z_func_bar, Z_func_int8_r_int8, Z_func_int8_r_pint8)
 	fmt.Println(Z_interface, Z_interface_nil, Z_interface_typed_nil)
-	fmt.Println(Z_map, Z_map_2, Z_map_empty, Z_map_nil)
+	fmt.Println(Z_map, Z_map_2, Z_map_3, Z_map_empty, Z_map_nil)
 	fmt.Println(Z_pointer, Z_pointer_nil)
 	fmt.Println(Z_slice, Z_slice_2, Z_slice_nil)
 	fmt.Println(Z_string, Z_struct)

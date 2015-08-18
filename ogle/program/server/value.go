@@ -170,6 +170,16 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		return program.Struct{fields}, nil
 	case *dwarf.TypedefType:
 		return s.value(t.Type, addr)
+	case *dwarf.MapType:
+		length, err := s.peekMapLength(t, addr)
+		if err != nil {
+			return nil, err
+		}
+		return program.Map{
+			TypeID:  uint64(t.Common().Offset),
+			Address: addr,
+			Length:  length,
+		}, nil
 		// TODO: more types
 	}
 	return nil, fmt.Errorf("Unsupported type %T", t)

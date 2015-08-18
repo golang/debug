@@ -87,6 +87,10 @@ type Program interface {
 
 	// Value gets the value of a variable by reading the program's memory.
 	Value(v Var) (Value, error)
+
+	// MapElement returns Vars for the key and value of a map element specified by
+	// a 0-based index.
+	MapElement(m Map, index uint64) (Var, Var, error)
 }
 
 // A reference to a variable in a program.
@@ -127,6 +131,13 @@ func (a Array) Element(index uint64) Var {
 type Slice struct {
 	Array
 	Capacity uint64
+}
+
+// Map is a Var representing a map.
+type Map struct {
+	TypeID  uint64
+	Address uint64
+	Length  uint64 // Number of elements in the map.
 }
 
 // Struct is a Var representing a struct.

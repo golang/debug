@@ -246,6 +246,13 @@ func (p *Program) Value(v program.Var) (program.Value, error) {
 	return resp.Value, err
 }
 
+func (p *Program) MapElement(m program.Map, index uint64) (program.Var, program.Var, error) {
+	req := proxyrpc.MapElementRequest{Map: m, Index: index}
+	var resp proxyrpc.MapElementResponse
+	err := p.client.Call("Server.MapElement", &req, &resp)
+	return resp.Key, resp.Value, err
+}
+
 // File implements the program.File interface, providing access
 // to file-like resources associated with the target program.
 type File struct {

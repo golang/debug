@@ -62,6 +62,7 @@ var expectedVars = map[string]string{
 	`main.Z_interface_typed_nil`: `("*main.FooStruct", <nil>)`,
 	`main.Z_map`:                 `map[-21:3.54321]`,
 	`main.Z_map_2`:               `map[1024:1]`,
+	`main.Z_map_3`:               `map[1024:1 512:-1]`,
 	`main.Z_map_empty`:           `map[]`,
 	`main.Z_map_nil`:             `map[]`,
 	`main.Z_pointer`:             `0xX`,
@@ -430,6 +431,73 @@ func testProgram(t *testing.T, prog program.Program) {
 			} else if v != expected[i] {
 				return fmt.Errorf("element %d: got %T(%v) want %T(%d)", i, v, v, expected[i], expected[i])
 			}
+		}
+		return nil
+	})
+
+	checkValue("main.Z_map_empty", func(val program.Value) error {
+		m, ok := val.(program.Map)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Map", val, val)
+		}
+		if m.Length != 0 {
+			return fmt.Errorf("got map length %d expected 0", m.Length)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_map_nil", func(val program.Value) error {
+		m, ok := val.(program.Map)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Map", val, val)
+		}
+		if m.Length != 0 {
+			return fmt.Errorf("got map length %d expected 0", m.Length)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_map_3", func(val program.Value) error {
+		m, ok := val.(program.Map)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Map", val, val)
+		}
+		if m.Length != 2 {
+			return fmt.Errorf("got map length %d expected 2", m.Length)
+		}
+		keyVar0, valVar0, err := prog.MapElement(m, 0)
+		if err != nil {
+			return err
+		}
+		keyVar1, valVar1, err := prog.MapElement(m, 1)
+		if err != nil {
+			return err
+		}
+		key0, err := prog.Value(keyVar0)
+		if err != nil {
+			return err
+		}
+		key1, err := prog.Value(keyVar1)
+		if err != nil {
+			return err
+		}
+		val0, err := prog.Value(valVar0)
+		if err != nil {
+			return err
+		}
+		val1, err := prog.Value(valVar1)
+		if err != nil {
+			return err
+		}
+		// The map should contain 1024,1 and 512,-1 in some order.
+		ok1 := key0 == int16(1024) && val0 == int8(1) && key1 == int16(512) && val1 == int8(-1)
+		ok2 := key1 == int16(1024) && val1 == int8(1) && key0 == int16(512) && val0 == int8(-1)
+		if !ok1 && !ok2 {
+			return fmt.Errorf("got values (%d,%d) and (%d,%d), expected (1024,1) and (512,-1) in some order", key0, val0, key1, val1)
+		}
+		_, _, err = prog.MapElement(m, 2)
+		if err == nil {
+			return fmt.Errorf("MapElement: reading at a bad index succeeded, expected error")
 		}
 		return nil
 	})

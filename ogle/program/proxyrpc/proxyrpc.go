@@ -18,6 +18,7 @@ func init() {
 	gob.Register(program.Array{})
 	gob.Register(program.Struct{})
 	gob.Register(program.Slice{})
+	gob.Register(program.Map{})
 }
 
 // For regularity, each method has a unique Request and a Response type even
@@ -132,4 +133,14 @@ type ValueRequest struct {
 
 type ValueResponse struct {
 	Value program.Value
+}
+
+type MapElementRequest struct {
+	Map   program.Map
+	Index uint64
+}
+
+type MapElementResponse struct {
+	Key   program.Var
+	Value program.Var
 }

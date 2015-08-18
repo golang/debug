@@ -122,21 +122,32 @@ func (s *Server) peekIntStructField(t *dwarf.StructType, addr uint64, fieldName 
 	return s.peekInt(addr+uint64(f.ByteOffset), it.ByteSize)
 }
 
-// peekMapValues reads a map at the given address and calls fn with the addresses for each (key, value) pair.
-// If fn returns false, peekMapValues stops.
-func (s *Server) peekMapValues(t *dwarf.MapType, a uint64, fn func(keyAddr, valAddr uint64, keyType, valType dwarf.Type) bool) error {
+// peekMapLocationAndType returns the address and DWARF type of the underlying
+// struct of a map variable.
+func (s *Server) peekMapLocationAndType(t *dwarf.MapType, a uint64) (uint64, *dwarf.StructType, error) {
+	// Maps are pointers to structs.
 	pt, ok := t.Type.(*dwarf.PtrType)
 	if !ok {
-		return errors.New("bad map type: not a pointer")
+		return 0, nil, errors.New("bad map type: not a pointer")
 	}
 	st, ok := pt.Type.(*dwarf.StructType)
 	if !ok {
-		return errors.New("bad map type: not a pointer to a struct")
+		return 0, nil, errors.New("bad map type: not a pointer to a struct")
 	}
 	// a is the address of a pointer to a struct.  Get the pointer's value.
 	a, err := s.peekPtr(a)
 	if err != nil {
-		return fmt.Errorf("reading map pointer: %s", err)
+		return 0, nil, fmt.Errorf("reading map pointer: %s", err)
+	}
+	return a, st, nil
+}
+
+// peekMapValues reads a map at the given address and calls fn with the addresses for each (key, value) pair.
+// If fn returns false, peekMapValues stops.
+func (s *Server) peekMapValues(t *dwarf.MapType, a uint64, fn func(keyAddr, valAddr uint64, keyType, valType dwarf.Type) bool) error {
+	a, st, err := s.peekMapLocationAndType(t, a)
+	if err != nil {
+		return err
 	}
 	if a == 0 {
 		// The pointer was nil, so the map is empty.
@@ -246,4 +257,21 @@ func (s *Server) peekMapValues(t *dwarf.MapType, a uint64, fn func(keyAddr, valA
 	}
 
 	return nil
+}
+
+// peekMapLength returns the number of elements in a map at the given address.
+func (s *Server) peekMapLength(t *dwarf.MapType, a uint64) (uint64, error) {
+	a, st, err := s.peekMapLocationAndType(t, a)
+	if err != nil {
+		return 0, err
+	}
+	if a == 0 {
+		// The pointer was nil, so the map is empty.
+		return 0, nil
+	}
+	length, err := s.peekUintOrIntStructField(st, a, "count")
+	if err != nil {
+		return 0, fmt.Errorf("reading map: %s", err)
+	}
+	return uint64(length), nil
 }

@@ -172,6 +172,8 @@ func (s *Server) dispatch(c call) {
 		c.errc <- s.handleVarByName(req, c.resp.(*proxyrpc.VarByNameResponse))
 	case *proxyrpc.ValueRequest:
 		c.errc <- s.handleValue(req, c.resp.(*proxyrpc.ValueResponse))
+	case *proxyrpc.MapElementRequest:
+		c.errc <- s.handleMapElement(req, c.resp.(*proxyrpc.MapElementResponse))
 	default:
 		panic(fmt.Sprintf("unexpected call request type %T", c.req))
 	}
@@ -781,4 +783,40 @@ func (s *Server) handleValue(req *proxyrpc.ValueRequest, resp *proxyrpc.ValueRes
 	}
 	resp.Value, err = s.value(t, req.Var.Address)
 	return err
+}
+
+func (s *Server) MapElement(req *proxyrpc.MapElementRequest, resp *proxyrpc.MapElementResponse) error {
+	return s.call(s.otherc, req, resp)
+}
+
+func (s *Server) handleMapElement(req *proxyrpc.MapElementRequest, resp *proxyrpc.MapElementResponse) error {
+	t, err := s.dwarfData.Type(dwarf.Offset(req.Map.TypeID))
+	if err != nil {
+		return err
+	}
+	m, ok := t.(*dwarf.MapType)
+	if !ok {
+		return fmt.Errorf("variable is not a map")
+	}
+	var count uint64
+	// fn will be called for each element of the map.
+	// When we reach the requested element, we fill in *resp and stop.
+	// TODO: cache locations of elements.
+	fn := func(keyAddr, valAddr uint64, keyType, valType dwarf.Type) bool {
+		count++
+		if count == req.Index+1 {
+			resp.Key = program.Var{TypeID: uint64(keyType.Common().Offset), Address: keyAddr}
+			resp.Value = program.Var{TypeID: uint64(valType.Common().Offset), Address: valAddr}
+			return false
+		}
+		return true
+	}
+	if err := s.peekMapValues(m, req.Map.Address, fn); err != nil {
+		return err
+	}
+	if count <= req.Index {
+		// There weren't enough elements.
+		return fmt.Errorf("map has no element %d", req.Index)
+	}
+	return nil
 }
