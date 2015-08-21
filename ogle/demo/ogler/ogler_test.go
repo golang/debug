@@ -501,4 +501,19 @@ func testProgram(t *testing.T, prog program.Program) {
 		}
 		return nil
 	})
+
+	checkValue("main.Z_string", func(val program.Value) error {
+		s, ok := val.(program.String)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected String", val, val)
+		}
+		if s.Length != 12 {
+			return fmt.Errorf("got string length %d expected 12", s.Length)
+		}
+		expected := "I'm a string"
+		if s.String != expected {
+			return fmt.Errorf("got %s expected %s", s.String, expected)
+		}
+		return nil
+	})
 }

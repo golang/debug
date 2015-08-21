@@ -133,6 +133,15 @@ type Slice struct {
 	Capacity uint64
 }
 
+// String is a Var representing a string.
+// TODO: a method to access more of a truncated string.
+type String struct {
+	// Length contains the length of the remote string, in bytes.
+	Length uint64
+	// String contains the string itself; it may be truncated to fewer bytes than the value of the Length field.
+	String string
+}
+
 // Map is a Var representing a map.
 type Map struct {
 	TypeID  uint64

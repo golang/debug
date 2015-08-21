@@ -19,6 +19,7 @@ func init() {
 	gob.Register(program.Struct{})
 	gob.Register(program.Slice{})
 	gob.Register(program.Map{})
+	gob.Register(program.String{})
 }
 
 // For regularity, each method has a unique Request and a Response type even

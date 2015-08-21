@@ -180,6 +180,27 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 			Address: addr,
 			Length:  length,
 		}, nil
+	case *dwarf.StringType:
+		ptr, err := s.peekPtrStructField(&t.StructType, addr, "str")
+		if err != nil {
+			return nil, fmt.Errorf("reading string location: %s", err)
+		}
+		length, err := s.peekUintOrIntStructField(&t.StructType, addr, "len")
+		if err != nil {
+			return nil, fmt.Errorf("reading string length: %s", err)
+		}
+
+		const maxStringSize = 256
+
+		n := length
+		if n > maxStringSize {
+			n = maxStringSize
+		}
+		tmp := make([]byte, n)
+		if err := s.peekBytes(ptr, tmp); err != nil {
+			return nil, fmt.Errorf("reading string contents: %s", err)
+		}
+		return program.String{Length: length, String: string(tmp)}, nil
 		// TODO: more types
 	}
 	return nil, fmt.Errorf("Unsupported type %T", t)
