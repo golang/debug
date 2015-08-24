@@ -201,6 +201,56 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 			return nil, fmt.Errorf("reading string contents: %s", err)
 		}
 		return program.String{Length: length, String: string(tmp)}, nil
+	case *dwarf.ChanType:
+		pt, ok := t.TypedefType.Type.(*dwarf.PtrType)
+		if !ok {
+			return nil, fmt.Errorf("reading channel: type is not a pointer")
+		}
+		st, ok := pt.Type.(*dwarf.StructType)
+		if !ok {
+			return nil, fmt.Errorf("reading channel: type is not a pointer to struct")
+		}
+
+		a, err := s.peekPtr(addr)
+		if err != nil {
+			return nil, fmt.Errorf("reading channel pointer: %s", err)
+		}
+		if a == 0 {
+			// This channel is nil.
+			return program.Channel{
+				ElementTypeID: uint64(t.ElemType.Common().Offset),
+				Buffer:        0,
+				Length:        0,
+				Capacity:      0,
+				Stride:        uint64(t.ElemType.Common().ByteSize),
+				BufferStart:   0,
+			}, nil
+		}
+
+		buf, err := s.peekPtrStructField(st, a, "buf")
+		if err != nil {
+			return nil, fmt.Errorf("reading channel buffer location: %s", err)
+		}
+		qcount, err := s.peekUintOrIntStructField(st, a, "qcount")
+		if err != nil {
+			return nil, fmt.Errorf("reading channel length: %s", err)
+		}
+		capacity, err := s.peekUintOrIntStructField(st, a, "dataqsiz")
+		if err != nil {
+			return nil, fmt.Errorf("reading channel capacity: %s", err)
+		}
+		recvx, err := s.peekUintOrIntStructField(st, a, "recvx")
+		if err != nil {
+			return nil, fmt.Errorf("reading channel buffer index: %s", err)
+		}
+		return program.Channel{
+			ElementTypeID: uint64(t.ElemType.Common().Offset),
+			Buffer:        buf,
+			Length:        qcount,
+			Capacity:      capacity,
+			Stride:        uint64(t.ElemType.Common().ByteSize),
+			BufferStart:   recvx,
+		}, nil
 		// TODO: more types
 	}
 	return nil, fmt.Errorf("Unsupported type %T", t)

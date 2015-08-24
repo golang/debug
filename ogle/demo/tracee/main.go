@@ -46,9 +46,10 @@ var (
 	Z_array               [5]int8     = [5]int8{-121, 121, 3, 2, 1}
 	Z_array_empty         [0]int8     = [0]int8{}
 	Z_array_of_empties    [2]struct{} = [2]struct{}{struct{}{}, struct{}{}}
-	Z_channel             chan int    = make(chan int)
-	Z_channel_buffered    chan int    = make(chan int, 10)
-	Z_channel_nil         chan int
+	Z_channel             chan int16  = make(chan int16)
+	Z_channel_2           chan int16  = make(chan int16)
+	Z_channel_buffered    chan int16  = make(chan int16, 10)
+	Z_channel_nil         chan int16
 	Z_func_bar                         = (*FooStruct).Bar
 	Z_func_int8_r_int8                 = func(x int8) int8 { return x + 1 }
 	Z_func_int8_r_pint8                = func(x int8) *int8 { y := x + 1; return &y }
@@ -102,12 +103,30 @@ func bar() {
 	fmt.Print()
 }
 
+func populateChannels() {
+	go func() {
+		Z_channel_2 <- 8
+	}()
+	go func() {
+		for i := int16(0); i < 14; i++ {
+			Z_channel_buffered <- i
+		}
+	}()
+	go func() {
+		for i := 0; i < 8; i++ {
+			<-Z_channel_buffered
+		}
+	}()
+	time.Sleep(time.Second / 20)
+}
+
 func main() {
 	args := os.Args[1:]
 	expected := []string{"some", "arguments"}
 	if len(args) != 2 || args[0] != expected[0] || args[1] != expected[1] {
 		log.Fatalf("got command-line args %v, expected %v", args, expected)
 	}
+	populateChannels()
 	for ; ; time.Sleep(2 * time.Second) {
 		bar()
 	}

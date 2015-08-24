@@ -41,9 +41,10 @@ var expectedVars = map[string]string{
 	`main.Z_array_empty`:         `[0]int8{}`,
 	`main.Z_bool_false`:          `false`,
 	`main.Z_bool_true`:           `true`,
-	`main.Z_channel`:             `(chan int 0xX)`,
-	`main.Z_channel_buffered`:    `(chan int 0xX [0/10])`,
-	`main.Z_channel_nil`:         `(chan int <nil>)`,
+	`main.Z_channel`:             `(chan int16 0xX)`,
+	`main.Z_channel_2`:           `(chan int16 0xX)`,
+	`main.Z_channel_buffered`:    `(chan int16 0xX [6/10])`,
+	`main.Z_channel_nil`:         `(chan int16 <nil>)`,
 	`main.Z_array_of_empties`:    `[2]struct struct {}{struct struct {} {}, (struct struct {} 0xX)}`,
 	`main.Z_complex128`:          `(1.987654321-2.987654321i)`,
 	`main.Z_complex64`:           `(1.54321+2.54321i)`,
@@ -513,6 +514,89 @@ func testProgram(t *testing.T, prog program.Program) {
 		expected := "I'm a string"
 		if s.String != expected {
 			return fmt.Errorf("got %s expected %s", s.String, expected)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_channel", func(val program.Value) error {
+		c, ok := val.(program.Channel)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Channel", val, val)
+		}
+		if c.Buffer == 0 {
+			return fmt.Errorf("got buffer address %d expected nonzero", c.Buffer)
+		}
+		if c.Length != 0 {
+			return fmt.Errorf("got length %d expected 0", c.Length)
+		}
+		if c.Capacity != 0 {
+			return fmt.Errorf("got capacity %d expected 0", c.Capacity)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_channel_2", func(val program.Value) error {
+		c, ok := val.(program.Channel)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Channel", val, val)
+		}
+		if c.Buffer == 0 {
+			return fmt.Errorf("got buffer address %d expected nonzero", c.Buffer)
+		}
+		if c.Length != 0 {
+			return fmt.Errorf("got length %d expected 0", c.Length)
+		}
+		if c.Capacity != 0 {
+			return fmt.Errorf("got capacity %d expected 0", c.Capacity)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_channel_nil", func(val program.Value) error {
+		c, ok := val.(program.Channel)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Channel", val, val)
+		}
+		if c.Buffer != 0 {
+			return fmt.Errorf("got buffer address %d expected 0", c.Buffer)
+		}
+		if c.Length != 0 {
+			return fmt.Errorf("got length %d expected 0", c.Length)
+		}
+		if c.Capacity != 0 {
+			return fmt.Errorf("got capacity %d expected 0", c.Capacity)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_channel_buffered", func(val program.Value) error {
+		c, ok := val.(program.Channel)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Channel", val, val)
+		}
+		if c.Buffer == 0 {
+			return fmt.Errorf("got buffer address %d expected nonzero", c.Buffer)
+		}
+		if c.Length != 6 {
+			return fmt.Errorf("got length %d expected 6", c.Length)
+		}
+		if c.Capacity != 10 {
+			return fmt.Errorf("got capacity %d expected 10", c.Capacity)
+		}
+		if c.Stride != 2 {
+			return fmt.Errorf("got stride %d expected 2", c.Stride)
+		}
+		expected := []int16{8, 9, 10, 11, 12, 13}
+		for i := uint64(0); i < 6; i++ {
+			if v, err := prog.Value(c.Element(i)); err != nil {
+				return fmt.Errorf("reading element %d: %s", i, err)
+			} else if v != expected[i] {
+				return fmt.Errorf("element %d: got %T(%v) want %T(%d)", i, v, v, expected[i], expected[i])
+			}
+		}
+		v := c.Element(6)
+		if v.Address != 0 {
+			return fmt.Errorf("invalid element returned Var with address %d, expected 0", v.Address)
 		}
 		return nil
 	})

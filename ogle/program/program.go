@@ -160,6 +160,41 @@ type StructField struct {
 	Var  Var
 }
 
+// Channel is a Var representing a channel.
+type Channel struct {
+	ElementTypeID uint64
+	Buffer        uint64 // Location of the buffer; zero for nil and unbuffered channels.
+	Length        uint64 // Number of elements stored in the channel buffer.
+	Capacity      uint64 // Capacity of the buffer; zero for unbuffered channels.
+	Stride        uint64 // Number of bytes between buffer entries.
+	BufferStart   uint64 // Index in the buffer of the element at the head of the queue.
+}
+
+// Element returns a Var referring to the given element of the channel's queue.
+// If the channel is unbuffered, nil, or if the index is too large, returns a Var with Address == 0.
+func (m Channel) Element(index uint64) Var {
+	if index >= m.Length {
+		return Var{
+			TypeID:  m.ElementTypeID,
+			Address: 0,
+		}
+	}
+	if index < m.Capacity-m.BufferStart {
+		// The element is in the part of the queue that occurs later in the buffer
+		// than the head of the queue.
+		return Var{
+			TypeID:  m.ElementTypeID,
+			Address: m.Buffer + (m.BufferStart+index)*m.Stride,
+		}
+	}
+	// The element is in the part of the queue that has wrapped around to the
+	// start of the buffer.
+	return Var{
+		TypeID:  m.ElementTypeID,
+		Address: m.Buffer + (m.BufferStart+index-m.Capacity)*m.Stride,
+	}
+}
+
 // The File interface provides access to file-like resources in the program.
 // It implements only ReaderAt and WriterAt, not Reader and Writer, because
 // random access is a far more common pattern for things like symbol tables,
