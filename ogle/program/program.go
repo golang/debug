@@ -103,10 +103,15 @@ type Var struct {
 // A value read from a remote program.
 type Value interface{}
 
-// Pointer is a Var representing a pointer.
-type Pointer Var
+// Pointer is a Value representing a pointer.
+// Note that the TypeID field will be the type of the variable being pointed to,
+// not the type of this pointer.
+type Pointer struct {
+	TypeID  uint64 // A type identifier, opaque to the user.
+	Address uint64 // The address of the variable.
+}
 
-// Array is a Var representing an array.
+// Array is a Value representing an array.
 type Array struct {
 	ElementTypeID uint64
 	Address       uint64
@@ -127,13 +132,13 @@ func (a Array) Element(index uint64) Var {
 	}
 }
 
-// Slice is a Var representing a slice.
+// Slice is a Value representing a slice.
 type Slice struct {
 	Array
 	Capacity uint64
 }
 
-// String is a Var representing a string.
+// String is a Value representing a string.
 // TODO: a method to access more of a truncated string.
 type String struct {
 	// Length contains the length of the remote string, in bytes.
@@ -142,14 +147,14 @@ type String struct {
 	String string
 }
 
-// Map is a Var representing a map.
+// Map is a Value representing a map.
 type Map struct {
 	TypeID  uint64
 	Address uint64
 	Length  uint64 // Number of elements in the map.
 }
 
-// Struct is a Var representing a struct.
+// Struct is a Value representing a struct.
 type Struct struct {
 	Fields []StructField
 }
@@ -160,10 +165,11 @@ type StructField struct {
 	Var  Var
 }
 
-// Channel is a Var representing a channel.
+// Channel is a Value representing a channel.
 type Channel struct {
 	ElementTypeID uint64
-	Buffer        uint64 // Location of the buffer; zero for nil and unbuffered channels.
+	Address       uint64 // Location of the channel struct in memory.
+	Buffer        uint64 // Location of the buffer; zero for nil channels.
 	Length        uint64 // Number of elements stored in the channel buffer.
 	Capacity      uint64 // Capacity of the buffer; zero for unbuffered channels.
 	Stride        uint64 // Number of bytes between buffer entries.
@@ -194,6 +200,14 @@ func (m Channel) Element(index uint64) Var {
 		Address: m.Buffer + (m.BufferStart+index-m.Capacity)*m.Stride,
 	}
 }
+
+// Func is a Value representing a func.
+type Func struct {
+	Address uint64
+}
+
+// Interface is a Value representing an interface.
+type Interface struct{}
 
 // The File interface provides access to file-like resources in the program.
 // It implements only ReaderAt and WriterAt, not Reader and Writer, because

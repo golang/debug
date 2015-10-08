@@ -53,6 +53,7 @@ var expectedVars = map[string]string{
 	`main.Z_func_int8_r_int8`:    `func(int8, *int8) void @0xX `,
 	`main.Z_func_int8_r_pint8`:   `func(int8, **int8) void @0xX `,
 	`main.Z_func_bar`:            `func(*main.FooStruct) void @0xX `,
+	`main.Z_func_nil`:            `func(int8, *int8) void @0xX `,
 	`main.Z_int`:                 `-21`,
 	`main.Z_int16`:               `-32321`,
 	`main.Z_int32`:               `-1987654321`,
@@ -597,6 +598,28 @@ func testProgram(t *testing.T, prog program.Program) {
 		v := c.Element(6)
 		if v.Address != 0 {
 			return fmt.Errorf("invalid element returned Var with address %d, expected 0", v.Address)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_func_bar", func(val program.Value) error {
+		f, ok := val.(program.Func)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Func", val, val)
+		}
+		if f.Address == 0 {
+			return fmt.Errorf("got func address %d expected nonzero", f.Address)
+		}
+		return nil
+	})
+
+	checkValue("main.Z_func_nil", func(val program.Value) error {
+		f, ok := val.(program.Func)
+		if !ok {
+			return fmt.Errorf("got %T(%v) expected Func", val, val)
+		}
+		if f.Address != 0 {
+			return fmt.Errorf("got func address %d expected zero", f.Address)
 		}
 		return nil
 	})

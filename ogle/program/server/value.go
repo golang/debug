@@ -219,6 +219,7 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 			// This channel is nil.
 			return program.Channel{
 				ElementTypeID: uint64(t.ElemType.Common().Offset),
+				Address:       0,
 				Buffer:        0,
 				Length:        0,
 				Capacity:      0,
@@ -245,12 +246,21 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		}
 		return program.Channel{
 			ElementTypeID: uint64(t.ElemType.Common().Offset),
+			Address:       a,
 			Buffer:        buf,
 			Length:        qcount,
 			Capacity:      capacity,
 			Stride:        uint64(t.ElemType.Common().ByteSize),
 			BufferStart:   recvx,
 		}, nil
+	case *dwarf.FuncType:
+		a, err := s.peekPtr(addr)
+		if err != nil {
+			return nil, fmt.Errorf("reading func: %s", err)
+		}
+		return program.Func{Address: a}, nil
+	case *dwarf.InterfaceType:
+		return program.Interface{}, nil
 		// TODO: more types
 	}
 	return nil, fmt.Errorf("Unsupported type %T", t)

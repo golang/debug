@@ -13,7 +13,7 @@ import (
 )
 
 func init() {
-	// Register implementations of program.Var with gob.
+	// Register implementations of program.Value with gob.
 	gob.Register(program.Pointer{})
 	gob.Register(program.Array{})
 	gob.Register(program.Struct{})
@@ -21,6 +21,8 @@ func init() {
 	gob.Register(program.Map{})
 	gob.Register(program.String{})
 	gob.Register(program.Channel{})
+	gob.Register(program.Func{})
+	gob.Register(program.Interface{})
 }
 
 // For regularity, each method has a unique Request and a Response type even

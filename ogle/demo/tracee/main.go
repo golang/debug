@@ -50,11 +50,12 @@ var (
 	Z_channel_2           chan int16  = make(chan int16)
 	Z_channel_buffered    chan int16  = make(chan int16, 10)
 	Z_channel_nil         chan int16
-	Z_func_bar                         = (*FooStruct).Bar
-	Z_func_int8_r_int8                 = func(x int8) int8 { return x + 1 }
-	Z_func_int8_r_pint8                = func(x int8) *int8 { y := x + 1; return &y }
-	Z_interface           FooInterface = &Z_struct
-	Z_interface_typed_nil FooInterface = Z_pointer_nil
+	Z_func_bar                              = (*FooStruct).Bar
+	Z_func_int8_r_int8                      = func(x int8) int8 { return x + 1 }
+	Z_func_int8_r_pint8                     = func(x int8) *int8 { y := x + 1; return &y }
+	Z_func_nil            func(x int8) int8 = nil
+	Z_interface           FooInterface      = &Z_struct
+	Z_interface_typed_nil FooInterface      = Z_pointer_nil
 	Z_interface_nil       FooInterface
 	Z_map                 map[int8]float32 = map[int8]float32{-21: 3.54321}
 	Z_map_2               map[int16]int8   = map[int16]int8{1024: 1}
@@ -79,7 +80,7 @@ func foo(x int16, y float32) {
 	fmt.Println(Z_float32, Z_float64, Z_complex64, Z_complex128)
 	fmt.Println(Z_array, Z_array_empty, Z_array_of_empties)
 	fmt.Println(Z_channel, Z_channel_buffered, Z_channel_nil)
-	fmt.Println(Z_func_bar, Z_func_int8_r_int8, Z_func_int8_r_pint8)
+	fmt.Println(Z_func_bar, Z_func_int8_r_int8, Z_func_int8_r_pint8, Z_func_nil)
 	fmt.Println(Z_interface, Z_interface_nil, Z_interface_typed_nil)
 	fmt.Println(Z_map, Z_map_2, Z_map_3, Z_map_empty, Z_map_nil)
 	fmt.Println(Z_pointer, Z_pointer_nil)
