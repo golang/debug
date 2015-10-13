@@ -63,6 +63,7 @@ type Program interface {
 	// Eval evaluates the expression (typically an address) and returns
 	// its string representation(s). Multivalued expressions such as
 	// matches for regular expressions return multiple values.
+	// TODO: change this to multiple functions with more specific names.
 	// Syntax:
 	//	re:regexp
 	//		Returns a list of symbol names that match the expression
@@ -76,6 +77,19 @@ type Program interface {
 	//		Returns a one-element list holding the name of the
 	//		symbol ("main.foo") at that address (hex, octal, decimal).
 	Eval(expr string) ([]string, error)
+
+	// Evaluate evaluates an expression.  Accepts a subset of Go expression syntax:
+	// basic literals, identifiers, parenthesized expressions, and most operators.
+	// Only the len function call is available.
+	//
+	// The expression can refer to local variables and function parameters of the
+	// function where the program is stopped.
+	//
+	// On success, the type of the value returned will be one of:
+	// int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64,
+	// complex64, complex128, bool, Pointer, Array, Slice, String, Map, Struct,
+	// Channel, Func, or Interface.
+	Evaluate(e string) (Value, error)
 
 	// Frames returns up to count stack frames from where the program
 	// is currently stopped.

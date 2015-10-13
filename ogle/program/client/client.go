@@ -223,6 +223,15 @@ func (p *Program) Eval(expr string) ([]string, error) {
 	return resp.Result, err
 }
 
+func (p *Program) Evaluate(e string) (program.Value, error) {
+	req := proxyrpc.EvaluateRequest{
+		Expression: e,
+	}
+	var resp proxyrpc.EvaluateResponse
+	err := p.client.Call("Server.Evaluate", &req, &resp)
+	return resp.Result, err
+}
+
 func (p *Program) Frames(count int) ([]program.Frame, error) {
 	req := proxyrpc.FramesRequest{
 		Count: count,

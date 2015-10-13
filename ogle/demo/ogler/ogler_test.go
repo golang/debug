@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"reflect"
 	"testing"
 
 	"golang.org/x/debug/ogle/program"
@@ -36,6 +37,7 @@ var expectedVarValues = map[string]interface{}{
 	`main.Z_uint8`:      uint8(231),
 }
 
+// TODO: the string forms of some types we're testing aren't stable
 var expectedVars = map[string]string{
 	`main.Z_array`:               `[5]int8{-121, 121, 3, 2, 1}`,
 	`main.Z_array_empty`:         `[0]int8{}`,
@@ -52,13 +54,14 @@ var expectedVars = map[string]string{
 	`main.Z_float64`:             `1.987654321`,
 	`main.Z_func_int8_r_int8`:    `func(int8, *int8) void @0xX `,
 	`main.Z_func_int8_r_pint8`:   `func(int8, **int8) void @0xX `,
-	`main.Z_func_bar`:            `func(*main.FooStruct) void @0xX `,
+	`main.Z_func_bar`:            `func(*struct main.FooStruct) void @0xX `,
 	`main.Z_func_nil`:            `func(int8, *int8) void @0xX `,
 	`main.Z_int`:                 `-21`,
 	`main.Z_int16`:               `-32321`,
 	`main.Z_int32`:               `-1987654321`,
 	`main.Z_int64`:               `-9012345678987654321`,
 	`main.Z_int8`:                `-121`,
+	`main.Z_int_typedef`:         `88`,
 	`main.Z_interface`:           `("*main.FooStruct", 0xX)`,
 	`main.Z_interface_nil`:       `(<nil>, <nil>)`,
 	`main.Z_interface_typed_nil`: `("*main.FooStruct", <nil>)`,
@@ -82,6 +85,115 @@ var expectedVars = map[string]string{
 	`main.Z_uintptr`:             `21`,
 	`main.Z_unsafe_pointer`:      `0xX`,
 	`main.Z_unsafe_pointer_nil`:  `0x0`,
+}
+
+// expectedEvaluate contains expected results of the program.Evaluate function.
+// A nil value indicates that an error is expected.
+var expectedEvaluate = map[string]program.Value{
+	`x`:                         int16(42),
+	`local_array`:               program.Array{42, 42, 5, 8},
+	`local_bool_false`:          false,
+	`local_bool_true`:           true,
+	`local_channel`:             program.Channel{42, 42, 42, 0, 0, 2, 0},
+	`local_channel_buffered`:    program.Channel{42, 42, 42, 6, 10, 2, 8},
+	`local_channel_nil`:         program.Channel{42, 0, 0, 0, 0, 2, 0},
+	`local_complex128`:          complex128(1.987654321 - 2.987654321i),
+	`local_complex64`:           complex64(1.54321 + 2.54321i),
+	`local_float32`:             float32(1.54321),
+	`local_float64`:             float64(1.987654321),
+	`local_func_int8_r_int8`:    program.Func{42},
+	`local_func_int8_r_pint8`:   program.Func{42},
+	`local_func_bar`:            program.Func{42},
+	`local_func_nil`:            program.Func{0},
+	`local_int`:                 -21,
+	`local_int16`:               int16(-32321),
+	`local_int32`:               int32(-1987654321),
+	`local_int64`:               int64(-9012345678987654321),
+	`local_int8`:                int8(-121),
+	`local_int_typedef`:         int16(88),
+	`local_interface`:           program.Interface{},
+	`local_interface_nil`:       program.Interface{},
+	`local_interface_typed_nil`: program.Interface{},
+	`local_map`:                 program.Map{42, 42, 1},
+	`local_map_2`:               program.Map{42, 42, 1},
+	`local_map_3`:               program.Map{42, 42, 2},
+	`local_map_empty`:           program.Map{42, 42, 0},
+	`local_map_nil`:             program.Map{42, 42, 0},
+	`local_pointer`:             program.Pointer{42, 42},
+	`local_pointer_nil`:         program.Pointer{42, 0},
+	`local_slice`:               program.Slice{program.Array{42, 42, 5, 8}, 5},
+	`local_slice_2`:             program.Slice{program.Array{42, 42, 2, 8}, 5},
+	`local_slice_nil`:           program.Slice{program.Array{42, 0, 0, 8}, 0},
+	`local_string`:              program.String{12, `I'm a string`},
+	`local_struct`:              program.Struct{[]program.StructField{{"a", program.Var{}}, {"b", program.Var{}}}},
+	`local_uint`:                uint(21),
+	`local_uint16`:              uint16(54321),
+	`local_uint32`:              uint32(3217654321),
+	`local_uint64`:              uint64(12345678900987654321),
+	`local_uint8`:               uint8(231),
+	`local_uintptr`:             uint(21),
+	`local_unsafe_pointer`:      program.Pointer{0, 42},
+	`local_unsafe_pointer_nil`:  program.Pointer{0, 0},
+	`x + 5`:                     int16(47),
+	`x - 5`:                     int16(37),
+	`x / 5`:                     int16(8),
+	`x % 5`:                     int16(2),
+	`x & 2`:                     int16(2),
+	`x | 1`:                     int16(43),
+	`x ^ 3`:                     int16(41),
+	`5 + x`:                     int16(47),
+	`5 - x`:                     int16(-37),
+	`100 / x`:                   int16(2),
+	`100 % x`:                   int16(16),
+	`2 & x`:                     int16(2),
+	`1 | x`:                     int16(43),
+	`3 ^ x`:                     int16(41),
+	`12`:                        12,
+	`+42`:                       42,
+	`23i`:                       23i,
+	`34.0`:                      34.0,
+	`34.5`:                      34.5,
+	`1e5`:                       100000.0,
+	`0x42`:                      66,
+	`'c'`:                       'c',
+	`"de"`:                      program.String{2, `de`},
+	"`ef`":                      program.String{2, `ef`},
+	`"de" + "fg"`:               program.String{4, `defg`},
+	`/* comment */ -5`:          -5,
+	`false`:                     false,
+	`true`:                      true,
+	`!false`:                    true,
+	`!true`:                     false,
+	`5 + 5`:                     10,
+	`true || false`:             true,
+	`false || false`:            false,
+	`true && false`:             false,
+	`true && true`:              true,
+	`!(5 > 8)`:                  true,
+	`10 + 'a'`:                  'k',
+	`10 + 10.5`:                 20.5,
+	`10 + 10.5i`:                10 + 10.5i,
+	`'a' + 10.5`:                107.5,
+	`'a' + 10.5i`:               97 + 10.5i,
+	`10.5 + 20.5i`:              10.5 + 20.5i,
+	`10 * 20`:                   200,
+	`10.0 - 20.5`:               -10.5,
+	`(6 + 8i) * 4`:              24 + 32i,
+	`(6 + 8i) * (1 + 1i)`:       -2 + 14i,
+	`(6 + 8i) * (6 - 8i)`:       complex128(100),
+	`(6 + 8i) / (3 + 4i)`:       complex128(2),
+	`local_string + "!"`:        program.String{13, `I'm a string!`},
+	`5 + false`:                 nil,
+	``:                          nil,
+	`x + ""`:                    nil,
+	`x / 0`:                     nil,
+	`0 / 0`:                     nil,
+	`'a' / ('a'-'a')`:           nil,
+	`0.0 / 0.0`:                 nil,
+	`3i / 0.0`:                  nil,
+	`x % 0`:                     nil,
+	`0 % 0`:                     nil,
+	`'a' % ('a'-'a')`:           nil,
 }
 
 func isHex(r uint8) bool {
@@ -269,8 +381,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		log.Fatalf("DeleteBreakpoints: %v", err)
 	}
 
-	// Set a breakpoint at line 80, resume, and check we stopped there.
-	pcsLine80, err := prog.BreakpointAtLine("tracee/main.go", 80)
+	// Set a breakpoint at line 125, resume, and check we stopped there.
+	pcsLine125, err := prog.BreakpointAtLine("tracee/main.go", 125)
 	if err != nil {
 		t.Fatal("BreakpointAtLine:", err)
 	}
@@ -286,14 +398,192 @@ func testProgram(t *testing.T, prog program.Program) {
 		}
 		return false
 	}
-	if !stoppedAt(pcsLine80) {
-		t.Errorf("stopped at %X; expected one of %X.", status.PC, pcsLine80)
+	if !stoppedAt(pcsLine125) {
+		t.Errorf("stopped at %X; expected one of %X.", status.PC, pcsLine125)
 	}
 
-	// Remove the breakpoint at line 80, set a breakpoint at main.f1 and main.f2,
+	for k, v := range expectedEvaluate {
+		val, err := prog.Evaluate(k)
+		if v == nil {
+			if err == nil {
+				t.Errorf("got Evaluate(%s) = %v, expected error", k, val)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("Evaluate(%s): got error %s, expected %v", k, err, v)
+			continue
+		}
+		typ := reflect.TypeOf(v)
+		if typ != reflect.TypeOf(val) && typ != reflect.TypeOf(int(0)) && typ != reflect.TypeOf(uint(0)) {
+			t.Errorf("got Evaluate(%s) = %T(%v), expected %T(%v)", k, val, val, v, v)
+			continue
+		}
+
+		// For types with fields like Address, TypeID, etc., we can't know the exact
+		// value, so we only test whether those fields are zero or not.
+		switch v := v.(type) {
+		default:
+			if v != val {
+				t.Errorf("got Evaluate(%s) = %T(%v), expected %T(%v)", k, val, val, v, v)
+			}
+		case program.Array:
+			val := val.(program.Array)
+			if v.ElementTypeID == 0 && val.ElementTypeID != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero ElementTypeID", k, val)
+			}
+			if v.ElementTypeID != 0 && val.ElementTypeID == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero ElementTypeID", k, val)
+			}
+			if v.Address == 0 && val.Address != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero Address", k, val)
+			}
+			if v.Address != 0 && val.Address == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
+			}
+		case program.Slice:
+			val := val.(program.Slice)
+			if v.ElementTypeID == 0 && val.ElementTypeID != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero ElementTypeID", k, val)
+			}
+			if v.ElementTypeID != 0 && val.ElementTypeID == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero ElementTypeID", k, val)
+			}
+			if v.Address == 0 && val.Address != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero Address", k, val)
+			}
+			if v.Address != 0 && val.Address == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
+			}
+		case program.Map:
+			val := val.(program.Map)
+			if v.TypeID == 0 && val.TypeID != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero TypeID", k, val)
+			}
+			if v.TypeID != 0 && val.TypeID == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero TypeID", k, val)
+			}
+			if v.Address == 0 && val.Address != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero Address", k, val)
+			}
+			if v.Address != 0 && val.Address == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
+			}
+		case program.Pointer:
+			val := val.(program.Pointer)
+			if v.TypeID == 0 && val.TypeID != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero TypeID", k, val)
+			}
+			if v.TypeID != 0 && val.TypeID == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero TypeID", k, val)
+			}
+			if v.Address == 0 && val.Address != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero Address", k, val)
+			}
+			if v.Address != 0 && val.Address == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
+			}
+		case program.Channel:
+			val := val.(program.Channel)
+			if v.ElementTypeID == 0 && val.ElementTypeID != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero ElementTypeID", k, val)
+			}
+			if v.ElementTypeID != 0 && val.ElementTypeID == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero ElementTypeID", k, val)
+			}
+			if v.Address == 0 && val.Address != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero Address", k, val)
+			}
+			if v.Address != 0 && val.Address == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
+			}
+			if v.Buffer == 0 && val.Buffer != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero Buffer", k, val)
+			}
+			if v.Buffer != 0 && val.Buffer == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Buffer", k, val)
+			}
+		case program.Struct:
+			val := val.(program.Struct)
+			if len(v.Fields) != len(val.Fields) {
+				t.Errorf("got Evaluate(%s) = %T(%v), expected %T(%v)", k, val, val, v, v)
+				break
+			}
+			for i := range v.Fields {
+				a := v.Fields[i].Name
+				b := val.Fields[i].Name
+				if a != b {
+					t.Errorf("Evaluate(%s): field name mismatch: %s vs %s", k, a, b)
+					break
+				}
+			}
+		case program.Func:
+			val := val.(program.Func)
+			if v.Address == 0 && val.Address != 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected zero Address", k, val)
+			}
+			if v.Address != 0 && val.Address == 0 {
+				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
+			}
+		case int:
+			// ints in a remote program can be returned as int32 or int64
+			switch val := val.(type) {
+			case int32:
+				if val != int32(v) {
+					t.Errorf("got Evaluate(%s) = %T(%v), expected %v", k, val, val, v)
+				}
+			case int64:
+				if val != int64(v) {
+					t.Errorf("got Evaluate(%s) = %T(%v), expected %v", k, val, val, v)
+				}
+			default:
+				t.Errorf("got Evaluate(%s) = %T(%v), expected %T(%v)", k, val, val, v, v)
+			}
+		case uint:
+			// uints in a remote program can be returned as uint32 or uint64
+			switch val := val.(type) {
+			case uint32:
+				if val != uint32(v) {
+					t.Errorf("got Evaluate(%s) = %T(%v), expected %v", k, val, val, v)
+				}
+			case uint64:
+				if val != uint64(v) {
+					t.Errorf("got Evaluate(%s) = %T(%v), expected %v", k, val, val, v)
+				}
+			default:
+				t.Errorf("got Evaluate(%s) = %T(%v), expected %T(%v)", k, val, val, v, v)
+			}
+		}
+	}
+
+	// Evaluate a struct.
+	val, err := prog.Evaluate(`local_struct`)
+	if err != nil {
+		t.Fatalf("Evaluate: %s", err)
+	}
+	s, ok := val.(program.Struct)
+	if !ok {
+		t.Fatalf("got Evaluate(`local_struct`) = %T(%v), expected program.Struct", val, val)
+	}
+	// Check the values of its fields.
+	if len(s.Fields) != 2 {
+		t.Fatalf("got Evaluate(`local_struct`) = %+v, expected 2 fields", s)
+	}
+	if v0, err := prog.Value(s.Fields[0].Var); err != nil {
+		t.Errorf("Value: %s", err)
+	} else if v0 != int32(21) && v0 != int64(21) {
+		t.Errorf("Value: got %T(%v), expected 21", v0, v0)
+	}
+	if v1, err := prog.Value(s.Fields[1].Var); err != nil {
+		t.Errorf("Value: %s", err)
+	} else if v1 != (program.String{2, "hi"}) {
+		t.Errorf("Value: got %T(%v), expected `hi`", v1, v1)
+	}
+
+	// Remove the breakpoint at line 125, set a breakpoint at main.f1 and main.f2,
 	// then delete the breakpoint at main.f1.  Resume, then check we stopped at
 	// main.f2.
-	err = prog.DeleteBreakpoints(pcsLine80)
+	err = prog.DeleteBreakpoints(pcsLine125)
 	if err != nil {
 		log.Fatalf("DeleteBreakpoints: %v", err)
 	}

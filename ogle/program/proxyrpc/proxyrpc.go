@@ -115,6 +115,14 @@ type EvalResponse struct {
 	Result []string
 }
 
+type EvaluateRequest struct {
+	Expression string
+}
+
+type EvaluateResponse struct {
+	Result program.Value
+}
+
 type FramesRequest struct {
 	Count int
 }

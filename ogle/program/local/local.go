@@ -108,6 +108,15 @@ func (l *Local) Eval(expr string) ([]string, error) {
 	return resp.Result, err
 }
 
+func (l *Local) Evaluate(e string) (program.Value, error) {
+	req := proxyrpc.EvaluateRequest{
+		Expression: e,
+	}
+	var resp proxyrpc.EvaluateResponse
+	err := l.s.Evaluate(&req, &resp)
+	return resp.Result, err
+}
+
 func (l *Local) Frames(count int) ([]program.Frame, error) {
 	req := proxyrpc.FramesRequest{
 		Count: count,

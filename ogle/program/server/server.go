@@ -6,6 +6,8 @@
 // It is the remote end of the client implementation of the Program interface.
 package server // import "golang.org/x/debug/ogle/program/server"
 
+//go:generate sh -c "m4 -P eval.m4 > eval.go"
+
 import (
 	"bytes"
 	"fmt"
@@ -158,6 +160,8 @@ func (s *Server) dispatch(c call) {
 		c.errc <- s.handleClose(req, c.resp.(*proxyrpc.CloseResponse))
 	case *proxyrpc.EvalRequest:
 		c.errc <- s.handleEval(req, c.resp.(*proxyrpc.EvalResponse))
+	case *proxyrpc.EvaluateRequest:
+		c.errc <- s.handleEvaluate(req, c.resp.(*proxyrpc.EvaluateResponse))
 	case *proxyrpc.FramesRequest:
 		c.errc <- s.handleFrames(req, c.resp.(*proxyrpc.FramesResponse))
 	case *proxyrpc.OpenRequest:
@@ -552,6 +556,15 @@ func (s *Server) eval(expr string) ([]string, error) {
 	}
 
 	return nil, fmt.Errorf("bad expression syntax: %q", expr)
+}
+
+func (s *Server) Evaluate(req *proxyrpc.EvaluateRequest, resp *proxyrpc.EvaluateResponse) error {
+	return s.call(s.otherc, req, resp)
+}
+
+func (s *Server) handleEvaluate(req *proxyrpc.EvaluateRequest, resp *proxyrpc.EvaluateResponse) (err error) {
+	resp.Result, err = s.evalExpression(req.Expression, s.stoppedRegs.Rip, s.stoppedRegs.Rsp)
+	return err
 }
 
 func (s *Server) lookupSource(pc uint64) (file string, line uint64, err error) {
