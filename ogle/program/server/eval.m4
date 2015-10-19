@@ -45,6 +45,8 @@ var (
 // respectively.
 // For values of type int, uint and uintptr, v will be an int32, int64, uint32
 // or uint64 as appropriate.
+// For address operations, v will have type pointerToValue.
+// For the operands of address operations, v will have type addressableValue.
 // Other types are represented using the corresponding implementation of
 // program.Value in program.go.
 //
@@ -78,6 +80,21 @@ type untComplex struct {
 // untString is an untyped string constant
 type untString string
 
+// pointerToValue is a pointer to a value in memory.
+// The evaluator constructs these as the result of address operations like "&x".
+// Unlike program.Pointer, the DWARF type stored alongside values of this type
+// is the type of the variable, not the type of the pointer.
+type pointerToValue struct {
+	a uint64
+}
+
+// addressableValue is the memory location of a value.
+// The evaluator constructs these while evaluating the operands of address
+// operations like "&x", instead of computing the value of x itself.
+type addressableValue struct {
+	a uint64
+}
+
 // evalExpression evaluates a Go expression.
 // If the program counter and stack pointer are nonzero, they are used to determine
 // what local variables are available and where in memory they are.
@@ -87,7 +104,7 @@ func (s *Server) evalExpression(expression string, pc, sp uint64) (program.Value
 	if err != nil {
 		return nil, err
 	}
-	val := e.evalNode(node)
+	val := e.evalNode(node, false)
 	if e.evalError != nil {
 		return nil, e.evalError
 	}
@@ -125,6 +142,11 @@ func (s *Server) evalExpression(expression string, pc, sp uint64) (program.Value
 		return complex(r, i), nil
 	case untString:
 		return program.String{Length: uint64(len(v)), String: string(v)}, nil
+	case pointerToValue:
+		return program.Pointer{TypeID: uint64(val.d.Common().Offset), Address: v.a}, nil
+	case nil, addressableValue:
+		// This case should not be reachable.
+		return nil, errors.New("unknown error")
 	}
 	return val.v, nil
 }
@@ -177,7 +199,9 @@ func (e *evaluator) err(s string) result {
 }
 
 // evalNode computes the value of a node in the expression tree.
-func (e *evaluator) evalNode(node ast.Node) result {
+// If getAddress is true, the node is the argument of an & operator, so evalNode
+// will return a result with a value of type addressableValue if possible.
+func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 	// Set the current node in the evaluator, so that error messages can refer to
 	// it.  Defer a function call that changes it back.
 	defer e.setNode(e.setNode(node))
@@ -187,12 +211,12 @@ func (e *evaluator) evalNode(node ast.Node) result {
 		if e.pc != 0 && e.sp != 0 {
 			a, t := e.server.findLocalVar(n.Name, e.pc, e.sp)
 			if t != nil {
-				return e.resultFrom(a, t)
+				return e.resultFrom(a, t, getAddress)
 			}
 		}
 		a, t := e.server.findGlobalVar(n.Name)
 		if t != nil {
-			return e.resultFrom(a, t)
+			return e.resultFrom(a, t, getAddress)
 		}
 		switch n.Name {
 		// Note: these could have been redefined as constants in the code, but we
@@ -239,10 +263,41 @@ func (e *evaluator) evalNode(node ast.Node) result {
 		}
 
 	case *ast.ParenExpr:
-		return e.evalNode(n.X)
+		return e.evalNode(n.X, getAddress)
+
+	case *ast.StarExpr:
+		x := e.evalNode(n.X, false)
+		switch v := x.v.(type) {
+		case program.Pointer:
+			// x.d may be a typedef pointing to a pointer type (or a typedef pointing
+			// to a typedef pointing to a pointer type, etc.), so remove typedefs
+			// until we get the underlying pointer type.
+			t := followTypedefs(x.d)
+			if pt, ok := t.(*dwarf.PtrType); ok {
+				return e.resultFrom(v.Address, pt.Type, getAddress)
+			} else {
+				e.err("invalid pointer type")
+			}
+		case pointerToValue:
+			return e.resultFrom(v.a, x.d, getAddress)
+		case nil:
+			return x
+		}
+		return e.err("invalid indirect")
 
 	case *ast.UnaryExpr:
-		x := e.evalNode(n.X)
+		if n.Op == token.AND {
+			x := e.evalNode(n.X, true)
+			switch v := x.v.(type) {
+			case addressableValue:
+				return result{x.d, pointerToValue{v.a}}
+			case nil:
+				return x
+			}
+			return e.err("can't take address")
+		}
+
+		x := e.evalNode(n.X, false)
 		if x.v == nil {
 			return x
 		}
@@ -337,11 +392,11 @@ m4_define(UNARY_FLOAT_OPS, @case $1:
 		}
 
 	case *ast.BinaryExpr:
-		x := e.evalNode(n.X)
+		x := e.evalNode(n.X, false)
 		if x.v == nil {
 			return x
 		}
-		y := e.evalNode(n.Y)
+		y := e.evalNode(n.Y, false)
 		if y.v == nil {
 			return y
 		}
@@ -902,9 +957,14 @@ func (e *evaluator) getBaseType(name string) (dwarf.Type, bool) {
 
 // resultFrom constructs a result corresponding to a value in the program with
 // the given address and DWARF type.
-func (e *evaluator) resultFrom(a uint64, t dwarf.Type) result {
+// If getAddress is true, the result will be the operand of an address expression,
+// so resultFrom returns a result containing a value of type addressableValue.
+func (e *evaluator) resultFrom(a uint64, t dwarf.Type, getAddress bool) result {
 	if a == 0 {
 		return e.err("nil pointer dereference")
+	}
+	if getAddress {
+		return result{t, addressableValue{a}}
 	}
 	v, err := e.server.value(t, a)
 	if err != nil {
@@ -1098,4 +1158,36 @@ func convertUntyped(x, y result) result {
 		}
 	}
 	return x
+}
+
+// followTypedefs returns the underlying type of t, removing any typedefs.
+// If t leads to a cycle of typedefs, followTypedefs returns nil.
+func followTypedefs(t dwarf.Type) dwarf.Type {
+	// If t is a *dwarf.TypedefType, next returns t.Type, otherwise it returns t.
+	// The bool returned is true when the argument was a typedef.
+	next := func(t dwarf.Type) (dwarf.Type, bool) {
+		tt, ok := t.(*dwarf.TypedefType)
+		if !ok {
+			return t, false
+		}
+		return tt.Type, true
+	}
+	// Advance two pointers, one at twice the speed, so we can detect if we get
+	// stuck in a cycle.
+	slow, fast := t, t
+	for {
+		var wasTypedef bool
+		fast, wasTypedef = next(fast)
+		if !wasTypedef {
+			return fast
+		}
+		fast, wasTypedef = next(fast)
+		if !wasTypedef {
+			return fast
+		}
+		slow, _ = next(slow)
+		if slow == fast {
+			return nil
+		}
+	}
 }
