@@ -14,6 +14,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -28,10 +29,11 @@ const prec = 256 // precision for untyped float and complex constants.
 
 var (
 	// Some big.Ints to use in overflow checks.
-	bigIntMaxInt32 = new(big.Int).SetInt64(math.MaxInt32)
-	bigIntMinInt32 = new(big.Int).SetInt64(math.MinInt32)
-	bigIntMaxInt64 = new(big.Int).SetInt64(math.MaxInt64)
-	bigIntMinInt64 = new(big.Int).SetInt64(math.MinInt64)
+	bigIntMaxInt32  = big.NewInt(math.MaxInt32)
+	bigIntMinInt32  = big.NewInt(math.MinInt32)
+	bigIntMaxInt64  = big.NewInt(math.MaxInt64)
+	bigIntMinInt64  = big.NewInt(math.MinInt64)
+	bigIntMaxUint64 = new(big.Int).SetUint64(math.MaxUint64)
 )
 
 // result stores an intermediate value produced during evaluation of an expression.
@@ -95,6 +97,11 @@ type addressableValue struct {
 	a uint64
 }
 
+// A sliceOf is a slice created by slicing an array.
+// Unlike program.Slice, the DWARF type stored alongside a value of this type is
+// the type of the slice's elements, not the type of the slice.
+type sliceOf program.Slice
+
 // evalExpression evaluates a Go expression.
 // If the program counter and stack pointer are nonzero, they are used to determine
 // what local variables are available and where in memory they are.
@@ -144,6 +151,8 @@ func (s *Server) evalExpression(expression string, pc, sp uint64) (program.Value
 		return program.String{Length: uint64(len(v)), String: string(v)}, nil
 	case pointerToValue:
 		return program.Pointer{TypeID: uint64(val.d.Common().Offset), Address: v.a}, nil
+	case sliceOf:
+		return program.Slice(v), nil
 	case nil, addressableValue:
 		// This case should not be reachable.
 		return nil, errors.New("unknown error")
@@ -276,7 +285,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			if pt, ok := t.(*dwarf.PtrType); ok {
 				return e.resultFrom(v.Address, pt.Type, getAddress)
 			} else {
-				e.err("invalid pointer type")
+				return e.err("invalid DWARF type for pointer")
 			}
 		case pointerToValue:
 			return e.resultFrom(v.a, x.d, getAddress)
@@ -284,6 +293,272 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			return x
 		}
 		return e.err("invalid indirect")
+
+	case *ast.IndexExpr:
+		x, index := e.evalNode(n.X, false), e.evalNode(n.Index, false)
+		if x.v == nil || index.v == nil {
+			return result{}
+		}
+		// The expression is x[index]
+		if m, ok := x.v.(program.Map); ok {
+			if getAddress {
+				return e.err("can't take address of map value")
+			}
+			mt, ok := followTypedefs(x.d).(*dwarf.MapType)
+			if !ok {
+				return e.err("invalid DWARF type for map")
+			}
+			var (
+				found bool   // true if the key was found
+				value result // the map value for the key
+				abort bool   // true if an error occurred while searching
+				// fn is a function that checks if one (key, value) pair corresponds
+				// to the index in the expression.
+				fn = func(keyAddr, valAddr uint64, keyType, valType dwarf.Type) bool {
+					key := e.resultFrom(keyAddr, keyType, false)
+					if key.v == nil {
+						abort = true
+						return false // stop searching map
+					}
+					equal, ok := e.evalBinaryOp(token.EQL, index, key).v.(bool)
+					if !ok {
+						abort = true
+						return false // stop searching map
+					}
+					if equal {
+						found = true
+						value = e.resultFrom(valAddr, valType, false)
+						return false // stop searching map
+					}
+					return true // continue searching map
+				}
+			)
+			if err := e.server.peekMapValues(mt, m.Address, fn); err != nil {
+				return e.err(err.Error())
+			}
+			if abort {
+				// Some operation on individual map keys failed.
+				return result{}
+			}
+			if found {
+				return value
+			}
+			// The key wasn't in the map; return the zero value.
+			return e.zero(mt.ElemType)
+		}
+
+		// The index should be a non-negative integer for the remaining cases.
+		u, err := uint64FromResult(index)
+		if err != nil {
+			return e.err("invalid index: " + err.Error())
+		}
+		switch v := x.v.(type) {
+		case program.Array:
+			if u >= v.Length {
+				return e.err("array index out of bounds")
+			}
+			elemType, err := e.server.dwarfData.Type(dwarf.Offset(v.ElementTypeID))
+			if err != nil {
+				return e.err(err.Error())
+			}
+			return e.resultFrom(v.Element(u).Address, elemType, getAddress)
+		case program.Slice:
+			if u >= v.Length {
+				return e.err("slice index out of bounds")
+			}
+			elemType, err := e.server.dwarfData.Type(dwarf.Offset(v.ElementTypeID))
+			if err != nil {
+				return e.err(err.Error())
+			}
+			return e.resultFrom(v.Element(u).Address, elemType, getAddress)
+		case sliceOf:
+			if u >= v.Length {
+				return e.err("slice index out of bounds")
+			}
+			return e.resultFrom(v.Element(u).Address, x.d, getAddress)
+		case program.String:
+			if getAddress {
+				return e.err("can't take address of string element")
+			}
+			if u >= v.Length {
+				return e.err("string index out of bounds")
+			}
+			if u >= uint64(len(v.String)) {
+				return e.err("string element unavailable")
+			}
+			return e.uint8Result(v.String[u])
+		case untString:
+			if getAddress {
+				return e.err("can't take address of string element")
+			}
+			if u >= uint64(len(v)) {
+				return e.err("string index out of bounds")
+			}
+			return e.uint8Result(v[u])
+		}
+		return e.err("invalid index expression")
+
+	case *ast.SliceExpr:
+		if n.Slice3 && n.High == nil {
+			return e.err("middle index required in full slice")
+		}
+		if n.Slice3 && n.Max == nil {
+			return e.err("final index required in full slice")
+		}
+		var (
+			low, high, max uint64
+			err            error
+		)
+		if n.Low != nil {
+			low, err = uint64FromResult(e.evalNode(n.Low, false))
+			if err != nil {
+				return e.err("invalid slice lower bound: " + err.Error())
+			}
+		}
+		if n.High != nil {
+			high, err = uint64FromResult(e.evalNode(n.High, false))
+			if err != nil {
+				return e.err("invalid slice upper bound: " + err.Error())
+			}
+		}
+		if n.Max != nil {
+			max, err = uint64FromResult(e.evalNode(n.Max, false))
+			if err != nil {
+				return e.err("invalid slice capacity: " + err.Error())
+			}
+		}
+		x := e.evalNode(n.X, false)
+		switch v := x.v.(type) {
+		case program.Array, program.Pointer, pointerToValue:
+			// This case handles the slicing of arrays and pointers to arrays.
+			var arr program.Array
+			switch v := x.v.(type) {
+			case program.Array:
+				arr = v
+			case program.Pointer:
+				pt, ok := followTypedefs(x.d).(*dwarf.PtrType)
+				if !ok {
+					return e.err("invalid DWARF type for pointer")
+				}
+				a := e.resultFrom(v.Address, pt.Type, false)
+				arr, ok = a.v.(program.Array)
+				if !ok {
+					// v is a pointer to something other than an array.
+					return e.err("cannot slice pointer")
+				}
+			case pointerToValue:
+				a := e.resultFrom(v.a, x.d, false)
+				var ok bool
+				arr, ok = a.v.(program.Array)
+				if !ok {
+					// v is a pointer to something other than an array.
+					return e.err("cannot slice pointer")
+				}
+			}
+			elemType, err := e.server.dwarfData.Type(dwarf.Offset(arr.ElementTypeID))
+			if err != nil {
+				return e.err(err.Error())
+			}
+			if n.High == nil {
+				high = arr.Length
+			} else if high > arr.Length {
+				return e.err("slice upper bound is too large")
+			}
+			if n.Max == nil {
+				max = arr.Length
+			} else if max > arr.Length {
+				return e.err("slice capacity is too large")
+			}
+			if low > high || high > max {
+				return e.err("invalid slice index")
+			}
+			return result{
+				d: elemType,
+				v: sliceOf{
+					Array: program.Array{
+						ElementTypeID: arr.ElementTypeID,
+						Address:       arr.Element(low).Address,
+						Length:        high - low,
+						StrideBits:    uint64(elemType.Common().ByteSize) * 8,
+					},
+					Capacity: max - low,
+				},
+			}
+		case program.Slice:
+			if n.High == nil {
+				high = v.Length
+			} else if high > v.Capacity {
+				return e.err("slice upper bound is too large")
+			}
+			if n.Max == nil {
+				max = v.Capacity
+			} else if max > v.Capacity {
+				return e.err("slice capacity is too large")
+			}
+			if low > high || high > max {
+				return e.err("invalid slice index")
+			}
+			v.Address += low * (v.StrideBits / 8)
+			v.Length = high - low
+			v.Capacity = max - low
+			return result{x.d, v}
+		case sliceOf:
+			if n.High == nil {
+				high = v.Length
+			} else if high > v.Capacity {
+				return e.err("slice upper bound is too large")
+			}
+			if n.Max == nil {
+				max = v.Capacity
+			} else if max > v.Capacity {
+				return e.err("slice capacity is too large")
+			}
+			if low > high || high > max {
+				return e.err("invalid slice index")
+			}
+			v.Address += low * (v.StrideBits / 8)
+			v.Length = high - low
+			v.Capacity = max - low
+			return result{x.d, v}
+		case program.String:
+			if n.Max != nil {
+				return e.err("full slice of string")
+			}
+			if n.High == nil {
+				high = v.Length
+			}
+			if low > high || high > v.Length {
+				return e.err("invalid slice index")
+			}
+			v.Length = high - low
+			if low > uint64(len(v.String)) {
+				// v.String was truncated before the point where this slice starts.
+				v.String = ""
+			} else {
+				if high > uint64(len(v.String)) {
+					// v.String was truncated before the point where this slice ends.
+					high = uint64(len(v.String))
+				}
+				v.String = v.String[low:high]
+			}
+			return result{x.d, v}
+		case untString:
+			if n.Max != nil {
+				return e.err("full slice of string")
+			}
+			if n.High == nil {
+				high = uint64(len(v))
+			}
+			if low > high {
+				return e.err("invalid slice expression")
+			}
+			if high > uint64(len(v)) {
+				return e.err("slice upper bound is too large")
+			}
+			return e.stringResult(string(v[low:high]))
+		default:
+			return e.err("invalid slice expression")
+		}
 
 	case *ast.UnaryExpr:
 		if n.Op == token.AND {
@@ -1333,6 +1608,15 @@ func (e *evaluator) uint8Result(v uint8) result {
 	return result{t, uint8(v)}
 }
 
+// stringResult constructs a result for a string value.
+func (e *evaluator) stringResult(s string) result {
+	t, ok := e.getBaseType("string")
+	if !ok {
+		e.err("couldn't construct string")
+	}
+	return result{t, program.String{Length: uint64(len(s)), String: s}}
+}
+
 // getBaseType returns the *dwarf.Type with a given name.
 // TODO: cache this.
 func (e *evaluator) getBaseType(name string) (dwarf.Type, bool) {
@@ -1361,6 +1645,85 @@ func (e *evaluator) resultFrom(a uint64, t dwarf.Type, getAddress bool) result {
 	v, err := e.server.value(t, a)
 	if err != nil {
 		return e.err(err.Error())
+	}
+	return result{t, v}
+}
+
+// zero returns the zero value of type t.
+// TODO: implement for array and struct.
+func (e *evaluator) zero(t dwarf.Type) result {
+	var v interface{}
+	switch typ := followTypedefs(t).(type) {
+	case *dwarf.CharType, *dwarf.IntType, *dwarf.EnumType:
+		switch typ.Common().ByteSize {
+		case 1:
+			v = int8(0)
+		case 2:
+			v = int16(0)
+		case 4:
+			v = int32(0)
+		case 8:
+			v = int64(0)
+		default:
+			return e.err("invalid integer size " + fmt.Sprint(typ.Common().ByteSize))
+		}
+	case *dwarf.UcharType, *dwarf.UintType:
+		switch typ.Common().ByteSize {
+		case 1:
+			v = uint8(0)
+		case 2:
+			v = uint16(0)
+		case 4:
+			v = uint32(0)
+		case 8:
+			v = uint64(0)
+		default:
+			return e.err("invalid unsigned integer size " + fmt.Sprint(typ.Common().ByteSize))
+		}
+	case *dwarf.FloatType:
+		switch typ.Common().ByteSize {
+		case 4:
+			v = float32(0)
+		case 8:
+			v = float64(0)
+		default:
+			return e.err("invalid float size " + fmt.Sprint(typ.Common().ByteSize))
+		}
+	case *dwarf.ComplexType:
+		switch typ.Common().ByteSize {
+		case 8:
+			v = complex64(0)
+		case 16:
+			v = complex128(0)
+		default:
+			return e.err("invalid complex size " + fmt.Sprint(typ.Common().ByteSize))
+		}
+	case *dwarf.BoolType:
+		v = false
+	case *dwarf.PtrType:
+		v = program.Pointer{TypeID: uint64(t.Common().Offset)}
+	case *dwarf.SliceType:
+		v = program.Slice{
+			Array: program.Array{
+				ElementTypeID: uint64(typ.ElemType.Common().Offset),
+				StrideBits:    uint64(typ.ElemType.Common().ByteSize) * 8,
+			},
+		}
+	case *dwarf.StringType:
+		v = program.String{}
+	case *dwarf.InterfaceType:
+		v = program.Interface{}
+	case *dwarf.FuncType:
+		v = program.Func{}
+	case *dwarf.MapType:
+		v = program.Map{TypeID: uint64(t.Common().Offset)}
+	case *dwarf.ChanType:
+		v = program.Channel{
+			ElementTypeID: uint64(typ.ElemType.Common().Offset),
+			Stride:        uint64(typ.ElemType.Common().ByteSize),
+		}
+	default:
+		return e.err("can't get zero value of this type")
 	}
 	return result{t, v}
 }
@@ -1550,6 +1913,85 @@ func convertUntyped(x, y result) result {
 		}
 	}
 	return x
+}
+
+// uint64FromResult converts a result into a uint64 for slice or index expressions.
+// It returns an error if the conversion cannot be done.
+func uint64FromResult(x result) (uint64, error) {
+	switch v := x.v.(type) {
+	case int8:
+		if v < 0 {
+			return 0, errors.New("value is negative")
+		}
+		return uint64(v), nil
+	case int16:
+		if v < 0 {
+			return 0, errors.New("value is negative")
+		}
+		return uint64(v), nil
+	case int32:
+		if v < 0 {
+			return 0, errors.New("value is negative")
+		}
+		return uint64(v), nil
+	case int64:
+		if v < 0 {
+			return 0, errors.New("value is negative")
+		}
+		return uint64(v), nil
+	case uint8:
+		return uint64(v), nil
+	case uint16:
+		return uint64(v), nil
+	case uint32:
+		return uint64(v), nil
+	case uint64:
+		return v, nil
+	case untInt:
+		if v.Int.Sign() == -1 {
+			return 0, errors.New("value is negative")
+		}
+		if v.Int.Cmp(bigIntMaxUint64) == +1 {
+			return 0, errors.New("value is too large")
+		}
+		return v.Int.Uint64(), nil
+	case untRune:
+		if v.Sign() == -1 {
+			return 0, errors.New("value is negative")
+		}
+		if v.Cmp(bigIntMaxUint64) == +1 {
+			return 0, errors.New("value is too large")
+		}
+		return v.Uint64(), nil
+	case untFloat:
+		if !v.IsInt() {
+			return 0, errors.New("value is not an integer")
+		}
+		if v.Sign() == -1 {
+			return 0, errors.New("value is negative")
+		}
+		i, _ := v.Int(nil)
+		if i.Cmp(bigIntMaxUint64) == +1 {
+			return 0, errors.New("value is too large")
+		}
+		return i.Uint64(), nil
+	case untComplex:
+		if v.i.Sign() != 0 {
+			return 0, errors.New("value is complex")
+		}
+		if !v.r.IsInt() {
+			return 0, errors.New("value is not an integer")
+		}
+		if v.r.Sign() == -1 {
+			return 0, errors.New("value is negative")
+		}
+		i, _ := v.r.Int(nil)
+		if i.Cmp(bigIntMaxUint64) == +1 {
+			return 0, errors.New("value is too large")
+		}
+		return i.Uint64(), nil
+	}
+	return 0, fmt.Errorf("cannot convert to unsigned integer")
 }
 
 // followTypedefs returns the underlying type of t, removing any typedefs.
