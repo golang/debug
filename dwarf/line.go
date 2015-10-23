@@ -96,20 +96,35 @@ func (d *Data) LineToPCs(file string, line uint64) ([]uint64, error) {
 		return nil, err
 	}
 
+	compDir := d.compilationDirectory()
+
 	// Find the closest match in the executable for the specified file.
 	// We choose the file with the largest number of path components matching
-	// at the end of the name, and break ties by choosing the shortest filename.
+	// at the end of the name. If there is a tie, we prefer files that are
+	// under the compilation directory.  If there is still a tie, we choose
+	// the file with the shortest name.
 	var bestFile struct {
 		fileNum    uint64 // Index of the file in the DWARF data.
 		components int    // Number of matching path components.
 		length     int    // Length of the filename.
+		underComp  bool   // File is under the compilation directory.
 	}
 	for num, f := range m.header.file {
 		c := matchingPathComponentSuffixSize(f.name, file)
-		if c > bestFile.components || (c == bestFile.components && len(f.name) < bestFile.length) {
+		underComp := strings.HasPrefix(f.name, compDir)
+		better := false
+		if c != bestFile.components {
+			better = c > bestFile.components
+		} else if underComp != bestFile.underComp {
+			better = underComp
+		} else {
+			better = len(f.name) < bestFile.length
+		}
+		if better {
 			bestFile.fileNum = uint64(num)
 			bestFile.components = c
 			bestFile.length = len(f.name)
+			bestFile.underComp = underComp
 		}
 	}
 	if bestFile.components == 0 {
@@ -130,6 +145,23 @@ func (d *Data) LineToPCs(file string, line uint64) ([]uint64, error) {
 		return nil, err
 	}
 	return pcs, nil
+}
+
+// compilationDirectory finds the first compilation unit entry in d and returns
+// the compilation directory contained in it.
+// If it fails, it returns the empty string.
+func (d *Data) compilationDirectory() string {
+	r := d.Reader()
+	for {
+		entry, err := r.Next()
+		if entry == nil || err != nil {
+			return ""
+		}
+		if entry.Tag == TagCompileUnit {
+			name, _ := entry.Val(AttrCompDir).(string)
+			return name
+		}
+	}
 }
 
 // matchingPathComponentSuffixSize returns the largest n such that the last n
