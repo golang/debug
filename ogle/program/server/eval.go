@@ -294,6 +294,50 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 		}
 		return e.err("invalid indirect")
 
+	case *ast.SelectorExpr:
+		x := e.evalNode(n.X, false)
+		sel := n.Sel.Name
+		switch v := x.v.(type) {
+		case program.Struct:
+			for _, f := range v.Fields {
+				if f.Name == sel {
+					t, err := e.server.dwarfData.Type(dwarf.Offset(f.Var.TypeID))
+					if err != nil {
+						return e.err(err.Error())
+					}
+					return e.resultFrom(f.Var.Address, t, getAddress)
+				}
+			}
+			return e.err("struct field not found")
+		case program.Pointer:
+			pt, ok := followTypedefs(x.d).(*dwarf.PtrType) // x.d should be a pointer to struct.
+			if !ok {
+				return e.err("invalid DWARF information for pointer")
+			}
+			st, ok := followTypedefs(pt.Type).(*dwarf.StructType)
+			if !ok {
+				break
+			}
+			for _, f := range st.Field {
+				if f.Name == sel {
+					return e.resultFrom(v.Address+uint64(f.ByteOffset), f.Type, getAddress)
+				}
+			}
+			return e.err("struct field not found")
+		case pointerToValue:
+			st, ok := followTypedefs(x.d).(*dwarf.StructType) // x.d should be a struct.
+			if !ok {
+				break
+			}
+			for _, f := range st.Field {
+				if f.Name == sel {
+					return e.resultFrom(v.a+uint64(f.ByteOffset), f.Type, getAddress)
+				}
+			}
+			return e.err("struct field not found")
+		}
+		return e.err("invalid selector expression")
+
 	case *ast.IndexExpr:
 		x, index := e.evalNode(n.X, false), e.evalNode(n.Index, false)
 		if x.v == nil || index.v == nil {

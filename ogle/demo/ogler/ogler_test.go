@@ -222,6 +222,13 @@ var expectedEvaluate = map[string]program.Value{
 	`local_slice[1:3]`:          program.Slice{program.Array{42, 42, 2, 8}, 4},
 	`local_slice[:3:4]`:         program.Slice{program.Array{42, 42, 3, 8}, 4},
 	`local_slice[1:3:4]`:        program.Slice{program.Array{42, 42, 2, 8}, 3},
+	`local_struct.a`:            21,
+	`(&local_struct).a`:         21,
+	`(*local_pointer).a`:        21,
+	`(&*local_pointer).a`:       21,
+	`(*local_pointer).b`:        program.String{2, `hi`},
+	`local_pointer.a`:           21,
+	`local_pointer.b`:           program.String{2, `hi`},
 	`5 + false`:                 nil,
 	``:                          nil,
 	`x + ""`:                    nil,
@@ -241,6 +248,10 @@ var expectedEvaluate = map[string]program.Value{
 	`local_string[22]`:          nil,
 	`"hello"[-2]`:               nil,
 	`"hello"[22]`:               nil,
+	`local_pointer_nil.a`:       nil,
+	`(local_struct).c`:          nil,
+	`(&local_struct).c`:         nil,
+	`(*local_pointer).c`:        nil,
 }
 
 func isHex(r uint8) bool {
