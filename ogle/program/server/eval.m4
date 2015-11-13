@@ -102,6 +102,13 @@ type addressableValue struct {
 // the type of the slice's elements, not the type of the slice.
 type sliceOf program.Slice
 
+// ident is a value for representing a special identifier.
+type ident string
+
+// identLookup is a built-in function of the expression evaluator which gets the
+// value of a global symbol.
+var identLookup ident = "lookup"
+
 // evalExpression evaluates a Go expression.
 // If the program counter and stack pointer are nonzero, they are used to determine
 // what local variables are available and where in memory they are.
@@ -234,6 +241,8 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			return result{nil, true}
 		case "false":
 			return result{nil, false}
+		case "lookup":
+			return result{nil, identLookup}
 		}
 		return e.err("unknown identifier")
 
@@ -603,6 +612,29 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 		default:
 			return e.err("invalid slice expression")
 		}
+
+	case *ast.CallExpr:
+		// Only supports lookup("x"), which gets the value of a global symbol x.
+		fun := e.evalNode(n.Fun, false)
+		var args []result
+		for _, a := range n.Args {
+			args = append(args, e.evalNode(a, false))
+		}
+		if fun.v == identLookup {
+			if len(args) != 1 {
+				return e.err("lookup should have one argument")
+			}
+			ident, ok := args[0].v.(untString)
+			if !ok {
+				return e.err("argument for lookup should be a string constant")
+			}
+			if a, t := e.server.findGlobalVar(string(ident)); t == nil {
+				return e.err("symbol not found")
+			} else {
+				return e.resultFrom(a, t, getAddress)
+			}
+		}
+		return e.err("function calls not implemented")
 
 	case *ast.UnaryExpr:
 		if n.Op == token.AND {
