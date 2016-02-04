@@ -9,6 +9,7 @@
 package dwarf
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
 )
@@ -606,12 +607,30 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 				case []byte:
 					// TODO: Should have original compilation
 					// unit here, not unknownFormat.
+					if len(loc) == 0 {
+						// Empty exprloc. f.ByteOffset=0.
+						break
+					}
 					b := makeBuf(d, unknownFormat{}, "location", 0, loc)
-					if x := b.uint8(); x != opPlusUconst {
-						err = DecodeError{name, kid.Offset, "unexpected opcode 0x" + strconv.FormatUint(uint64(x), 16)}
+					op := b.uint8()
+					switch op {
+					case opPlusUconst:
+						// Handle opcode sequence [DW_OP_plus_uconst <uleb128>]
+						f.ByteOffset = int64(b.uint())
+						b.assertEmpty()
+					case opConsts:
+						// Handle opcode sequence [DW_OP_consts <sleb128> DW_OP_plus]
+						f.ByteOffset = b.int()
+						op = b.uint8()
+						if op != opPlus {
+							err = DecodeError{name, kid.Offset, fmt.Sprintf("unexpected opcode 0x%x", op)}
+							goto Error
+						}
+						b.assertEmpty()
+					default:
+						err = DecodeError{name, kid.Offset, fmt.Sprintf("unexpected opcode 0x%x", op)}
 						goto Error
 					}
-					f.ByteOffset = int64(b.uint())
 					if b.err != nil {
 						err = b.err
 						goto Error
