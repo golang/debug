@@ -458,6 +458,14 @@ func testProgram(t *testing.T, prog program.Program) {
 		log.Fatalf("Resume: %v", err)
 	}
 
+	gs, err := prog.Goroutines()
+	if err != nil {
+		t.Fatalf("Goroutines(): got error %s", err)
+	}
+	for _, g := range gs {
+		fmt.Println(g)
+	}
+
 	frames, err := prog.Frames(100)
 	if err != nil {
 		log.Fatalf("prog.Frames error: %v", err)

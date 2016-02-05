@@ -6,6 +6,7 @@
 package program // import "golang.org/x/debug/ogle/program"
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -105,6 +106,41 @@ type Program interface {
 	// MapElement returns Vars for the key and value of a map element specified by
 	// a 0-based index.
 	MapElement(m Map, index uint64) (Var, Var, error)
+
+	// Goroutines gets the current goroutines.
+	Goroutines() ([]*Goroutine, error)
+}
+
+type Goroutine struct {
+	ID           int64
+	Status       GoroutineStatus
+	StatusString string // A human-readable string explaining the status in more detail.
+	Function     string // Name of the goroutine function.
+	Caller       string // Name of the function that created this goroutine.
+}
+
+type GoroutineStatus byte
+
+const (
+	Running GoroutineStatus = iota
+	Queued
+	Blocked
+)
+
+func (g GoroutineStatus) String() string {
+	switch g {
+	case Running:
+		return "running"
+	case Queued:
+		return "queued"
+	case Blocked:
+		return "blocked"
+	}
+	return "invalid status"
+}
+
+func (g *Goroutine) String() string {
+	return fmt.Sprintf("goroutine %d [%s] %s -> %s", g.ID, g.StatusString, g.Caller, g.Function)
 }
 
 // A reference to a variable in a program.

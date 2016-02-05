@@ -10,6 +10,7 @@ package server // import "golang.org/x/debug/ogle/program/server"
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -178,6 +179,8 @@ func (s *Server) dispatch(c call) {
 		c.errc <- s.handleValue(req, c.resp.(*proxyrpc.ValueResponse))
 	case *proxyrpc.MapElementRequest:
 		c.errc <- s.handleMapElement(req, c.resp.(*proxyrpc.MapElementResponse))
+	case *proxyrpc.GoroutinesRequest:
+		c.errc <- s.handleGoroutines(req, c.resp.(*proxyrpc.GoroutinesResponse))
 	default:
 		panic(fmt.Sprintf("unexpected call request type %T", c.req))
 	}
@@ -831,5 +834,194 @@ func (s *Server) handleMapElement(req *proxyrpc.MapElementRequest, resp *proxyrp
 		// There weren't enough elements.
 		return fmt.Errorf("map has no element %d", req.Index)
 	}
+	return nil
+}
+
+func (s *Server) Goroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrpc.GoroutinesResponse) error {
+	return s.call(s.otherc, req, resp)
+}
+
+const invalidStatus program.GoroutineStatus = 99
+
+var (
+	gStatus = [...]program.GoroutineStatus{
+		0: program.Queued,  // _Gidle
+		1: program.Queued,  // _Grunnable
+		2: program.Running, // _Grunning
+		3: program.Blocked, // _Gsyscall
+		4: program.Blocked, // _Gwaiting
+		5: invalidStatus,   // _Gmoribund_unused
+		6: invalidStatus,   // _Gdead
+		7: invalidStatus,   // _Genqueue
+		8: program.Running, // _Gcopystack
+	}
+	gScanStatus = [...]program.GoroutineStatus{
+		0: invalidStatus,   // _Gscan + _Gidle
+		1: program.Queued,  // _Gscanrunnable
+		2: program.Running, // _Gscanrunning
+		3: program.Blocked, // _Gscansyscall
+		4: program.Blocked, // _Gscanwaiting
+		5: invalidStatus,   // _Gscan + _Gmoribund_unused
+		6: invalidStatus,   // _Gscan + _Gdead
+		7: program.Queued,  // _Gscanenqueue
+	}
+	gStatusString = [...]string{
+		0: "idle",
+		1: "runnable",
+		2: "running",
+		3: "syscall",
+		4: "waiting",
+		8: "copystack",
+	}
+	gScanStatusString = [...]string{
+		1: "scanrunnable",
+		2: "scanrunning",
+		3: "scansyscall",
+		4: "scanwaiting",
+		7: "scanenqueue",
+	}
+)
+
+func (s *Server) handleGoroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrpc.GoroutinesResponse) error {
+	// Get DWARF type information for runtime.g.
+	ge, err := s.dwarfData.LookupEntry("runtime.g")
+	if err != nil {
+		return err
+	}
+	t, err := s.dwarfData.Type(ge.Offset)
+	if err != nil {
+		return err
+	}
+	gType, ok := followTypedefs(t).(*dwarf.StructType)
+	if !ok {
+		return errors.New("runtime.g is not a struct")
+	}
+
+	// Read runtime.allg.
+	allgEntry, err := s.dwarfData.LookupEntry("runtime.allg")
+	if err != nil {
+		return err
+	}
+	allgAddr, err := s.dwarfData.EntryLocation(allgEntry)
+	if err != nil {
+		return err
+	}
+	allg, err := s.peekPtr(allgAddr)
+	if err != nil {
+		return fmt.Errorf("reading allg: %v", err)
+	}
+
+	// Read runtime.allglen.
+	allglenEntry, err := s.dwarfData.LookupEntry("runtime.allglen")
+	if err != nil {
+		return err
+	}
+	off, err := s.dwarfData.EntryTypeOffset(allglenEntry)
+	if err != nil {
+		return err
+	}
+	allglenType, err := s.dwarfData.Type(off)
+	if err != nil {
+		return err
+	}
+	allglenAddr, err := s.dwarfData.EntryLocation(allglenEntry)
+	if err != nil {
+		return err
+	}
+	var allglen uint64
+	switch followTypedefs(allglenType).(type) {
+	case *dwarf.UintType, *dwarf.IntType:
+		allglen, err = s.peekUint(allglenAddr, allglenType.Common().ByteSize)
+		if err != nil {
+			return fmt.Errorf("reading allglen: %v", err)
+		}
+	default:
+		// Some runtimes don't specify the type for allglen.  Assume it's uint32.
+		allglen, err = s.peekUint(allglenAddr, 4)
+		if err != nil {
+			return fmt.Errorf("reading allglen: %v", err)
+		}
+		if allglen != 0 {
+			break
+		}
+		// Zero?  Let's try uint64.
+		allglen, err = s.peekUint(allglenAddr, 8)
+		if err != nil {
+			return fmt.Errorf("reading allglen: %v", err)
+		}
+	}
+
+	for i := uint64(0); i < allglen; i++ {
+		// allg is an array of pointers to g structs.  Read allg[i].
+		g, err := s.peekPtr(allg + i*uint64(s.arch.PointerSize))
+		if err != nil {
+			return err
+		}
+		gr := program.Goroutine{}
+
+		// Read status from the field named "atomicstatus" or "status".
+		status, err := s.peekUintStructField(gType, g, "atomicstatus")
+		if err != nil {
+			status, err = s.peekUintOrIntStructField(gType, g, "status")
+		}
+		if err != nil {
+			return err
+		}
+		if status == 6 {
+			// _Gdead.
+			continue
+		}
+		gr.Status = invalidStatus
+		if status < uint64(len(gStatus)) {
+			gr.Status = gStatus[status]
+			gr.StatusString = gStatusString[status]
+		} else if status^0x1000 < uint64(len(gScanStatus)) {
+			gr.Status = gScanStatus[status^0x1000]
+			gr.StatusString = gScanStatusString[status^0x1000]
+		}
+		if gr.Status == invalidStatus {
+			return fmt.Errorf("unexpected goroutine status 0x%x", status)
+		}
+		if status == 4 || status == 0x1004 {
+			// _Gwaiting or _Gscanwaiting.
+			// Try reading waitreason to get a better value for StatusString.
+			// Depending on the runtime, waitreason may be a Go string or a C string.
+			if waitreason, err := s.peekStringStructField(gType, g, "waitreason", 80); err == nil {
+				if waitreason != "" {
+					gr.StatusString = waitreason
+				}
+			} else if ptr, err := s.peekPtrStructField(gType, g, "waitreason"); err == nil {
+				waitreason := s.peekCString(ptr, 80)
+				if waitreason != "" {
+					gr.StatusString = waitreason
+				}
+			}
+		}
+
+		gr.ID, err = s.peekIntStructField(gType, g, "goid")
+		if err != nil {
+			return err
+		}
+
+		// Best-effort attempt to get the names of the goroutine function and the
+		// function that created the goroutine.  They aren't always available.
+		functionName := func(pc uint64) string {
+			entry, _, err := s.dwarfData.EntryForPC(pc)
+			if err != nil {
+				return ""
+			}
+			name, _ := entry.Val(dwarf.AttrName).(string)
+			return name
+		}
+		if startpc, err := s.peekUintStructField(gType, g, "startpc"); err == nil {
+			gr.Function = functionName(startpc)
+		}
+		if gopc, err := s.peekUintStructField(gType, g, "gopc"); err == nil {
+			gr.Caller = functionName(gopc)
+		}
+
+		resp.Goroutines = append(resp.Goroutines, &gr)
+	}
+
 	return nil
 }

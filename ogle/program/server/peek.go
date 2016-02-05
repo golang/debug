@@ -54,6 +54,50 @@ func (s *Server) peekUint(addr uint64, n int64) (uint64, error) {
 	return s.arch.UintN(buf), nil
 }
 
+// peekString reads a string of the given type at the given address.
+// At most byteLimit bytes will be read.  If the string is longer, "..." is appended.
+func (s *Server) peekString(typ *dwarf.StringType, a uint64, byteLimit uint64) (string, error) {
+	ptr, err := s.peekPtrStructField(&typ.StructType, a, "str")
+	if err != nil {
+		return "", err
+	}
+	length, err := s.peekUintOrIntStructField(&typ.StructType, a, "len")
+	if err != nil {
+		return "", err
+	}
+	if length > byteLimit {
+		buf := make([]byte, byteLimit, byteLimit+3)
+		if err := s.peekBytes(ptr, buf); err != nil {
+			return "", err
+		} else {
+			buf = append(buf, '.', '.', '.')
+			return string(buf), nil
+		}
+	} else {
+		buf := make([]byte, length)
+		if err := s.peekBytes(ptr, buf); err != nil {
+			return "", err
+		} else {
+			return string(buf), nil
+		}
+	}
+}
+
+// peekCString reads a NUL-terminated string at the given address.
+// At most byteLimit bytes will be read.  If the string is longer, "..." is appended.
+// peekCString never returns errors; if an error occurs, the string will be truncated in some way.
+func (s *Server) peekCString(a uint64, byteLimit uint64) string {
+	buf := make([]byte, byteLimit, byteLimit+3)
+	s.peekBytes(a, buf)
+	for i, c := range buf {
+		if c == 0 {
+			return string(buf[0:i])
+		}
+	}
+	buf = append(buf, '.', '.', '.')
+	return string(buf)
+}
+
 // peekPtrStructField reads a pointer in the field fieldName of the struct
 // of type t at addr.
 func (s *Server) peekPtrStructField(t *dwarf.StructType, addr uint64, fieldName string) (uint64, error) {
@@ -120,6 +164,21 @@ func (s *Server) peekIntStructField(t *dwarf.StructType, addr uint64, fieldName 
 		return 0, fmt.Errorf("field %s is not a signed integer", fieldName)
 	}
 	return s.peekInt(addr+uint64(f.ByteOffset), it.ByteSize)
+}
+
+// peekStringStructField reads a string field from the struct of the given type
+// at the given address.
+// At most byteLimit bytes will be read.  If the string is longer, "..." is appended.
+func (s *Server) peekStringStructField(t *dwarf.StructType, addr uint64, fieldName string, byteLimit uint64) (string, error) {
+	f, err := getField(t, fieldName)
+	if err != nil {
+		return "", fmt.Errorf("reading field %s: %s", fieldName, err)
+	}
+	st, ok := followTypedefs(f.Type).(*dwarf.StringType)
+	if !ok {
+		return "", fmt.Errorf("field %s is not a string", fieldName)
+	}
+	return s.peekString(st, addr+uint64(f.ByteOffset), byteLimit)
 }
 
 // peekMapLocationAndType returns the address and DWARF type of the underlying

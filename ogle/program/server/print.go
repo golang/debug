@@ -490,32 +490,11 @@ func (p *Printer) printSliceAt(typ *dwarf.SliceType, a uint64) {
 }
 
 func (p *Printer) printStringAt(typ *dwarf.StringType, a uint64) {
-	// BUG: String header appears to have fields with ByteSize == 0
-	ptr, err := p.server.peekPtrStructField(&typ.StructType, a, "str")
-	if err != nil {
-		p.errorf("reading string: %s", err)
-		return
-	}
-	length, err := p.server.peekUintOrIntStructField(&typ.StructType, a, "len")
-	if err != nil {
-		p.errorf("reading string: %s", err)
-		return
-	}
 	const maxStringSize = 100
-	if length > maxStringSize {
-		buf := make([]byte, maxStringSize)
-		if err := p.server.peekBytes(ptr, buf); err != nil {
-			p.errorf("reading string: %s", err)
-		} else {
-			p.printf("%q...", string(buf))
-		}
+	if s, err := p.server.peekString(typ, a, maxStringSize); err != nil {
+		p.errorf("reading string: %s", err)
 	} else {
-		buf := make([]byte, length)
-		if err := p.server.peekBytes(ptr, buf); err != nil {
-			p.errorf("reading string: %s", err)
-		} else {
-			p.printf("%q", string(buf))
-		}
+		p.printf("%q", s)
 	}
 }
 

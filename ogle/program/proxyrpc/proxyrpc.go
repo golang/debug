@@ -156,3 +156,10 @@ type MapElementResponse struct {
 	Key   program.Var
 	Value program.Var
 }
+
+type GoroutinesRequest struct {
+}
+
+type GoroutinesResponse struct {
+	Goroutines []*program.Goroutine
+}

@@ -126,6 +126,13 @@ func (l *Local) Frames(count int) ([]program.Frame, error) {
 	return resp.Frames, err
 }
 
+func (l *Local) Goroutines() ([]*program.Goroutine, error) {
+	req := proxyrpc.GoroutinesRequest{}
+	var resp proxyrpc.GoroutinesResponse
+	err := l.s.Goroutines(&req, &resp)
+	return resp.Goroutines, err
+}
+
 func (l *Local) VarByName(name string) (program.Var, error) {
 	req := proxyrpc.VarByNameRequest{Name: name}
 	var resp proxyrpc.VarByNameResponse

@@ -241,6 +241,13 @@ func (p *Program) Frames(count int) ([]program.Frame, error) {
 	return resp.Frames, err
 }
 
+func (p *Program) Goroutines() ([]*program.Goroutine, error) {
+	req := proxyrpc.GoroutinesRequest{}
+	var resp proxyrpc.GoroutinesResponse
+	err := p.client.Call("Server.Goroutines", &req, &resp)
+	return resp.Goroutines, err
+}
+
 func (p *Program) VarByName(name string) (program.Var, error) {
 	req := proxyrpc.VarByNameRequest{Name: name}
 	var resp proxyrpc.VarByNameResponse
