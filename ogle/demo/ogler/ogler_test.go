@@ -464,6 +464,9 @@ func testProgram(t *testing.T, prog program.Program) {
 	}
 	for _, g := range gs {
 		fmt.Println(g)
+		for _, f := range g.StackFrames {
+			fmt.Println(f)
+		}
 	}
 
 	frames, err := prog.Frames(100)

@@ -8,6 +8,7 @@ package program // import "golang.org/x/debug/ogle/program"
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Program is the interface to a (possibly remote) program being debugged.
@@ -117,6 +118,7 @@ type Goroutine struct {
 	StatusString string // A human-readable string explaining the status in more detail.
 	Function     string // Name of the goroutine function.
 	Caller       string // Name of the function that created this goroutine.
+	StackFrames  []Frame
 }
 
 type GoroutineStatus byte
@@ -284,10 +286,22 @@ type Frame struct {
 	Line uint64
 	// Function is the name of this frame's function.
 	Function string
+	// FunctionStart is the starting PC of the function.
+	FunctionStart uint64
 	// Params contains the function's parameters.
 	Params []Param
 	// Vars contains the function's local variables.
 	Vars []LocalVar
+}
+
+func (f Frame) String() string {
+	params := make([]string, len(f.Params))
+	for i, p := range f.Params {
+		params[i] = p.Name // TODO: more information
+	}
+	p := strings.Join(params, ", ")
+	off := f.PC - f.FunctionStart
+	return fmt.Sprintf("%s(%s)\n\t%s:%d +0x%x", f.Function, p, f.File, f.Line, off)
 }
 
 // Param is a parameter of a function.

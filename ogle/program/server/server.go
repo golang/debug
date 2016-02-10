@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/debug/dwarf"
@@ -55,6 +56,10 @@ type Server struct {
 	breakpoints     map[uint64]breakpoint
 	files           []*file // Index == file descriptor.
 	printer         *Printer
+
+	// goroutineStack reads the stack of a (non-running) goroutine.
+	goroutineStack     func(uint64) ([]program.Frame, error)
+	goroutineStackOnce sync.Once
 }
 
 // peek implements the Peeker interface required by the printer.
@@ -614,40 +619,47 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 	if err != nil {
 		return err
 	}
-	pc, sp := regs.Rip, regs.Rsp
+	resp.Frames, err = s.walkStack(regs.Rip, regs.Rsp, req.Count)
+	return err
+}
+
+// walkStack returns up to the requested number of stack frames.
+func (s *Server) walkStack(pc, sp uint64, count int) ([]program.Frame, error) {
+	var frames []program.Frame
 
 	var buf [8]byte
 	b := new(bytes.Buffer)
 	r := s.dwarfData.Reader()
 
 	// TODO: handle walking over a split stack.
-	for i := 0; i < req.Count; i++ {
+	for i := 0; i < count; i++ {
 		b.Reset()
 		file, line, err := s.dwarfData.PCToLine(pc)
 		if err != nil {
-			return err
+			return frames, err
 		}
 		fpOffset, err := s.dwarfData.PCToSPOffset(pc)
 		if err != nil {
-			return err
+			return frames, err
 		}
 		fp := sp + uint64(fpOffset)
 		entry, funcEntry, err := s.entryForPC(pc)
 		if err != nil {
-			return err
+			return frames, err
 		}
 		frame := program.Frame{
-			PC:   pc,
-			SP:   sp,
-			File: file,
-			Line: line,
+			PC:            pc,
+			SP:            sp,
+			File:          file,
+			Line:          line,
+			FunctionStart: funcEntry,
 		}
 		frame.Function, _ = entry.Val(dwarf.AttrName).(string)
 		r.Seek(entry.Offset)
 		for {
 			entry, err := r.Next()
 			if err != nil {
-				return err
+				return frames, err
 			}
 			if entry.Tag == 0 {
 				break
@@ -664,7 +676,7 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 				}
 			}
 		}
-		resp.Frames = append(resp.Frames, frame)
+		frames = append(frames, frame)
 
 		// Walk to the caller's PC and SP.
 		if s.topOfStack(funcEntry) {
@@ -672,11 +684,11 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 		}
 		err = s.ptracePeek(s.stoppedPid, uintptr(fp-uint64(s.arch.PointerSize)), buf[:s.arch.PointerSize])
 		if err != nil {
-			return fmt.Errorf("ptracePeek: %v", err)
+			return frames, fmt.Errorf("ptracePeek: %v", err)
 		}
 		pc, sp = s.arch.Uintptr(buf[:s.arch.PointerSize]), fp
 	}
-	return nil
+	return frames, nil
 }
 
 // parseParameterOrLocal parses the entry for a function parameter or local
@@ -951,6 +963,9 @@ func (s *Server) handleGoroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrp
 		}
 	}
 
+	// Initialize s.goroutineStack.
+	s.goroutineStackOnce.Do(func() { s.goroutineStackInit(gType) })
+
 	for i := uint64(0); i < allglen; i++ {
 		// allg is an array of pointers to g structs.  Read allg[i].
 		g, err := s.peekPtr(allg + i*uint64(s.arch.PointerSize))
@@ -1019,9 +1034,80 @@ func (s *Server) handleGoroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrp
 		if gopc, err := s.peekUintStructField(gType, g, "gopc"); err == nil {
 			gr.Caller = functionName(gopc)
 		}
+		if gr.Status != program.Running {
+			// TODO: running goroutines too.
+			gr.StackFrames, _ = s.goroutineStack(g)
+		}
 
 		resp.Goroutines = append(resp.Goroutines, &gr)
 	}
 
 	return nil
+}
+
+// TODO: let users specify how many frames they want.  10 will be enough to
+// determine the reason a goroutine is blocked.
+const goroutineStackFrameCount = 10
+
+// goroutineStackInit initializes s.goroutineStack.
+func (s *Server) goroutineStackInit(gType *dwarf.StructType) {
+	// If we fail to read the DWARF data needed for s.goroutineStack, calling it
+	// will always return the error that occurred during initialization.
+	var err error // err is captured by the func below.
+	s.goroutineStack = func(gAddr uint64) ([]program.Frame, error) {
+		return nil, err
+	}
+
+	// Get g field "sched", which contains fields pc and sp.
+	schedField, err := getField(gType, "sched")
+	if err != nil {
+		return
+	}
+	schedOffset := uint64(schedField.ByteOffset)
+	schedType, ok := followTypedefs(schedField.Type).(*dwarf.StructType)
+	if !ok {
+		err = errors.New(`g field "sched" has the wrong type`)
+		return
+	}
+
+	// Get the size of the pc and sp fields and their offsets inside the g struct,
+	// so we can quickly peek those values for each goroutine later.
+	var (
+		schedPCOffset, schedSPOffset     uint64
+		schedPCByteSize, schedSPByteSize int64
+	)
+	for _, x := range []struct {
+		field    string
+		offset   *uint64
+		bytesize *int64
+	}{
+		{"pc", &schedPCOffset, &schedPCByteSize},
+		{"sp", &schedSPOffset, &schedSPByteSize},
+	} {
+		var f *dwarf.StructField
+		f, err = getField(schedType, x.field)
+		if err != nil {
+			return
+		}
+		*x.offset = schedOffset + uint64(f.ByteOffset)
+		switch t := followTypedefs(f.Type).(type) {
+		case *dwarf.UintType, *dwarf.IntType:
+			*x.bytesize = t.Common().ByteSize
+		default:
+			err = fmt.Errorf("gobuf field %q has the wrong type", x.field)
+			return
+		}
+	}
+
+	s.goroutineStack = func(gAddr uint64) ([]program.Frame, error) {
+		schedPC, err := s.peekUint(gAddr+schedPCOffset, schedPCByteSize)
+		if err != nil {
+			return nil, err
+		}
+		schedSP, err := s.peekUint(gAddr+schedSPOffset, schedSPByteSize)
+		if err != nil {
+			return nil, err
+		}
+		return s.walkStack(schedPC, schedSP, goroutineStackFrameCount)
+	}
 }
