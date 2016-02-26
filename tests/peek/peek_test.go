@@ -5,11 +5,13 @@
 package peek_test
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"reflect"
+	"sync"
 	"testing"
 
 	"golang.org/x/debug"
@@ -389,6 +391,34 @@ func matches(p, s string) bool {
 	return j == len(s)
 }
 
+const (
+	proxySrc  = "golang.org/x/debug/cmd/debugproxy"
+	traceeSrc = "golang.org/x/debug/tests/peek/testdata"
+)
+
+var (
+	// Locations of the proxy and tracee executables.
+	proxyBinary  = "./debugproxy.out"
+	traceeBinary = "./tracee.out"
+	// Onces that ensure initProxy and initTracee are called at most once.
+	proxyOnce  sync.Once
+	traceeOnce sync.Once
+	// Flags for setting the location of the proxy and tracee, so they don't need to be built.
+	proxyFlag  = flag.String("proxy", "", "Location of debugproxy.  If empty, proxy will be built.")
+	traceeFlag = flag.String("target", "", "Location of target.  If empty, target will be built.")
+	// Executables this test has built, which will be removed on completion of the tests.
+	filesToRemove []string
+)
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	x := m.Run()
+	for _, f := range filesToRemove {
+		os.Remove(f)
+	}
+	os.Exit(x)
+}
+
 func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
@@ -396,33 +426,32 @@ func run(name string, args ...string) error {
 	return cmd.Run()
 }
 
-const (
-	proxySrc     = "golang.org/x/debug/cmd/debugproxy"
-	proxyBinary  = "./debugproxy.out"
-	traceeSrc    = "golang.org/x/debug/tests/peek/testdata"
-	traceeBinary = "./tracee.out"
-)
-
-func TestMain(m *testing.M) {
-	os.Exit(buildAndRunTests(m))
+func initProxy() {
+	if *proxyFlag != "" {
+		proxyBinary = *proxyFlag
+		remote.DebugproxyCmd = proxyBinary
+		return
+	}
+	if err := run("go", "build", "-o", proxyBinary, proxySrc); err != nil {
+		log.Fatalf("couldn't build proxy: %v", err)
+	}
+	filesToRemove = append(filesToRemove, proxyBinary)
+	remote.DebugproxyCmd = proxyBinary
 }
 
-func buildAndRunTests(m *testing.M) int {
-	if err := run("go", "build", "-o", proxyBinary, proxySrc); err != nil {
-		fmt.Println(err)
-		return 1
+func initTracee() {
+	if *traceeFlag != "" {
+		traceeBinary = *traceeFlag
+		return
 	}
-	remote.DebugproxyCmd = proxyBinary
-	defer os.Remove(proxyBinary)
 	if err := run("go", "build", "-o", traceeBinary, traceeSrc); err != nil {
-		fmt.Println(err)
-		return 1
+		log.Fatalf("couldn't build target: %v", err)
 	}
-	defer os.Remove(traceeBinary)
-	return m.Run()
+	filesToRemove = append(filesToRemove, traceeBinary)
 }
 
 func TestLocalProgram(t *testing.T) {
+	traceeOnce.Do(initTracee)
 	prog, err := local.New(traceeBinary)
 	if err != nil {
 		t.Fatal("local.New:", err)
@@ -431,6 +460,8 @@ func TestLocalProgram(t *testing.T) {
 }
 
 func TestRemoteProgram(t *testing.T) {
+	traceeOnce.Do(initTracee)
+	proxyOnce.Do(initProxy)
 	prog, err := remote.New("localhost", traceeBinary)
 	if err != nil {
 		t.Fatal("remote.New:", err)
@@ -547,7 +578,7 @@ func testProgram(t *testing.T, prog debug.Program) {
 	}
 
 	// Set a breakpoint at line 125, resume, and check we stopped there.
-	pcsLine125, err := prog.BreakpointAtLine("tracee/main.go", 125)
+	pcsLine125, err := prog.BreakpointAtLine("testdata/main.go", 125)
 	if err != nil {
 		t.Fatal("BreakpointAtLine:", err)
 	}
