@@ -8,8 +8,8 @@ import (
 	"bytes"
 	"fmt"
 
+	"golang.org/x/debug/arch"
 	"golang.org/x/debug/dwarf"
-	"golang.org/x/debug/ogle/arch"
 )
 
 // typeAndAddress associates an address in the target with a DWARF type.

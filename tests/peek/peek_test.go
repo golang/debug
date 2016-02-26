@@ -2,10 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Demo program that starts another program and calls Ogle library functions
-// to debug it.
-
-package ogler
+package peek_test
 
 import (
 	"fmt"
@@ -15,9 +12,9 @@ import (
 	"reflect"
 	"testing"
 
-	"golang.org/x/debug/ogle/program"
-	"golang.org/x/debug/ogle/program/client"
-	"golang.org/x/debug/ogle/program/local"
+	"golang.org/x/debug"
+	"golang.org/x/debug/local"
+	"golang.org/x/debug/remote"
 )
 
 var expectedVarValues = map[string]interface{}{
@@ -87,53 +84,53 @@ var expectedVars = map[string]string{
 	`main.Z_unsafe_pointer_nil`:  `0x0`,
 }
 
-// expectedEvaluate contains expected results of the program.Evaluate function.
+// expectedEvaluate contains expected results of the debug.Evaluate function.
 // A nil value indicates that an error is expected.
-var expectedEvaluate = map[string]program.Value{
+var expectedEvaluate = map[string]debug.Value{
 	`x`:                                                          int16(42),
-	`local_array`:                                                program.Array{42, 42, 5, 8},
+	`local_array`:                                                debug.Array{42, 42, 5, 8},
 	`local_bool_false`:                                           false,
 	`local_bool_true`:                                            true,
-	`local_channel`:                                              program.Channel{42, 42, 42, 0, 0, 2, 0},
-	`local_channel_buffered`:                                     program.Channel{42, 42, 42, 6, 10, 2, 8},
-	`local_channel_nil`:                                          program.Channel{42, 0, 0, 0, 0, 2, 0},
+	`local_channel`:                                              debug.Channel{42, 42, 42, 0, 0, 2, 0},
+	`local_channel_buffered`:                                     debug.Channel{42, 42, 42, 6, 10, 2, 8},
+	`local_channel_nil`:                                          debug.Channel{42, 0, 0, 0, 0, 2, 0},
 	`local_complex128`:                                           complex128(1.987654321 - 2.987654321i),
 	`local_complex64`:                                            complex64(1.54321 + 2.54321i),
 	`local_float32`:                                              float32(1.54321),
 	`local_float64`:                                              float64(1.987654321),
-	`local_func_int8_r_int8`:                                     program.Func{42},
-	`local_func_int8_r_pint8`:                                    program.Func{42},
-	`local_func_bar`:                                             program.Func{42},
-	`local_func_nil`:                                             program.Func{0},
+	`local_func_int8_r_int8`:                                     debug.Func{42},
+	`local_func_int8_r_pint8`:                                    debug.Func{42},
+	`local_func_bar`:                                             debug.Func{42},
+	`local_func_nil`:                                             debug.Func{0},
 	`local_int`:                                                  -21,
 	`local_int16`:                                                int16(-32321),
 	`local_int32`:                                                int32(-1987654321),
 	`local_int64`:                                                int64(-9012345678987654321),
 	`local_int8`:                                                 int8(-121),
 	`local_int_typedef`:                                          int16(88),
-	`local_interface`:                                            program.Interface{},
-	`local_interface_nil`:                                        program.Interface{},
-	`local_interface_typed_nil`:                                  program.Interface{},
-	`local_map`:                                                  program.Map{42, 42, 1},
-	`local_map_2`:                                                program.Map{42, 42, 1},
-	`local_map_3`:                                                program.Map{42, 42, 2},
-	`local_map_empty`:                                            program.Map{42, 42, 0},
-	`local_map_nil`:                                              program.Map{42, 42, 0},
-	`local_pointer`:                                              program.Pointer{42, 42},
-	`local_pointer_nil`:                                          program.Pointer{42, 0},
-	`local_slice`:                                                program.Slice{program.Array{42, 42, 5, 8}, 5},
-	`local_slice_2`:                                              program.Slice{program.Array{42, 42, 2, 8}, 5},
-	`local_slice_nil`:                                            program.Slice{program.Array{42, 0, 0, 8}, 0},
-	`local_string`:                                               program.String{12, `I'm a string`},
-	`local_struct`:                                               program.Struct{[]program.StructField{{"a", program.Var{}}, {"b", program.Var{}}}},
+	`local_interface`:                                            debug.Interface{},
+	`local_interface_nil`:                                        debug.Interface{},
+	`local_interface_typed_nil`:                                  debug.Interface{},
+	`local_map`:                                                  debug.Map{42, 42, 1},
+	`local_map_2`:                                                debug.Map{42, 42, 1},
+	`local_map_3`:                                                debug.Map{42, 42, 2},
+	`local_map_empty`:                                            debug.Map{42, 42, 0},
+	`local_map_nil`:                                              debug.Map{42, 42, 0},
+	`local_pointer`:                                              debug.Pointer{42, 42},
+	`local_pointer_nil`:                                          debug.Pointer{42, 0},
+	`local_slice`:                                                debug.Slice{debug.Array{42, 42, 5, 8}, 5},
+	`local_slice_2`:                                              debug.Slice{debug.Array{42, 42, 2, 8}, 5},
+	`local_slice_nil`:                                            debug.Slice{debug.Array{42, 0, 0, 8}, 0},
+	`local_string`:                                               debug.String{12, `I'm a string`},
+	`local_struct`:                                               debug.Struct{[]debug.StructField{{"a", debug.Var{}}, {"b", debug.Var{}}}},
 	`local_uint`:                                                 uint(21),
 	`local_uint16`:                                               uint16(54321),
 	`local_uint32`:                                               uint32(3217654321),
 	`local_uint64`:                                               uint64(12345678900987654321),
 	`local_uint8`:                                                uint8(231),
 	`local_uintptr`:                                              uint(21),
-	`local_unsafe_pointer`:                                       program.Pointer{0, 42},
-	`local_unsafe_pointer_nil`:                                   program.Pointer{0, 0},
+	`local_unsafe_pointer`:                                       debug.Pointer{0, 42},
+	`local_unsafe_pointer_nil`:                                   debug.Pointer{0, 0},
 	`x + 5`:                                                      int16(47),
 	`x - 5`:                                                      int16(37),
 	`x / 5`:                                                      int16(8),
@@ -156,9 +153,9 @@ var expectedEvaluate = map[string]program.Value{
 	`1e5`:                                                        100000.0,
 	`0x42`:                                                       66,
 	`'c'`:                                                        'c',
-	`"de"`:                                                       program.String{2, `de`},
-	"`ef`":                                                       program.String{2, `ef`},
-	`"de" + "fg"`:                                                program.String{4, `defg`},
+	`"de"`:                                                       debug.String{2, `de`},
+	"`ef`":                                                       debug.String{2, `ef`},
+	`"de" + "fg"`:                                                debug.String{4, `defg`},
 	`/* comment */ -5`:                                           -5,
 	`false`:                                                      false,
 	`true`:                                                       true,
@@ -182,16 +179,16 @@ var expectedEvaluate = map[string]program.Value{
 	`(6 + 8i) * (1 + 1i)`:                                        -2 + 14i,
 	`(6 + 8i) * (6 - 8i)`:                                        complex128(100),
 	`(6 + 8i) / (3 + 4i)`:                                        complex128(2),
-	`local_string + "!"`:                                         program.String{13, `I'm a string!`},
-	`*local_pointer`:                                             program.Struct{[]program.StructField{{"a", program.Var{}}, {"b", program.Var{}}}},
-	`&local_int16`:                                               program.Pointer{42, 42},
+	`local_string + "!"`:                                         debug.String{13, `I'm a string!`},
+	`*local_pointer`:                                             debug.Struct{[]debug.StructField{{"a", debug.Var{}}, {"b", debug.Var{}}}},
+	`&local_int16`:                                               debug.Pointer{42, 42},
 	`*&local_int16`:                                              int16(-32321),
 	`*&*&*&*&local_int16`:                                        int16(-32321),
 	`local_array[2]`:                                             int8(3),
 	`local_slice[1]`:                                             uint8(108),
 	`local_slice_2[1]`:                                           int8(121),
-	`&local_array[1]`:                                            program.Pointer{42, 42},
-	`&local_slice[1]`:                                            program.Pointer{42, 42},
+	`&local_array[1]`:                                            debug.Pointer{42, 42},
+	`&local_slice[1]`:                                            debug.Pointer{42, 42},
 	`local_map[-21]`:                                             float32(3.54321),
 	`local_map[+21]`:                                             float32(0),
 	`local_map_3[1024]`:                                          int8(1),
@@ -202,78 +199,78 @@ var expectedEvaluate = map[string]program.Value{
 	`"hello"[2]`:                                                 uint8('l'),
 	`local_array[1:3][1]`:                                        int8(3),
 	`local_array[0:4][2:3][0]`:                                   int8(3),
-	`local_array[:]`:                                             program.Slice{program.Array{42, 42, 5, 8}, 5},
-	`local_array[:2]`:                                            program.Slice{program.Array{42, 42, 2, 8}, 5},
-	`local_array[2:]`:                                            program.Slice{program.Array{42, 42, 3, 8}, 3},
-	`local_array[1:3]`:                                           program.Slice{program.Array{42, 42, 2, 8}, 4},
-	`local_array[:3:4]`:                                          program.Slice{program.Array{42, 42, 3, 8}, 4},
-	`local_array[1:3:4]`:                                         program.Slice{program.Array{42, 42, 2, 8}, 3},
-	`local_array[1:][1:][1:]`:                                    program.Slice{program.Array{42, 42, 2, 8}, 2},
-	`(&local_array)[:]`:                                          program.Slice{program.Array{42, 42, 5, 8}, 5},
-	`(&local_array)[:2]`:                                         program.Slice{program.Array{42, 42, 2, 8}, 5},
-	`(&local_array)[2:]`:                                         program.Slice{program.Array{42, 42, 3, 8}, 3},
-	`(&local_array)[1:3]`:                                        program.Slice{program.Array{42, 42, 2, 8}, 4},
-	`(&local_array)[:3:4]`:                                       program.Slice{program.Array{42, 42, 3, 8}, 4},
-	`(&local_array)[1:3:4]`:                                      program.Slice{program.Array{42, 42, 2, 8}, 3},
+	`local_array[:]`:                                             debug.Slice{debug.Array{42, 42, 5, 8}, 5},
+	`local_array[:2]`:                                            debug.Slice{debug.Array{42, 42, 2, 8}, 5},
+	`local_array[2:]`:                                            debug.Slice{debug.Array{42, 42, 3, 8}, 3},
+	`local_array[1:3]`:                                           debug.Slice{debug.Array{42, 42, 2, 8}, 4},
+	`local_array[:3:4]`:                                          debug.Slice{debug.Array{42, 42, 3, 8}, 4},
+	`local_array[1:3:4]`:                                         debug.Slice{debug.Array{42, 42, 2, 8}, 3},
+	`local_array[1:][1:][1:]`:                                    debug.Slice{debug.Array{42, 42, 2, 8}, 2},
+	`(&local_array)[:]`:                                          debug.Slice{debug.Array{42, 42, 5, 8}, 5},
+	`(&local_array)[:2]`:                                         debug.Slice{debug.Array{42, 42, 2, 8}, 5},
+	`(&local_array)[2:]`:                                         debug.Slice{debug.Array{42, 42, 3, 8}, 3},
+	`(&local_array)[1:3]`:                                        debug.Slice{debug.Array{42, 42, 2, 8}, 4},
+	`(&local_array)[:3:4]`:                                       debug.Slice{debug.Array{42, 42, 3, 8}, 4},
+	`(&local_array)[1:3:4]`:                                      debug.Slice{debug.Array{42, 42, 2, 8}, 3},
 	`local_slice[1:5][0:3][1]`:                                   uint8('i'),
-	`local_slice[:]`:                                             program.Slice{program.Array{42, 42, 5, 8}, 5},
-	`local_slice[:2]`:                                            program.Slice{program.Array{42, 42, 2, 8}, 5},
-	`local_slice[2:]`:                                            program.Slice{program.Array{42, 42, 3, 8}, 3},
-	`local_slice[1:3]`:                                           program.Slice{program.Array{42, 42, 2, 8}, 4},
-	`local_slice[:3:4]`:                                          program.Slice{program.Array{42, 42, 3, 8}, 4},
-	`local_slice[1:3:4]`:                                         program.Slice{program.Array{42, 42, 2, 8}, 3},
+	`local_slice[:]`:                                             debug.Slice{debug.Array{42, 42, 5, 8}, 5},
+	`local_slice[:2]`:                                            debug.Slice{debug.Array{42, 42, 2, 8}, 5},
+	`local_slice[2:]`:                                            debug.Slice{debug.Array{42, 42, 3, 8}, 3},
+	`local_slice[1:3]`:                                           debug.Slice{debug.Array{42, 42, 2, 8}, 4},
+	`local_slice[:3:4]`:                                          debug.Slice{debug.Array{42, 42, 3, 8}, 4},
+	`local_slice[1:3:4]`:                                         debug.Slice{debug.Array{42, 42, 2, 8}, 3},
 	`local_struct.a`:                                             21,
 	`(&local_struct).a`:                                          21,
 	`(*local_pointer).a`:                                         21,
 	`(&*local_pointer).a`:                                        21,
-	`(*local_pointer).b`:                                         program.String{2, `hi`},
+	`(*local_pointer).b`:                                         debug.String{2, `hi`},
 	`local_pointer.a`:                                            21,
-	`local_pointer.b`:                                            program.String{2, `hi`},
-	`lookup("main.Z_array")`:                                     program.Array{42, 42, 5, 8},
-	`lookup("main.Z_array_empty")`:                               program.Array{42, 42, 0, 8},
+	`local_pointer.b`:                                            debug.String{2, `hi`},
+	`lookup("main.Z_array")`:                                     debug.Array{42, 42, 5, 8},
+	`lookup("main.Z_array_empty")`:                               debug.Array{42, 42, 0, 8},
 	`lookup("main.Z_bool_false")`:                                false,
 	`lookup("main.Z_bool_true")`:                                 true,
-	`lookup("main.Z_channel")`:                                   program.Channel{42, 42, 42, 0, 0, 2, 0},
-	`lookup("main.Z_channel_buffered")`:                          program.Channel{42, 42, 42, 6, 10, 2, 8},
-	`lookup("main.Z_channel_nil")`:                               program.Channel{42, 0, 0, 0, 0, 2, 0},
-	`lookup("main.Z_array_of_empties")`:                          program.Array{42, 42, 2, 0},
+	`lookup("main.Z_channel")`:                                   debug.Channel{42, 42, 42, 0, 0, 2, 0},
+	`lookup("main.Z_channel_buffered")`:                          debug.Channel{42, 42, 42, 6, 10, 2, 8},
+	`lookup("main.Z_channel_nil")`:                               debug.Channel{42, 0, 0, 0, 0, 2, 0},
+	`lookup("main.Z_array_of_empties")`:                          debug.Array{42, 42, 2, 0},
 	`lookup("main.Z_complex128")`:                                complex128(1.987654321 - 2.987654321i),
 	`lookup("main.Z_complex64")`:                                 complex64(1.54321 + 2.54321i),
 	`lookup("main.Z_float32")`:                                   float32(1.54321),
 	`lookup("main.Z_float64")`:                                   float64(1.987654321),
-	`lookup("main.Z_func_int8_r_int8")`:                          program.Func{42},
-	`lookup("main.Z_func_int8_r_pint8")`:                         program.Func{42},
-	`lookup("main.Z_func_bar")`:                                  program.Func{42},
-	`lookup("main.Z_func_nil")`:                                  program.Func{0},
+	`lookup("main.Z_func_int8_r_int8")`:                          debug.Func{42},
+	`lookup("main.Z_func_int8_r_pint8")`:                         debug.Func{42},
+	`lookup("main.Z_func_bar")`:                                  debug.Func{42},
+	`lookup("main.Z_func_nil")`:                                  debug.Func{0},
 	`lookup("main.Z_int")`:                                       -21,
 	`lookup("main.Z_int16")`:                                     int16(-32321),
 	`lookup("main.Z_int32")`:                                     int32(-1987654321),
 	`lookup("main.Z_int64")`:                                     int64(-9012345678987654321),
 	`lookup("main.Z_int8")`:                                      int8(-121),
 	`lookup("main.Z_int_typedef")`:                               int16(88),
-	`lookup("main.Z_interface")`:                                 program.Interface{},
-	`lookup("main.Z_interface_nil")`:                             program.Interface{},
-	`lookup("main.Z_interface_typed_nil")`:                       program.Interface{},
-	`lookup("main.Z_map")`:                                       program.Map{42, 42, 1},
-	`lookup("main.Z_map_2")`:                                     program.Map{42, 42, 1},
-	`lookup("main.Z_map_3")`:                                     program.Map{42, 42, 2},
-	`lookup("main.Z_map_empty")`:                                 program.Map{42, 42, 0},
-	`lookup("main.Z_map_nil")`:                                   program.Map{42, 42, 0},
-	`lookup("main.Z_pointer")`:                                   program.Pointer{42, 42},
-	`lookup("main.Z_pointer_nil")`:                               program.Pointer{42, 0},
-	`lookup("main.Z_slice")`:                                     program.Slice{program.Array{42, 42, 5, 8}, 5},
-	`lookup("main.Z_slice_2")`:                                   program.Slice{program.Array{42, 42, 2, 8}, 5},
-	`lookup("main.Z_slice_nil")`:                                 program.Slice{program.Array{42, 0, 0, 8}, 0},
-	`lookup("main.Z_string")`:                                    program.String{12, `I'm a string`},
-	`lookup("main.Z_struct")`:                                    program.Struct{[]program.StructField{{"a", program.Var{}}, {"b", program.Var{}}}},
+	`lookup("main.Z_interface")`:                                 debug.Interface{},
+	`lookup("main.Z_interface_nil")`:                             debug.Interface{},
+	`lookup("main.Z_interface_typed_nil")`:                       debug.Interface{},
+	`lookup("main.Z_map")`:                                       debug.Map{42, 42, 1},
+	`lookup("main.Z_map_2")`:                                     debug.Map{42, 42, 1},
+	`lookup("main.Z_map_3")`:                                     debug.Map{42, 42, 2},
+	`lookup("main.Z_map_empty")`:                                 debug.Map{42, 42, 0},
+	`lookup("main.Z_map_nil")`:                                   debug.Map{42, 42, 0},
+	`lookup("main.Z_pointer")`:                                   debug.Pointer{42, 42},
+	`lookup("main.Z_pointer_nil")`:                               debug.Pointer{42, 0},
+	`lookup("main.Z_slice")`:                                     debug.Slice{debug.Array{42, 42, 5, 8}, 5},
+	`lookup("main.Z_slice_2")`:                                   debug.Slice{debug.Array{42, 42, 2, 8}, 5},
+	`lookup("main.Z_slice_nil")`:                                 debug.Slice{debug.Array{42, 0, 0, 8}, 0},
+	`lookup("main.Z_string")`:                                    debug.String{12, `I'm a string`},
+	`lookup("main.Z_struct")`:                                    debug.Struct{[]debug.StructField{{"a", debug.Var{}}, {"b", debug.Var{}}}},
 	`lookup("main.Z_uint")`:                                      uint(21),
 	`lookup("main.Z_uint16")`:                                    uint16(54321),
 	`lookup("main.Z_uint32")`:                                    uint32(3217654321),
 	`lookup("main.Z_uint64")`:                                    uint64(12345678900987654321),
 	`lookup("main.Z_uint8")`:                                     uint8(231),
 	`lookup("main.Z_uintptr")`:                                   uint(21),
-	`lookup("main.Z_unsafe_pointer")`:                            program.Pointer{0, 42},
-	`lookup("main.Z_unsafe_pointer_nil")`:                        program.Pointer{0, 0},
+	`lookup("main.Z_unsafe_pointer")`:                            debug.Pointer{0, 42},
+	`lookup("main.Z_unsafe_pointer_nil")`:                        debug.Pointer{0, 0},
 	`lookup("main.Z_int") + lookup("main.Z_int")`:                -42,
 	`lookup("main.Z_int16") < 0`:                                 true,
 	`lookup("main.Z_uint32") + lookup("main.Z_uint32")`:          uint32(2140341346),
@@ -285,7 +282,7 @@ var expectedEvaluate = map[string]program.Value{
 	`lookup("main.Z_array")[2]`:                                  int8(3),
 	`lookup("main.Z_array")[1:3][1]`:                             int8(3),
 	`lookup("main.Z_array")[0:4][2:3][0]`:                        int8(3),
-	`lookup("main.Z_array_of_empties")[0]`:                       program.Struct{},
+	`lookup("main.Z_array_of_empties")[0]`:                       debug.Struct{},
 	`lookup("main.Z_complex128") * 10.0`:                         complex128(19.87654321 - 29.87654321i),
 	`lookup("main.Z_complex64") * 0.1`:                           complex64(0.154321 + 0.254321i),
 	`lookup("main.Z_float32") * 10.0`:                            float32(15.4321),
@@ -301,9 +298,9 @@ var expectedEvaluate = map[string]program.Value{
 	`lookup("main.Z_slice")[1]`:                                  uint8(108),
 	`lookup("main.Z_slice_2")[1]`:                                int8(121),
 	`lookup("main.Z_slice")[1:5][0:3][1]`:                        uint8('i'),
-	`lookup("main.Z_array")[1:3:4]`:                              program.Slice{program.Array{42, 42, 2, 8}, 3},
-	`(&lookup("main.Z_array"))[1:3:4]`:                           program.Slice{program.Array{42, 42, 2, 8}, 3},
-	`lookup("main.Z_string") + "!"`:                              program.String{13, `I'm a string!`},
+	`lookup("main.Z_array")[1:3:4]`:                              debug.Slice{debug.Array{42, 42, 2, 8}, 3},
+	`(&lookup("main.Z_array"))[1:3:4]`:                           debug.Slice{debug.Array{42, 42, 2, 8}, 3},
+	`lookup("main.Z_string") + "!"`:                              debug.String{13, `I'm a string!`},
 	`lookup("main.Z_struct").a`:                                  21,
 	`(&lookup("main.Z_struct")).a`:                               21,
 	`lookup("main.Z_uint")/10`:                                   uint(2),
@@ -314,16 +311,16 @@ var expectedEvaluate = map[string]program.Value{
 	`lookup("main.Z_pointer").a`:                                 21,
 	`(*lookup("main.Z_pointer")).a`:                              21,
 	`(&*lookup("main.Z_pointer")).a`:                             21,
-	`lookup("main.Z_pointer").b`:                                 program.String{2, `hi`},
-	`(*lookup("main.Z_pointer")).b`:                              program.String{2, `hi`},
-	`(&*lookup("main.Z_pointer")).b`:                             program.String{2, `hi`},
+	`lookup("main.Z_pointer").b`:                                 debug.String{2, `hi`},
+	`(*lookup("main.Z_pointer")).b`:                              debug.String{2, `hi`},
+	`(&*lookup("main.Z_pointer")).b`:                             debug.String{2, `hi`},
 	`lookup("main.Z_map_nil")[32]`:                               float32(0),
-	`&lookup("main.Z_int16")`:                                    program.Pointer{42, 42},
-	`&lookup("main.Z_array")[1]`:                                 program.Pointer{42, 42},
-	`&lookup("main.Z_slice")[1]`:                                 program.Pointer{42, 42},
+	`&lookup("main.Z_int16")`:                                    debug.Pointer{42, 42},
+	`&lookup("main.Z_array")[1]`:                                 debug.Pointer{42, 42},
+	`&lookup("main.Z_slice")[1]`:                                 debug.Pointer{42, 42},
 	`*&lookup("main.Z_int16")`:                                   int16(-32321),
 	`*&*&*&*&lookup("main.Z_int16")`:                             int16(-32321),
-	`lookup("time.Local")`:                                       program.Pointer{42, 42},
+	`lookup("time.Local")`:                                       debug.Pointer{42, 42},
 	`5 + false`:                                                  nil,
 	``:                                                           nil,
 	`x + ""`:                                                     nil,
@@ -400,10 +397,10 @@ func run(name string, args ...string) error {
 }
 
 const (
-	proxySrc     = "golang.org/x/debug/ogle/cmd/ogleproxy"
-	proxyBinary  = "./ogleproxy"
-	traceeSrc    = "golang.org/x/debug/ogle/demo/tracee"
-	traceeBinary = "./tracee"
+	proxySrc     = "golang.org/x/debug/cmd/debugproxy"
+	proxyBinary  = "./debugproxy.out"
+	traceeSrc    = "golang.org/x/debug/tests/peek/testdata"
+	traceeBinary = "./tracee.out"
 )
 
 func TestMain(m *testing.M) {
@@ -415,7 +412,7 @@ func buildAndRunTests(m *testing.M) int {
 		fmt.Println(err)
 		return 1
 	}
-	client.OgleproxyCmd = proxyBinary
+	remote.DebugproxyCmd = proxyBinary
 	defer os.Remove(proxyBinary)
 	if err := run("go", "build", "-o", traceeBinary, traceeSrc); err != nil {
 		fmt.Println(err)
@@ -434,14 +431,14 @@ func TestLocalProgram(t *testing.T) {
 }
 
 func TestRemoteProgram(t *testing.T) {
-	prog, err := client.New("localhost", traceeBinary)
+	prog, err := remote.New("localhost", traceeBinary)
 	if err != nil {
-		t.Fatal("client.New:", err)
+		t.Fatal("remote.New:", err)
 	}
 	testProgram(t, prog)
 }
 
-func testProgram(t *testing.T, prog program.Program) {
+func testProgram(t *testing.T, prog debug.Program) {
 	_, err := prog.Run("some", "arguments")
 	if err != nil {
 		log.Fatalf("Run: %v", err)
@@ -595,8 +592,8 @@ func testProgram(t *testing.T, prog program.Program) {
 			if v != val {
 				t.Errorf("got Evaluate(%s) = %T(%v), expected %T(%v)", k, val, val, v, v)
 			}
-		case program.Array:
-			val := val.(program.Array)
+		case debug.Array:
+			val := val.(debug.Array)
 			if v.ElementTypeID == 0 && val.ElementTypeID != 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected zero ElementTypeID", k, val)
 			}
@@ -609,8 +606,8 @@ func testProgram(t *testing.T, prog program.Program) {
 			if v.Address != 0 && val.Address == 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
 			}
-		case program.Slice:
-			val := val.(program.Slice)
+		case debug.Slice:
+			val := val.(debug.Slice)
 			if v.ElementTypeID == 0 && val.ElementTypeID != 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected zero ElementTypeID", k, val)
 			}
@@ -623,8 +620,8 @@ func testProgram(t *testing.T, prog program.Program) {
 			if v.Address != 0 && val.Address == 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
 			}
-		case program.Map:
-			val := val.(program.Map)
+		case debug.Map:
+			val := val.(debug.Map)
 			if v.TypeID == 0 && val.TypeID != 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected zero TypeID", k, val)
 			}
@@ -637,8 +634,8 @@ func testProgram(t *testing.T, prog program.Program) {
 			if v.Address != 0 && val.Address == 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
 			}
-		case program.Pointer:
-			val := val.(program.Pointer)
+		case debug.Pointer:
+			val := val.(debug.Pointer)
 			if v.TypeID == 0 && val.TypeID != 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected zero TypeID", k, val)
 			}
@@ -651,8 +648,8 @@ func testProgram(t *testing.T, prog program.Program) {
 			if v.Address != 0 && val.Address == 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Address", k, val)
 			}
-		case program.Channel:
-			val := val.(program.Channel)
+		case debug.Channel:
+			val := val.(debug.Channel)
 			if v.ElementTypeID == 0 && val.ElementTypeID != 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected zero ElementTypeID", k, val)
 			}
@@ -671,8 +668,8 @@ func testProgram(t *testing.T, prog program.Program) {
 			if v.Buffer != 0 && val.Buffer == 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected non-zero Buffer", k, val)
 			}
-		case program.Struct:
-			val := val.(program.Struct)
+		case debug.Struct:
+			val := val.(debug.Struct)
 			if len(v.Fields) != len(val.Fields) {
 				t.Errorf("got Evaluate(%s) = %T(%v), expected %T(%v)", k, val, val, v, v)
 				break
@@ -685,8 +682,8 @@ func testProgram(t *testing.T, prog program.Program) {
 					break
 				}
 			}
-		case program.Func:
-			val := val.(program.Func)
+		case debug.Func:
+			val := val.(debug.Func)
 			if v.Address == 0 && val.Address != 0 {
 				t.Errorf("got Evaluate(%s) = %+v, expected zero Address", k, val)
 			}
@@ -729,9 +726,9 @@ func testProgram(t *testing.T, prog program.Program) {
 	if err != nil {
 		t.Fatalf("Evaluate: %s", err)
 	}
-	s, ok := val.(program.Struct)
+	s, ok := val.(debug.Struct)
 	if !ok {
-		t.Fatalf("got Evaluate(`local_struct`) = %T(%v), expected program.Struct", val, val)
+		t.Fatalf("got Evaluate(`local_struct`) = %T(%v), expected debug.Struct", val, val)
 	}
 	// Check the values of its fields.
 	if len(s.Fields) != 2 {
@@ -744,7 +741,7 @@ func testProgram(t *testing.T, prog program.Program) {
 	}
 	if v1, err := prog.Value(s.Fields[1].Var); err != nil {
 		t.Errorf("Value: %s", err)
-	} else if v1 != (program.String{2, "hi"}) {
+	} else if v1 != (debug.String{2, "hi"}) {
 		t.Errorf("Value: got %T(%v), expected `hi`", v1, v1)
 	}
 
@@ -791,7 +788,7 @@ func testProgram(t *testing.T, prog program.Program) {
 	if _, err = prog.VarByName("not a real name"); err == nil {
 		t.Error("VarByName for invalid name: expected error")
 	}
-	if _, err = prog.Value(program.Var{}); err == nil {
+	if _, err = prog.Value(debug.Var{}); err == nil {
 		t.Error("value of invalid var: expected error")
 	}
 	if v, err := prog.VarByName("main.Z_int16"); err != nil {
@@ -808,7 +805,7 @@ func testProgram(t *testing.T, prog program.Program) {
 	// checkValue tests that we can get a Var for a variable with the given name,
 	// that we can then get the value of that Var, and that calling fn for that
 	// value succeeds.
-	checkValue := func(name string, fn func(val program.Value) error) {
+	checkValue := func(name string, fn func(val debug.Value) error) {
 		if v, err := prog.VarByName(name); err != nil {
 			t.Errorf("VarByName(%s): %s", name, err)
 		} else if val, err := prog.Value(v); err != nil {
@@ -818,7 +815,7 @@ func testProgram(t *testing.T, prog program.Program) {
 		}
 	}
 
-	checkValue("main.Z_uintptr", func(val program.Value) error {
+	checkValue("main.Z_uintptr", func(val debug.Value) error {
 		if val != uint32(21) && val != uint64(21) {
 			// Z_uintptr should be an unsigned integer with size equal to the debugged
 			// program's address size.
@@ -827,29 +824,29 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_int", func(val program.Value) error {
+	checkValue("main.Z_int", func(val debug.Value) error {
 		if val != int32(-21) && val != int64(-21) {
 			return fmt.Errorf("got %T(%v) want -21", val, val)
 		}
 		return nil
 	})
 
-	checkValue("main.Z_uint", func(val program.Value) error {
+	checkValue("main.Z_uint", func(val debug.Value) error {
 		if val != uint32(21) && val != uint64(21) {
 			return fmt.Errorf("got %T(%v) want 21", val, val)
 		}
 		return nil
 	})
 
-	checkValue("main.Z_pointer", func(val program.Value) error {
-		if _, ok := val.(program.Pointer); !ok {
+	checkValue("main.Z_pointer", func(val debug.Value) error {
+		if _, ok := val.(debug.Pointer); !ok {
 			return fmt.Errorf("got %T(%v) expected Pointer", val, val)
 		}
 		return nil
 	})
 
-	checkValue("main.Z_pointer_nil", func(val program.Value) error {
-		if p, ok := val.(program.Pointer); !ok {
+	checkValue("main.Z_pointer_nil", func(val debug.Value) error {
+		if p, ok := val.(debug.Pointer); !ok {
 			return fmt.Errorf("got %T(%v) expected Pointer", val, val)
 		} else if p.Address != 0 {
 			return fmt.Errorf("got %T(%v) expected nil pointer", val, val)
@@ -857,8 +854,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_array", func(val program.Value) error {
-		a, ok := val.(program.Array)
+	checkValue("main.Z_array", func(val debug.Value) error {
+		a, ok := val.(debug.Array)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Array", val, val)
 		}
@@ -876,8 +873,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_slice", func(val program.Value) error {
-		s, ok := val.(program.Slice)
+	checkValue("main.Z_slice", func(val debug.Value) error {
+		s, ok := val.(debug.Slice)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Slice", val, val)
 		}
@@ -895,8 +892,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_map_empty", func(val program.Value) error {
-		m, ok := val.(program.Map)
+	checkValue("main.Z_map_empty", func(val debug.Value) error {
+		m, ok := val.(debug.Map)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Map", val, val)
 		}
@@ -906,8 +903,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_map_nil", func(val program.Value) error {
-		m, ok := val.(program.Map)
+	checkValue("main.Z_map_nil", func(val debug.Value) error {
+		m, ok := val.(debug.Map)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Map", val, val)
 		}
@@ -917,8 +914,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_map_3", func(val program.Value) error {
-		m, ok := val.(program.Map)
+	checkValue("main.Z_map_3", func(val debug.Value) error {
+		m, ok := val.(debug.Map)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Map", val, val)
 		}
@@ -962,8 +959,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_string", func(val program.Value) error {
-		s, ok := val.(program.String)
+	checkValue("main.Z_string", func(val debug.Value) error {
+		s, ok := val.(debug.String)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected String", val, val)
 		}
@@ -977,8 +974,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_channel", func(val program.Value) error {
-		c, ok := val.(program.Channel)
+	checkValue("main.Z_channel", func(val debug.Value) error {
+		c, ok := val.(debug.Channel)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Channel", val, val)
 		}
@@ -994,8 +991,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_channel_2", func(val program.Value) error {
-		c, ok := val.(program.Channel)
+	checkValue("main.Z_channel_2", func(val debug.Value) error {
+		c, ok := val.(debug.Channel)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Channel", val, val)
 		}
@@ -1011,8 +1008,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_channel_nil", func(val program.Value) error {
-		c, ok := val.(program.Channel)
+	checkValue("main.Z_channel_nil", func(val debug.Value) error {
+		c, ok := val.(debug.Channel)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Channel", val, val)
 		}
@@ -1028,8 +1025,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_channel_buffered", func(val program.Value) error {
-		c, ok := val.(program.Channel)
+	checkValue("main.Z_channel_buffered", func(val debug.Value) error {
+		c, ok := val.(debug.Channel)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Channel", val, val)
 		}
@@ -1060,8 +1057,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_func_bar", func(val program.Value) error {
-		f, ok := val.(program.Func)
+	checkValue("main.Z_func_bar", func(val debug.Value) error {
+		f, ok := val.(debug.Func)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Func", val, val)
 		}
@@ -1071,8 +1068,8 @@ func testProgram(t *testing.T, prog program.Program) {
 		return nil
 	})
 
-	checkValue("main.Z_func_nil", func(val program.Value) error {
-		f, ok := val.(program.Func)
+	checkValue("main.Z_func_nil", func(val debug.Value) error {
+		f, ok := val.(debug.Func)
 		if !ok {
 			return fmt.Errorf("got %T(%v) expected Func", val, val)
 		}

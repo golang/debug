@@ -2,34 +2,41 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package client provides remote access to an ogle proxy.
-package client // import "golang.org/x/debug/ogle/program/client"
+// Package remote provides remote access to a debugproxy server.
+package remote // import "golang.org/x/debug/remote"
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/rpc"
 	"os"
 	"os/exec"
 
-	"golang.org/x/debug/ogle/program"
-	"golang.org/x/debug/ogle/program/proxyrpc"
+	"golang.org/x/debug"
+	"golang.org/x/debug/server/protocol"
 )
 
-var _ program.Program = (*Program)(nil)
-var _ program.File = (*File)(nil)
+var _ debug.Program = (*Program)(nil)
+var _ debug.File = (*File)(nil)
 
-// OgleproxyCmd is the path to the ogleproxy command. It is a variable in case
-// the default value, "ogleproxy", is not in the $PATH.
-var OgleproxyCmd = "ogleproxy"
+// Program implements the debug.Program interface.
+// Through that interface it provides access to a program being
+// debugged on a possibly remote machine by communicating
+// with a debugproxy adjacent to the target program.
+type Program struct {
+	client *rpc.Client
+}
 
-// New connects to the specified host using SSH, starts an ogle proxy
+// DebugproxyCmd is the path to the debugproxy command. It is a variable in case
+// the default value, "debugproxy", is not in the $PATH.
+var DebugproxyCmd = "debugproxy"
+
+// New connects to the specified host using SSH, starts DebugproxyCmd
 // there, and creates a new program from the specified file.
 // The program can then be started by the Run method.
 func New(host string, textFile string) (*Program, error) {
 	// TODO: add args.
-	cmdStrs := []string{"/usr/bin/ssh", host, OgleproxyCmd, "-text", textFile}
+	cmdStrs := []string{"/usr/bin/ssh", host, DebugproxyCmd, "-text", textFile}
 	if host == "localhost" {
 		cmdStrs = cmdStrs[2:]
 	}
@@ -50,21 +57,9 @@ func New(host string, textFile string) (*Program, error) {
 		return nil, err
 	}
 	stdout.Close()
-	// Read back one line. It must start "OGLE" and we hope says "OK".
-	msg, err := readLine(fromStdout)
-	if err != nil {
+	if msg, err := readLine(fromStdout); err != nil {
 		return nil, err
-	}
-	switch msg {
-	case "OGLE BAD":
-		// Error is on next line.
-		msg, err = readLine(fromStdout)
-		if err == nil {
-			err = errors.New(msg)
-		}
-		return nil, err
-	case "OGLE OK":
-	default:
+	} else if msg != "OK" {
 		// Communication error.
 		return nil, fmt.Errorf("unrecognized message %q", msg)
 	}
@@ -127,20 +122,12 @@ func (rwc *rwc) Close() error {
 	return werr
 }
 
-// Program implements the similarly named ogle interface.
-// Through that interface it provides access to a program being
-// debugged on a possibly remote machine by communicating
-// with an ogle proxy adjacent to the target program.
-type Program struct {
-	client *rpc.Client
-}
-
-func (p *Program) Open(name string, mode string) (program.File, error) {
-	req := proxyrpc.OpenRequest{
+func (p *Program) Open(name string, mode string) (debug.File, error) {
+	req := protocol.OpenRequest{
 		Name: name,
 		Mode: mode,
 	}
-	var resp proxyrpc.OpenResponse
+	var resp protocol.OpenResponse
 	err := p.client.Call("Server.Open", &req, &resp)
 	if err != nil {
 		return nil, err
@@ -152,124 +139,124 @@ func (p *Program) Open(name string, mode string) (program.File, error) {
 	return f, nil
 }
 
-func (p *Program) Run(args ...string) (program.Status, error) {
-	req := proxyrpc.RunRequest{args}
-	var resp proxyrpc.RunResponse
+func (p *Program) Run(args ...string) (debug.Status, error) {
+	req := protocol.RunRequest{args}
+	var resp protocol.RunResponse
 	err := p.client.Call("Server.Run", &req, &resp)
 	if err != nil {
-		return program.Status{}, err
+		return debug.Status{}, err
 	}
 	return resp.Status, nil
 }
 
-func (p *Program) Stop() (program.Status, error) {
+func (p *Program) Stop() (debug.Status, error) {
 	panic("unimplemented")
 }
 
-func (p *Program) Resume() (program.Status, error) {
-	req := proxyrpc.ResumeRequest{}
-	var resp proxyrpc.ResumeResponse
+func (p *Program) Resume() (debug.Status, error) {
+	req := protocol.ResumeRequest{}
+	var resp protocol.ResumeResponse
 	err := p.client.Call("Server.Resume", &req, &resp)
 	if err != nil {
-		return program.Status{}, err
+		return debug.Status{}, err
 	}
 	return resp.Status, nil
 }
 
-func (p *Program) Kill() (program.Status, error) {
+func (p *Program) Kill() (debug.Status, error) {
 	panic("unimplemented")
 }
 
 func (p *Program) Breakpoint(address uint64) ([]uint64, error) {
-	req := proxyrpc.BreakpointRequest{
+	req := protocol.BreakpointRequest{
 		Address: address,
 	}
-	var resp proxyrpc.BreakpointResponse
+	var resp protocol.BreakpointResponse
 	err := p.client.Call("Server.Breakpoint", &req, &resp)
 	return resp.PCs, err
 }
 
 func (p *Program) BreakpointAtFunction(name string) ([]uint64, error) {
-	req := proxyrpc.BreakpointAtFunctionRequest{
+	req := protocol.BreakpointAtFunctionRequest{
 		Function: name,
 	}
-	var resp proxyrpc.BreakpointResponse
+	var resp protocol.BreakpointResponse
 	err := p.client.Call("Server.BreakpointAtFunction", &req, &resp)
 	return resp.PCs, err
 }
 
 func (p *Program) BreakpointAtLine(file string, line uint64) ([]uint64, error) {
-	req := proxyrpc.BreakpointAtLineRequest{
+	req := protocol.BreakpointAtLineRequest{
 		File: file,
 		Line: line,
 	}
-	var resp proxyrpc.BreakpointResponse
+	var resp protocol.BreakpointResponse
 	err := p.client.Call("Server.BreakpointAtLine", &req, &resp)
 	return resp.PCs, err
 }
 
 func (p *Program) DeleteBreakpoints(pcs []uint64) error {
-	req := proxyrpc.DeleteBreakpointsRequest{PCs: pcs}
-	var resp proxyrpc.DeleteBreakpointsResponse
+	req := protocol.DeleteBreakpointsRequest{PCs: pcs}
+	var resp protocol.DeleteBreakpointsResponse
 	return p.client.Call("Server.DeleteBreakpoints", &req, &resp)
 }
 
 func (p *Program) Eval(expr string) ([]string, error) {
-	req := proxyrpc.EvalRequest{
+	req := protocol.EvalRequest{
 		Expr: expr,
 	}
-	var resp proxyrpc.EvalResponse
+	var resp protocol.EvalResponse
 	err := p.client.Call("Server.Eval", &req, &resp)
 	return resp.Result, err
 }
 
-func (p *Program) Evaluate(e string) (program.Value, error) {
-	req := proxyrpc.EvaluateRequest{
+func (p *Program) Evaluate(e string) (debug.Value, error) {
+	req := protocol.EvaluateRequest{
 		Expression: e,
 	}
-	var resp proxyrpc.EvaluateResponse
+	var resp protocol.EvaluateResponse
 	err := p.client.Call("Server.Evaluate", &req, &resp)
 	return resp.Result, err
 }
 
-func (p *Program) Frames(count int) ([]program.Frame, error) {
-	req := proxyrpc.FramesRequest{
+func (p *Program) Frames(count int) ([]debug.Frame, error) {
+	req := protocol.FramesRequest{
 		Count: count,
 	}
-	var resp proxyrpc.FramesResponse
+	var resp protocol.FramesResponse
 	err := p.client.Call("Server.Frames", &req, &resp)
 	return resp.Frames, err
 }
 
-func (p *Program) Goroutines() ([]*program.Goroutine, error) {
-	req := proxyrpc.GoroutinesRequest{}
-	var resp proxyrpc.GoroutinesResponse
+func (p *Program) Goroutines() ([]*debug.Goroutine, error) {
+	req := protocol.GoroutinesRequest{}
+	var resp protocol.GoroutinesResponse
 	err := p.client.Call("Server.Goroutines", &req, &resp)
 	return resp.Goroutines, err
 }
 
-func (p *Program) VarByName(name string) (program.Var, error) {
-	req := proxyrpc.VarByNameRequest{Name: name}
-	var resp proxyrpc.VarByNameResponse
+func (p *Program) VarByName(name string) (debug.Var, error) {
+	req := protocol.VarByNameRequest{Name: name}
+	var resp protocol.VarByNameResponse
 	err := p.client.Call("Server.VarByName", &req, &resp)
 	return resp.Var, err
 }
 
-func (p *Program) Value(v program.Var) (program.Value, error) {
-	req := proxyrpc.ValueRequest{Var: v}
-	var resp proxyrpc.ValueResponse
+func (p *Program) Value(v debug.Var) (debug.Value, error) {
+	req := protocol.ValueRequest{Var: v}
+	var resp protocol.ValueResponse
 	err := p.client.Call("Server.Value", &req, &resp)
 	return resp.Value, err
 }
 
-func (p *Program) MapElement(m program.Map, index uint64) (program.Var, program.Var, error) {
-	req := proxyrpc.MapElementRequest{Map: m, Index: index}
-	var resp proxyrpc.MapElementResponse
+func (p *Program) MapElement(m debug.Map, index uint64) (debug.Var, debug.Var, error) {
+	req := protocol.MapElementRequest{Map: m, Index: index}
+	var resp protocol.MapElementResponse
 	err := p.client.Call("Server.MapElement", &req, &resp)
 	return resp.Key, resp.Value, err
 }
 
-// File implements the program.File interface, providing access
+// File implements the debug.File interface, providing access
 // to file-like resources associated with the target program.
 type File struct {
 	prog *Program // The Program associated with the file.
@@ -277,32 +264,32 @@ type File struct {
 }
 
 func (f *File) ReadAt(p []byte, offset int64) (int, error) {
-	req := proxyrpc.ReadAtRequest{
+	req := protocol.ReadAtRequest{
 		FD:     f.fd,
 		Len:    len(p),
 		Offset: offset,
 	}
-	var resp proxyrpc.ReadAtResponse
+	var resp protocol.ReadAtResponse
 	err := f.prog.client.Call("Server.ReadAt", &req, &resp)
 	return copy(p, resp.Data), err
 }
 
 func (f *File) WriteAt(p []byte, offset int64) (int, error) {
-	req := proxyrpc.WriteAtRequest{
+	req := protocol.WriteAtRequest{
 		FD:     f.fd,
 		Data:   p,
 		Offset: offset,
 	}
-	var resp proxyrpc.WriteAtResponse
+	var resp protocol.WriteAtResponse
 	err := f.prog.client.Call("Server.WriteAt", &req, &resp)
 	return resp.Len, err
 }
 
 func (f *File) Close() error {
-	req := proxyrpc.CloseRequest{
+	req := protocol.CloseRequest{
 		FD: f.fd,
 	}
-	var resp proxyrpc.CloseResponse
+	var resp protocol.CloseResponse
 	err := f.prog.client.Call("Server.Close", &req, &resp)
 	return err
 }

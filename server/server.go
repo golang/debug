@@ -4,7 +4,7 @@
 
 // Package server provides RPC access to a local program being debugged.
 // It is the remote end of the client implementation of the Program interface.
-package server // import "golang.org/x/debug/ogle/program/server"
+package server // import "golang.org/x/debug/server"
 
 //go:generate sh -c "m4 -P eval.m4 > eval.go"
 
@@ -19,12 +19,12 @@ import (
 	"sync"
 	"syscall"
 
+	"golang.org/x/debug"
+	"golang.org/x/debug/arch"
 	"golang.org/x/debug/dwarf"
 	"golang.org/x/debug/elf"
 	"golang.org/x/debug/macho"
-	"golang.org/x/debug/ogle/arch"
-	"golang.org/x/debug/ogle/program"
-	"golang.org/x/debug/ogle/program/proxyrpc"
+	"golang.org/x/debug/server/protocol"
 )
 
 type breakpoint struct {
@@ -58,7 +58,7 @@ type Server struct {
 	printer         *Printer
 
 	// goroutineStack reads the stack of a (non-running) goroutine.
-	goroutineStack     func(uint64) ([]program.Frame, error)
+	goroutineStack     func(uint64) ([]debug.Frame, error)
 	goroutineStackOnce sync.Once
 }
 
@@ -154,38 +154,38 @@ func (s *Server) loop() {
 
 func (s *Server) dispatch(c call) {
 	switch req := c.req.(type) {
-	case *proxyrpc.BreakpointRequest:
-		c.errc <- s.handleBreakpoint(req, c.resp.(*proxyrpc.BreakpointResponse))
-	case *proxyrpc.BreakpointAtFunctionRequest:
-		c.errc <- s.handleBreakpointAtFunction(req, c.resp.(*proxyrpc.BreakpointResponse))
-	case *proxyrpc.BreakpointAtLineRequest:
-		c.errc <- s.handleBreakpointAtLine(req, c.resp.(*proxyrpc.BreakpointResponse))
-	case *proxyrpc.DeleteBreakpointsRequest:
-		c.errc <- s.handleDeleteBreakpoints(req, c.resp.(*proxyrpc.DeleteBreakpointsResponse))
-	case *proxyrpc.CloseRequest:
-		c.errc <- s.handleClose(req, c.resp.(*proxyrpc.CloseResponse))
-	case *proxyrpc.EvalRequest:
-		c.errc <- s.handleEval(req, c.resp.(*proxyrpc.EvalResponse))
-	case *proxyrpc.EvaluateRequest:
-		c.errc <- s.handleEvaluate(req, c.resp.(*proxyrpc.EvaluateResponse))
-	case *proxyrpc.FramesRequest:
-		c.errc <- s.handleFrames(req, c.resp.(*proxyrpc.FramesResponse))
-	case *proxyrpc.OpenRequest:
-		c.errc <- s.handleOpen(req, c.resp.(*proxyrpc.OpenResponse))
-	case *proxyrpc.ReadAtRequest:
-		c.errc <- s.handleReadAt(req, c.resp.(*proxyrpc.ReadAtResponse))
-	case *proxyrpc.ResumeRequest:
-		c.errc <- s.handleResume(req, c.resp.(*proxyrpc.ResumeResponse))
-	case *proxyrpc.RunRequest:
-		c.errc <- s.handleRun(req, c.resp.(*proxyrpc.RunResponse))
-	case *proxyrpc.VarByNameRequest:
-		c.errc <- s.handleVarByName(req, c.resp.(*proxyrpc.VarByNameResponse))
-	case *proxyrpc.ValueRequest:
-		c.errc <- s.handleValue(req, c.resp.(*proxyrpc.ValueResponse))
-	case *proxyrpc.MapElementRequest:
-		c.errc <- s.handleMapElement(req, c.resp.(*proxyrpc.MapElementResponse))
-	case *proxyrpc.GoroutinesRequest:
-		c.errc <- s.handleGoroutines(req, c.resp.(*proxyrpc.GoroutinesResponse))
+	case *protocol.BreakpointRequest:
+		c.errc <- s.handleBreakpoint(req, c.resp.(*protocol.BreakpointResponse))
+	case *protocol.BreakpointAtFunctionRequest:
+		c.errc <- s.handleBreakpointAtFunction(req, c.resp.(*protocol.BreakpointResponse))
+	case *protocol.BreakpointAtLineRequest:
+		c.errc <- s.handleBreakpointAtLine(req, c.resp.(*protocol.BreakpointResponse))
+	case *protocol.DeleteBreakpointsRequest:
+		c.errc <- s.handleDeleteBreakpoints(req, c.resp.(*protocol.DeleteBreakpointsResponse))
+	case *protocol.CloseRequest:
+		c.errc <- s.handleClose(req, c.resp.(*protocol.CloseResponse))
+	case *protocol.EvalRequest:
+		c.errc <- s.handleEval(req, c.resp.(*protocol.EvalResponse))
+	case *protocol.EvaluateRequest:
+		c.errc <- s.handleEvaluate(req, c.resp.(*protocol.EvaluateResponse))
+	case *protocol.FramesRequest:
+		c.errc <- s.handleFrames(req, c.resp.(*protocol.FramesResponse))
+	case *protocol.OpenRequest:
+		c.errc <- s.handleOpen(req, c.resp.(*protocol.OpenResponse))
+	case *protocol.ReadAtRequest:
+		c.errc <- s.handleReadAt(req, c.resp.(*protocol.ReadAtResponse))
+	case *protocol.ResumeRequest:
+		c.errc <- s.handleResume(req, c.resp.(*protocol.ResumeResponse))
+	case *protocol.RunRequest:
+		c.errc <- s.handleRun(req, c.resp.(*protocol.RunResponse))
+	case *protocol.VarByNameRequest:
+		c.errc <- s.handleVarByName(req, c.resp.(*protocol.VarByNameResponse))
+	case *protocol.ValueRequest:
+		c.errc <- s.handleValue(req, c.resp.(*protocol.ValueResponse))
+	case *protocol.MapElementRequest:
+		c.errc <- s.handleMapElement(req, c.resp.(*protocol.MapElementResponse))
+	case *protocol.GoroutinesRequest:
+		c.errc <- s.handleGoroutines(req, c.resp.(*protocol.GoroutinesResponse))
 	default:
 		panic(fmt.Sprintf("unexpected call request type %T", c.req))
 	}
@@ -200,14 +200,14 @@ func (s *Server) call(c chan call, req, resp interface{}) error {
 type file struct {
 	mode  string
 	index int
-	f     program.File
+	f     debug.File
 }
 
-func (s *Server) Open(req *proxyrpc.OpenRequest, resp *proxyrpc.OpenResponse) error {
+func (s *Server) Open(req *protocol.OpenRequest, resp *protocol.OpenResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleOpen(req *proxyrpc.OpenRequest, resp *proxyrpc.OpenResponse) error {
+func (s *Server) handleOpen(req *protocol.OpenRequest, resp *protocol.OpenResponse) error {
 	// TODO: Better simulation. For now we just open the named OS file.
 	var flag int
 	switch req.Mode {
@@ -241,11 +241,11 @@ func (s *Server) handleOpen(req *proxyrpc.OpenRequest, resp *proxyrpc.OpenRespon
 	return nil
 }
 
-func (s *Server) ReadAt(req *proxyrpc.ReadAtRequest, resp *proxyrpc.ReadAtResponse) error {
+func (s *Server) ReadAt(req *protocol.ReadAtRequest, resp *protocol.ReadAtResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleReadAt(req *proxyrpc.ReadAtRequest, resp *proxyrpc.ReadAtResponse) error {
+func (s *Server) handleReadAt(req *protocol.ReadAtRequest, resp *protocol.ReadAtResponse) error {
 	fd := req.FD
 	if fd < 0 || len(s.files) <= fd || s.files[fd] == nil {
 		return fmt.Errorf("ReadAt: bad file descriptor %d", fd)
@@ -257,11 +257,11 @@ func (s *Server) handleReadAt(req *proxyrpc.ReadAtRequest, resp *proxyrpc.ReadAt
 	return err
 }
 
-func (s *Server) Close(req *proxyrpc.CloseRequest, resp *proxyrpc.CloseResponse) error {
+func (s *Server) Close(req *protocol.CloseRequest, resp *protocol.CloseResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleClose(req *proxyrpc.CloseRequest, resp *proxyrpc.CloseResponse) error {
+func (s *Server) handleClose(req *protocol.CloseRequest, resp *protocol.CloseResponse) error {
 	fd := req.FD
 	if fd < 0 || fd >= len(s.files) || s.files[fd] == nil {
 		return fmt.Errorf("Close: bad file descriptor %d", fd)
@@ -272,11 +272,11 @@ func (s *Server) handleClose(req *proxyrpc.CloseRequest, resp *proxyrpc.CloseRes
 	return err
 }
 
-func (s *Server) Run(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error {
+func (s *Server) Run(req *protocol.RunRequest, resp *protocol.RunResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleRun(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse) error {
+func (s *Server) handleRun(req *protocol.RunRequest, resp *protocol.RunResponse) error {
 	if s.proc != nil {
 		s.proc.Kill()
 		s.proc = nil
@@ -305,11 +305,11 @@ func (s *Server) handleRun(req *proxyrpc.RunRequest, resp *proxyrpc.RunResponse)
 	return nil
 }
 
-func (s *Server) Resume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeResponse) error {
+func (s *Server) Resume(req *protocol.ResumeRequest, resp *protocol.ResumeResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleResume(req *proxyrpc.ResumeRequest, resp *proxyrpc.ResumeResponse) error {
+func (s *Server) handleResume(req *protocol.ResumeRequest, resp *protocol.ResumeResponse) error {
 	if s.proc == nil {
 		return fmt.Errorf("Resume: Run did not successfully start a process")
 	}
@@ -412,19 +412,19 @@ func (s *Server) waitForTrap(pid int, allowBreakpointsChange bool) (wpid int, er
 	}
 }
 
-func (s *Server) Breakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.BreakpointResponse) error {
+func (s *Server) Breakpoint(req *protocol.BreakpointRequest, resp *protocol.BreakpointResponse) error {
 	return s.call(s.breakpointc, req, resp)
 }
 
-func (s *Server) handleBreakpoint(req *proxyrpc.BreakpointRequest, resp *proxyrpc.BreakpointResponse) error {
+func (s *Server) handleBreakpoint(req *protocol.BreakpointRequest, resp *protocol.BreakpointResponse) error {
 	return s.addBreakpoints([]uint64{req.Address}, resp)
 }
 
-func (s *Server) BreakpointAtFunction(req *proxyrpc.BreakpointAtFunctionRequest, resp *proxyrpc.BreakpointResponse) error {
+func (s *Server) BreakpointAtFunction(req *protocol.BreakpointAtFunctionRequest, resp *protocol.BreakpointResponse) error {
 	return s.call(s.breakpointc, req, resp)
 }
 
-func (s *Server) handleBreakpointAtFunction(req *proxyrpc.BreakpointAtFunctionRequest, resp *proxyrpc.BreakpointResponse) error {
+func (s *Server) handleBreakpointAtFunction(req *protocol.BreakpointAtFunctionRequest, resp *protocol.BreakpointResponse) error {
 	pc, err := s.lookupFunction(req.Function)
 	if err != nil {
 		return err
@@ -432,11 +432,11 @@ func (s *Server) handleBreakpointAtFunction(req *proxyrpc.BreakpointAtFunctionRe
 	return s.addBreakpoints([]uint64{pc}, resp)
 }
 
-func (s *Server) BreakpointAtLine(req *proxyrpc.BreakpointAtLineRequest, resp *proxyrpc.BreakpointResponse) error {
+func (s *Server) BreakpointAtLine(req *protocol.BreakpointAtLineRequest, resp *protocol.BreakpointResponse) error {
 	return s.call(s.breakpointc, req, resp)
 }
 
-func (s *Server) handleBreakpointAtLine(req *proxyrpc.BreakpointAtLineRequest, resp *proxyrpc.BreakpointResponse) error {
+func (s *Server) handleBreakpointAtLine(req *protocol.BreakpointAtLineRequest, resp *protocol.BreakpointResponse) error {
 	if s.dwarfData == nil {
 		return fmt.Errorf("no DWARF data")
 	}
@@ -448,7 +448,7 @@ func (s *Server) handleBreakpointAtLine(req *proxyrpc.BreakpointAtLineRequest, r
 }
 
 // addBreakpoints adds breakpoints at the addresses in pcs, then stores pcs in the response.
-func (s *Server) addBreakpoints(pcs []uint64, resp *proxyrpc.BreakpointResponse) error {
+func (s *Server) addBreakpoints(pcs []uint64, resp *protocol.BreakpointResponse) error {
 	// Get the original code at each address with ptracePeek.
 	bps := make([]breakpoint, 0, len(pcs))
 	for _, pc := range pcs {
@@ -470,11 +470,11 @@ func (s *Server) addBreakpoints(pcs []uint64, resp *proxyrpc.BreakpointResponse)
 	return nil
 }
 
-func (s *Server) DeleteBreakpoints(req *proxyrpc.DeleteBreakpointsRequest, resp *proxyrpc.DeleteBreakpointsResponse) error {
+func (s *Server) DeleteBreakpoints(req *protocol.DeleteBreakpointsRequest, resp *protocol.DeleteBreakpointsResponse) error {
 	return s.call(s.breakpointc, req, resp)
 }
 
-func (s *Server) handleDeleteBreakpoints(req *proxyrpc.DeleteBreakpointsRequest, resp *proxyrpc.DeleteBreakpointsResponse) error {
+func (s *Server) handleDeleteBreakpoints(req *protocol.DeleteBreakpointsRequest, resp *protocol.DeleteBreakpointsResponse) error {
 	for _, pc := range req.PCs {
 		delete(s.breakpoints, pc)
 	}
@@ -501,11 +501,11 @@ func (s *Server) liftBreakpoints() error {
 	return nil
 }
 
-func (s *Server) Eval(req *proxyrpc.EvalRequest, resp *proxyrpc.EvalResponse) error {
+func (s *Server) Eval(req *protocol.EvalRequest, resp *protocol.EvalResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleEval(req *proxyrpc.EvalRequest, resp *proxyrpc.EvalResponse) (err error) {
+func (s *Server) handleEval(req *protocol.EvalRequest, resp *protocol.EvalResponse) (err error) {
 	resp.Result, err = s.eval(req.Expr)
 	return err
 }
@@ -566,11 +566,11 @@ func (s *Server) eval(expr string) ([]string, error) {
 	return nil, fmt.Errorf("bad expression syntax: %q", expr)
 }
 
-func (s *Server) Evaluate(req *proxyrpc.EvaluateRequest, resp *proxyrpc.EvaluateResponse) error {
+func (s *Server) Evaluate(req *protocol.EvaluateRequest, resp *protocol.EvaluateResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleEvaluate(req *proxyrpc.EvaluateRequest, resp *proxyrpc.EvaluateResponse) (err error) {
+func (s *Server) handleEvaluate(req *protocol.EvaluateRequest, resp *protocol.EvaluateResponse) (err error) {
 	resp.Result, err = s.evalExpression(req.Expression, s.stoppedRegs.Rip, s.stoppedRegs.Rsp)
 	return err
 }
@@ -602,11 +602,11 @@ func (s *Server) evalAddress(expr string) (uint64, error) {
 	return addr, nil
 }
 
-func (s *Server) Frames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesResponse) error {
+func (s *Server) Frames(req *protocol.FramesRequest, resp *protocol.FramesResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.FramesResponse) error {
+func (s *Server) handleFrames(req *protocol.FramesRequest, resp *protocol.FramesResponse) error {
 	// TODO: verify that we're stopped.
 	if s.topOfStackAddrs == nil {
 		if err := s.evaluateTopOfStackAddrs(); err != nil {
@@ -624,8 +624,8 @@ func (s *Server) handleFrames(req *proxyrpc.FramesRequest, resp *proxyrpc.Frames
 }
 
 // walkStack returns up to the requested number of stack frames.
-func (s *Server) walkStack(pc, sp uint64, count int) ([]program.Frame, error) {
-	var frames []program.Frame
+func (s *Server) walkStack(pc, sp uint64, count int) ([]debug.Frame, error) {
+	var frames []debug.Frame
 
 	var buf [8]byte
 	b := new(bytes.Buffer)
@@ -647,7 +647,7 @@ func (s *Server) walkStack(pc, sp uint64, count int) ([]program.Frame, error) {
 		if err != nil {
 			return frames, err
 		}
-		frame := program.Frame{
+		frame := debug.Frame{
 			PC:            pc,
 			SP:            sp,
 			File:          file,
@@ -667,7 +667,7 @@ func (s *Server) walkStack(pc, sp uint64, count int) ([]program.Frame, error) {
 			// TODO: report variables we couldn't parse?
 			if entry.Tag == dwarf.TagFormalParameter {
 				if v, err := s.parseParameterOrLocal(entry, fp); err == nil {
-					frame.Params = append(frame.Params, program.Param(v))
+					frame.Params = append(frame.Params, debug.Param(v))
 				}
 			}
 			if entry.Tag == dwarf.TagVariable {
@@ -694,8 +694,8 @@ func (s *Server) walkStack(pc, sp uint64, count int) ([]program.Frame, error) {
 // parseParameterOrLocal parses the entry for a function parameter or local
 // variable, which are both specified the same way. fp contains the frame
 // pointer, which is used to calculate the variable location.
-func (s *Server) parseParameterOrLocal(entry *dwarf.Entry, fp uint64) (program.LocalVar, error) {
-	var v program.LocalVar
+func (s *Server) parseParameterOrLocal(entry *dwarf.Entry, fp uint64) (debug.LocalVar, error) {
+	var v debug.LocalVar
 	v.Name, _ = entry.Val(dwarf.AttrName).(string)
 	if off, err := s.dwarfData.EntryTypeOffset(entry); err != nil {
 		return v, err
@@ -775,11 +775,11 @@ func (s *Server) topOfStack(funcEntry uint64) bool {
 	return false
 }
 
-func (s *Server) VarByName(req *proxyrpc.VarByNameRequest, resp *proxyrpc.VarByNameResponse) error {
+func (s *Server) VarByName(req *protocol.VarByNameRequest, resp *protocol.VarByNameResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleVarByName(req *proxyrpc.VarByNameRequest, resp *proxyrpc.VarByNameResponse) error {
+func (s *Server) handleVarByName(req *protocol.VarByNameRequest, resp *protocol.VarByNameResponse) error {
 	entry, err := s.dwarfData.LookupEntry(req.Name)
 	if err != nil {
 		return fmt.Errorf("variable %s: %s", req.Name, err)
@@ -800,11 +800,11 @@ func (s *Server) handleVarByName(req *proxyrpc.VarByNameRequest, resp *proxyrpc.
 	return nil
 }
 
-func (s *Server) Value(req *proxyrpc.ValueRequest, resp *proxyrpc.ValueResponse) error {
+func (s *Server) Value(req *protocol.ValueRequest, resp *protocol.ValueResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleValue(req *proxyrpc.ValueRequest, resp *proxyrpc.ValueResponse) error {
+func (s *Server) handleValue(req *protocol.ValueRequest, resp *protocol.ValueResponse) error {
 	t, err := s.dwarfData.Type(dwarf.Offset(req.Var.TypeID))
 	if err != nil {
 		return err
@@ -813,11 +813,11 @@ func (s *Server) handleValue(req *proxyrpc.ValueRequest, resp *proxyrpc.ValueRes
 	return err
 }
 
-func (s *Server) MapElement(req *proxyrpc.MapElementRequest, resp *proxyrpc.MapElementResponse) error {
+func (s *Server) MapElement(req *protocol.MapElementRequest, resp *protocol.MapElementResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-func (s *Server) handleMapElement(req *proxyrpc.MapElementRequest, resp *proxyrpc.MapElementResponse) error {
+func (s *Server) handleMapElement(req *protocol.MapElementRequest, resp *protocol.MapElementResponse) error {
 	t, err := s.dwarfData.Type(dwarf.Offset(req.Map.TypeID))
 	if err != nil {
 		return err
@@ -833,8 +833,8 @@ func (s *Server) handleMapElement(req *proxyrpc.MapElementRequest, resp *proxyrp
 	fn := func(keyAddr, valAddr uint64, keyType, valType dwarf.Type) bool {
 		count++
 		if count == req.Index+1 {
-			resp.Key = program.Var{TypeID: uint64(keyType.Common().Offset), Address: keyAddr}
-			resp.Value = program.Var{TypeID: uint64(valType.Common().Offset), Address: valAddr}
+			resp.Key = debug.Var{TypeID: uint64(keyType.Common().Offset), Address: keyAddr}
+			resp.Value = debug.Var{TypeID: uint64(valType.Common().Offset), Address: valAddr}
 			return false
 		}
 		return true
@@ -849,33 +849,33 @@ func (s *Server) handleMapElement(req *proxyrpc.MapElementRequest, resp *proxyrp
 	return nil
 }
 
-func (s *Server) Goroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrpc.GoroutinesResponse) error {
+func (s *Server) Goroutines(req *protocol.GoroutinesRequest, resp *protocol.GoroutinesResponse) error {
 	return s.call(s.otherc, req, resp)
 }
 
-const invalidStatus program.GoroutineStatus = 99
+const invalidStatus debug.GoroutineStatus = 99
 
 var (
-	gStatus = [...]program.GoroutineStatus{
-		0: program.Queued,  // _Gidle
-		1: program.Queued,  // _Grunnable
-		2: program.Running, // _Grunning
-		3: program.Blocked, // _Gsyscall
-		4: program.Blocked, // _Gwaiting
-		5: invalidStatus,   // _Gmoribund_unused
-		6: invalidStatus,   // _Gdead
-		7: invalidStatus,   // _Genqueue
-		8: program.Running, // _Gcopystack
+	gStatus = [...]debug.GoroutineStatus{
+		0: debug.Queued,  // _Gidle
+		1: debug.Queued,  // _Grunnable
+		2: debug.Running, // _Grunning
+		3: debug.Blocked, // _Gsyscall
+		4: debug.Blocked, // _Gwaiting
+		5: invalidStatus, // _Gmoribund_unused
+		6: invalidStatus, // _Gdead
+		7: invalidStatus, // _Genqueue
+		8: debug.Running, // _Gcopystack
 	}
-	gScanStatus = [...]program.GoroutineStatus{
-		0: invalidStatus,   // _Gscan + _Gidle
-		1: program.Queued,  // _Gscanrunnable
-		2: program.Running, // _Gscanrunning
-		3: program.Blocked, // _Gscansyscall
-		4: program.Blocked, // _Gscanwaiting
-		5: invalidStatus,   // _Gscan + _Gmoribund_unused
-		6: invalidStatus,   // _Gscan + _Gdead
-		7: program.Queued,  // _Gscanenqueue
+	gScanStatus = [...]debug.GoroutineStatus{
+		0: invalidStatus, // _Gscan + _Gidle
+		1: debug.Queued,  // _Gscanrunnable
+		2: debug.Running, // _Gscanrunning
+		3: debug.Blocked, // _Gscansyscall
+		4: debug.Blocked, // _Gscanwaiting
+		5: invalidStatus, // _Gscan + _Gmoribund_unused
+		6: invalidStatus, // _Gscan + _Gdead
+		7: debug.Queued,  // _Gscanenqueue
 	}
 	gStatusString = [...]string{
 		0: "idle",
@@ -894,7 +894,7 @@ var (
 	}
 )
 
-func (s *Server) handleGoroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrpc.GoroutinesResponse) error {
+func (s *Server) handleGoroutines(req *protocol.GoroutinesRequest, resp *protocol.GoroutinesResponse) error {
 	// Get DWARF type information for runtime.g.
 	ge, err := s.dwarfData.LookupEntry("runtime.g")
 	if err != nil {
@@ -972,7 +972,7 @@ func (s *Server) handleGoroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrp
 		if err != nil {
 			return err
 		}
-		gr := program.Goroutine{}
+		gr := debug.Goroutine{}
 
 		// Read status from the field named "atomicstatus" or "status".
 		status, err := s.peekUintStructField(gType, g, "atomicstatus")
@@ -1034,7 +1034,7 @@ func (s *Server) handleGoroutines(req *proxyrpc.GoroutinesRequest, resp *proxyrp
 		if gopc, err := s.peekUintStructField(gType, g, "gopc"); err == nil {
 			gr.Caller = functionName(gopc)
 		}
-		if gr.Status != program.Running {
+		if gr.Status != debug.Running {
 			// TODO: running goroutines too.
 			gr.StackFrames, _ = s.goroutineStack(g)
 		}
@@ -1054,7 +1054,7 @@ func (s *Server) goroutineStackInit(gType *dwarf.StructType) {
 	// If we fail to read the DWARF data needed for s.goroutineStack, calling it
 	// will always return the error that occurred during initialization.
 	var err error // err is captured by the func below.
-	s.goroutineStack = func(gAddr uint64) ([]program.Frame, error) {
+	s.goroutineStack = func(gAddr uint64) ([]debug.Frame, error) {
 		return nil, err
 	}
 
@@ -1099,7 +1099,7 @@ func (s *Server) goroutineStackInit(gType *dwarf.StructType) {
 		}
 	}
 
-	s.goroutineStack = func(gAddr uint64) ([]program.Frame, error) {
+	s.goroutineStack = func(gAddr uint64) ([]debug.Frame, error) {
 		schedPC, err := s.peekUint(gAddr+schedPCOffset, schedPCByteSize)
 		if err != nil {
 			return nil, err

@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package arch contains architecture-specific definitions.
-package arch // import "golang.org/x/debug/ogle/arch"
+package arch // import "golang.org/x/debug/arch"
 
 import (
 	"encoding/binary"

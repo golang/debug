@@ -2,27 +2,26 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package proxyrpc defines the types used to represent the RPC calls
-// used to the ogleproxy.
-package proxyrpc // import "golang.org/x/debug/ogle/program/proxyrpc"
+// Package protocol defines the types used to represent calls to the debug server.
+package protocol // import "golang.org/x/debug/server/protocol"
 
 import (
 	"encoding/gob"
 
-	"golang.org/x/debug/ogle/program"
+	"golang.org/x/debug"
 )
 
 func init() {
-	// Register implementations of program.Value with gob.
-	gob.Register(program.Pointer{})
-	gob.Register(program.Array{})
-	gob.Register(program.Struct{})
-	gob.Register(program.Slice{})
-	gob.Register(program.Map{})
-	gob.Register(program.String{})
-	gob.Register(program.Channel{})
-	gob.Register(program.Func{})
-	gob.Register(program.Interface{})
+	// Register implementations of debug.Value with gob.
+	gob.Register(debug.Pointer{})
+	gob.Register(debug.Array{})
+	gob.Register(debug.Struct{})
+	gob.Register(debug.Slice{})
+	gob.Register(debug.Map{})
+	gob.Register(debug.String{})
+	gob.Register(debug.Channel{})
+	gob.Register(debug.Func{})
+	gob.Register(debug.Interface{})
 }
 
 // For regularity, each method has a unique Request and a Response type even
@@ -73,14 +72,14 @@ type RunRequest struct {
 }
 
 type RunResponse struct {
-	Status program.Status
+	Status debug.Status
 }
 
 type ResumeRequest struct {
 }
 
 type ResumeResponse struct {
-	Status program.Status
+	Status debug.Status
 }
 
 type BreakpointRequest struct {
@@ -120,7 +119,7 @@ type EvaluateRequest struct {
 }
 
 type EvaluateResponse struct {
-	Result program.Value
+	Result debug.Value
 }
 
 type FramesRequest struct {
@@ -128,7 +127,7 @@ type FramesRequest struct {
 }
 
 type FramesResponse struct {
-	Frames []program.Frame
+	Frames []debug.Frame
 }
 
 type VarByNameRequest struct {
@@ -136,30 +135,30 @@ type VarByNameRequest struct {
 }
 
 type VarByNameResponse struct {
-	Var program.Var
+	Var debug.Var
 }
 
 type ValueRequest struct {
-	Var program.Var
+	Var debug.Var
 }
 
 type ValueResponse struct {
-	Value program.Value
+	Value debug.Value
 }
 
 type MapElementRequest struct {
-	Map   program.Map
+	Map   debug.Map
 	Index uint64
 }
 
 type MapElementResponse struct {
-	Key   program.Var
-	Value program.Var
+	Key   debug.Var
+	Value debug.Var
 }
 
 type GoroutinesRequest struct {
 }
 
 type GoroutinesResponse struct {
-	Goroutines []*program.Goroutine
+	Goroutines []*debug.Goroutine
 }

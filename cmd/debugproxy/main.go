@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The ogleproxy connects to the target binary and serves an RPC
-// interface to access and control it.
+// debugproxy connects to the target binary, and serves an RPC interface using
+// the types in server/protocol to access and control it.
 package main
 
 import (
@@ -13,7 +13,7 @@ import (
 	"net/rpc"
 	"os"
 
-	"golang.org/x/debug/ogle/program/server"
+	"golang.org/x/debug/server"
 )
 
 var (
@@ -22,31 +22,29 @@ var (
 
 func main() {
 	log.SetFlags(0)
-	log.SetPrefix("ogleproxy: ")
+	log.SetPrefix("debugproxy: ")
 	flag.Parse()
 	if *textFlag == "" {
-		fmt.Printf("OGLE BAD\n")
 		flag.Usage()
 		os.Exit(2)
 	}
 	s, err := server.New(*textFlag)
 	if err != nil {
-		fmt.Printf("OGLE BAD\n%s\n", err)
+		fmt.Printf("server.New: %v\n", err)
 		os.Exit(2)
 	}
 	err = rpc.Register(s)
 	if err != nil {
-		fmt.Printf("OGLE BAD\n%s\n", err)
+		fmt.Printf("rpc.Register: %v\n", err)
 		os.Exit(2)
 	}
-	fmt.Println("OGLE OK")
-	log.Print("start server")
-	// TODO: Usually done in a go.
+	fmt.Println("OK")
+	log.Print("starting server")
 	rpc.ServeConn(&rwc{
 		os.Stdin,
 		os.Stdout,
 	})
-	log.Print("finish server")
+	log.Print("server finished")
 }
 
 // rwc creates a single io.ReadWriteCloser from a read side and a write side.

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package program provides the portable interface to a program being debugged.
-package program // import "golang.org/x/debug/ogle/program"
+// Package debug provides the portable interface to a program being debugged.
+package debug // import "golang.org/x/debug"
 
 import (
 	"fmt"

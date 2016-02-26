@@ -6,12 +6,13 @@ package server
 
 import (
 	"fmt"
+
+	"golang.org/x/debug"
 	"golang.org/x/debug/dwarf"
-	"golang.org/x/debug/ogle/program"
 )
 
 // value peeks the program's memory at the given address, parsing it as a value of type t.
-func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
+func (s *Server) value(t dwarf.Type, addr uint64) (debug.Value, error) {
 	// readBasic reads the memory for a basic type of size n bytes.
 	readBasic := func(n int64) ([]byte, error) {
 		switch n {
@@ -114,7 +115,7 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading pointer: %s", err)
 		}
-		return program.Pointer{
+		return debug.Pointer{
 			TypeID:  uint64(t.Type.Common().Offset),
 			Address: uint64(s.arch.Uintptr(buf)),
 		}, nil
@@ -135,8 +136,8 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 			return nil, fmt.Errorf("slice's capacity %d is less than its length %d", capacity, length)
 		}
 
-		return program.Slice{
-			program.Array{
+		return debug.Slice{
+			debug.Array{
 				ElementTypeID: uint64(t.ElemType.Common().Offset),
 				Address:       uint64(ptr),
 				Length:        length,
@@ -150,24 +151,24 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		if stride%8 != 0 {
 			return nil, fmt.Errorf("array is not byte-aligned")
 		}
-		return program.Array{
+		return debug.Array{
 			ElementTypeID: uint64(t.Type.Common().Offset),
 			Address:       uint64(addr),
 			Length:        uint64(length),
 			StrideBits:    uint64(stride),
 		}, nil
 	case *dwarf.StructType:
-		fields := make([]program.StructField, len(t.Field))
+		fields := make([]debug.StructField, len(t.Field))
 		for i, field := range t.Field {
-			fields[i] = program.StructField{
+			fields[i] = debug.StructField{
 				Name: field.Name,
-				Var: program.Var{
+				Var: debug.Var{
 					TypeID:  uint64(field.Type.Common().Offset),
 					Address: uint64(addr) + uint64(field.ByteOffset),
 				},
 			}
 		}
-		return program.Struct{fields}, nil
+		return debug.Struct{fields}, nil
 	case *dwarf.TypedefType:
 		return s.value(t.Type, addr)
 	case *dwarf.MapType:
@@ -175,7 +176,7 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		return program.Map{
+		return debug.Map{
 			TypeID:  uint64(t.Common().Offset),
 			Address: addr,
 			Length:  length,
@@ -200,7 +201,7 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		if err := s.peekBytes(ptr, tmp); err != nil {
 			return nil, fmt.Errorf("reading string contents: %s", err)
 		}
-		return program.String{Length: length, String: string(tmp)}, nil
+		return debug.String{Length: length, String: string(tmp)}, nil
 	case *dwarf.ChanType:
 		pt, ok := t.TypedefType.Type.(*dwarf.PtrType)
 		if !ok {
@@ -217,7 +218,7 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		}
 		if a == 0 {
 			// This channel is nil.
-			return program.Channel{
+			return debug.Channel{
 				ElementTypeID: uint64(t.ElemType.Common().Offset),
 				Address:       0,
 				Buffer:        0,
@@ -244,7 +245,7 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading channel buffer index: %s", err)
 		}
-		return program.Channel{
+		return debug.Channel{
 			ElementTypeID: uint64(t.ElemType.Common().Offset),
 			Address:       a,
 			Buffer:        buf,
@@ -258,9 +259,9 @@ func (s *Server) value(t dwarf.Type, addr uint64) (program.Value, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading func: %s", err)
 		}
-		return program.Func{Address: a}, nil
+		return debug.Func{Address: a}, nil
 	case *dwarf.InterfaceType:
-		return program.Interface{}, nil
+		return debug.Interface{}, nil
 		// TODO: more types
 	}
 	return nil, fmt.Errorf("Unsupported type %T", t)

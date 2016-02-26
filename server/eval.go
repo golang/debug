@@ -1,7 +1,7 @@
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
-//m4_changequote(`@',`@')
+//
 // Evaluates Go expressions, using the current values of variables in a program
 // being debugged.
 //
@@ -21,8 +21,8 @@ import (
 	"math"
 	"math/big"
 
+	"golang.org/x/debug"
 	"golang.org/x/debug/dwarf"
-	"golang.org/x/debug/ogle/program"
 )
 
 const prec = 256 // precision for untyped float and complex constants.
@@ -50,7 +50,7 @@ var (
 // For address operations, v will have type pointerToValue.
 // For the operands of address operations, v will have type addressableValue.
 // Other types are represented using the corresponding implementation of
-// program.Value in program.go.
+// debug.Value in program.go.
 //
 // If an evaluation results in an error, the zero value of result is used.
 type result struct {
@@ -84,7 +84,7 @@ type untString string
 
 // pointerToValue is a pointer to a value in memory.
 // The evaluator constructs these as the result of address operations like "&x".
-// Unlike program.Pointer, the DWARF type stored alongside values of this type
+// Unlike debug.Pointer, the DWARF type stored alongside values of this type
 // is the type of the variable, not the type of the pointer.
 type pointerToValue struct {
 	a uint64
@@ -98,9 +98,9 @@ type addressableValue struct {
 }
 
 // A sliceOf is a slice created by slicing an array.
-// Unlike program.Slice, the DWARF type stored alongside a value of this type is
+// Unlike debug.Slice, the DWARF type stored alongside a value of this type is
 // the type of the slice's elements, not the type of the slice.
-type sliceOf program.Slice
+type sliceOf debug.Slice
 
 // ident is a value for representing a special identifier.
 type ident string
@@ -112,7 +112,7 @@ var identLookup ident = "lookup"
 // evalExpression evaluates a Go expression.
 // If the program counter and stack pointer are nonzero, they are used to determine
 // what local variables are available and where in memory they are.
-func (s *Server) evalExpression(expression string, pc, sp uint64) (program.Value, error) {
+func (s *Server) evalExpression(expression string, pc, sp uint64) (debug.Value, error) {
 	e := evaluator{server: s, expression: expression, pc: pc, sp: sp}
 	node, err := parser.ParseExpr(expression)
 	if err != nil {
@@ -155,11 +155,11 @@ func (s *Server) evalExpression(expression string, pc, sp uint64) (program.Value
 		}
 		return complex(r, i), nil
 	case untString:
-		return program.String{Length: uint64(len(v)), String: string(v)}, nil
+		return debug.String{Length: uint64(len(v)), String: string(v)}, nil
 	case pointerToValue:
-		return program.Pointer{TypeID: uint64(val.d.Common().Offset), Address: v.a}, nil
+		return debug.Pointer{TypeID: uint64(val.d.Common().Offset), Address: v.a}, nil
 	case sliceOf:
-		return program.Slice(v), nil
+		return debug.Slice(v), nil
 	case nil, addressableValue:
 		// This case should not be reachable.
 		return nil, errors.New("unknown error")
@@ -286,7 +286,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 	case *ast.StarExpr:
 		x := e.evalNode(n.X, false)
 		switch v := x.v.(type) {
-		case program.Pointer:
+		case debug.Pointer:
 			// x.d may be a typedef pointing to a pointer type (or a typedef pointing
 			// to a typedef pointing to a pointer type, etc.), so remove typedefs
 			// until we get the underlying pointer type.
@@ -307,7 +307,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 		x := e.evalNode(n.X, false)
 		sel := n.Sel.Name
 		switch v := x.v.(type) {
-		case program.Struct:
+		case debug.Struct:
 			for _, f := range v.Fields {
 				if f.Name == sel {
 					t, err := e.server.dwarfData.Type(dwarf.Offset(f.Var.TypeID))
@@ -318,7 +318,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 				}
 			}
 			return e.err("struct field not found")
-		case program.Pointer:
+		case debug.Pointer:
 			pt, ok := followTypedefs(x.d).(*dwarf.PtrType) // x.d should be a pointer to struct.
 			if !ok {
 				return e.err("invalid DWARF information for pointer")
@@ -353,7 +353,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			return result{}
 		}
 		// The expression is x[index]
-		if m, ok := x.v.(program.Map); ok {
+		if m, ok := x.v.(debug.Map); ok {
 			if getAddress {
 				return e.err("can't take address of map value")
 			}
@@ -406,7 +406,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			return e.err("invalid index: " + err.Error())
 		}
 		switch v := x.v.(type) {
-		case program.Array:
+		case debug.Array:
 			if u >= v.Length {
 				return e.err("array index out of bounds")
 			}
@@ -415,7 +415,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 				return e.err(err.Error())
 			}
 			return e.resultFrom(v.Element(u).Address, elemType, getAddress)
-		case program.Slice:
+		case debug.Slice:
 			if u >= v.Length {
 				return e.err("slice index out of bounds")
 			}
@@ -429,7 +429,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 				return e.err("slice index out of bounds")
 			}
 			return e.resultFrom(v.Element(u).Address, x.d, getAddress)
-		case program.String:
+		case debug.String:
 			if getAddress {
 				return e.err("can't take address of string element")
 			}
@@ -482,19 +482,19 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 		}
 		x := e.evalNode(n.X, false)
 		switch v := x.v.(type) {
-		case program.Array, program.Pointer, pointerToValue:
+		case debug.Array, debug.Pointer, pointerToValue:
 			// This case handles the slicing of arrays and pointers to arrays.
-			var arr program.Array
+			var arr debug.Array
 			switch v := x.v.(type) {
-			case program.Array:
+			case debug.Array:
 				arr = v
-			case program.Pointer:
+			case debug.Pointer:
 				pt, ok := followTypedefs(x.d).(*dwarf.PtrType)
 				if !ok {
 					return e.err("invalid DWARF type for pointer")
 				}
 				a := e.resultFrom(v.Address, pt.Type, false)
-				arr, ok = a.v.(program.Array)
+				arr, ok = a.v.(debug.Array)
 				if !ok {
 					// v is a pointer to something other than an array.
 					return e.err("cannot slice pointer")
@@ -502,7 +502,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			case pointerToValue:
 				a := e.resultFrom(v.a, x.d, false)
 				var ok bool
-				arr, ok = a.v.(program.Array)
+				arr, ok = a.v.(debug.Array)
 				if !ok {
 					// v is a pointer to something other than an array.
 					return e.err("cannot slice pointer")
@@ -528,7 +528,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			return result{
 				d: elemType,
 				v: sliceOf{
-					Array: program.Array{
+					Array: debug.Array{
 						ElementTypeID: arr.ElementTypeID,
 						Address:       arr.Element(low).Address,
 						Length:        high - low,
@@ -537,7 +537,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 					Capacity: max - low,
 				},
 			}
-		case program.Slice:
+		case debug.Slice:
 			if n.High == nil {
 				high = v.Length
 			} else if high > v.Capacity {
@@ -573,7 +573,7 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			v.Length = high - low
 			v.Capacity = max - low
 			return result{x.d, v}
-		case program.String:
+		case debug.String:
 			if n.Max != nil {
 				return e.err("full slice of string")
 			}
@@ -653,7 +653,8 @@ func (e *evaluator) evalNode(node ast.Node, getAddress bool) result {
 			return x
 		}
 		switch v := x.v.(type) {
-m4_define(UNARY_INT_OPS, @case $1:
+
+		case int8:
 			switch n.Op {
 			case token.ADD:
 			case token.SUB:
@@ -664,8 +665,92 @@ m4_define(UNARY_INT_OPS, @case $1:
 				return e.err("invalid operation")
 			}
 			return result{x.d, v}
-@)
-m4_define(UNARY_FLOAT_OPS, @case $1:
+
+		case int16:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			case token.XOR:
+				v = ^v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case int32:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			case token.XOR:
+				v = ^v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case int64:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			case token.XOR:
+				v = ^v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case uint8:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			case token.XOR:
+				v = ^v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case uint16:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			case token.XOR:
+				v = ^v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case uint32:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			case token.XOR:
+				v = ^v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case uint64:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			case token.XOR:
+				v = ^v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case float32:
 			switch n.Op {
 			case token.ADD:
 			case token.SUB:
@@ -674,19 +759,37 @@ m4_define(UNARY_FLOAT_OPS, @case $1:
 				return e.err("invalid operation")
 			}
 			return result{x.d, v}
-@)
-		UNARY_INT_OPS(int8)
-		UNARY_INT_OPS(int16)
-		UNARY_INT_OPS(int32)
-		UNARY_INT_OPS(int64)
-		UNARY_INT_OPS(uint8)
-		UNARY_INT_OPS(uint16)
-		UNARY_INT_OPS(uint32)
-		UNARY_INT_OPS(uint64)
-		UNARY_FLOAT_OPS(float32)
-		UNARY_FLOAT_OPS(float64)
-		UNARY_FLOAT_OPS(complex64)
-		UNARY_FLOAT_OPS(complex128)
+
+		case float64:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case complex64:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
+		case complex128:
+			switch n.Op {
+			case token.ADD:
+			case token.SUB:
+				v = -v
+			default:
+				return e.err("invalid operation")
+			}
+			return result{x.d, v}
+
 		case untInt:
 			switch n.Op {
 			case token.ADD:
@@ -777,12 +880,13 @@ func (e *evaluator) evalBinaryOp(op token.Token, x, y result) result {
 	y = convertUntyped(y, x)
 
 	switch a := x.v.(type) {
-m4_define(INT_OPS, @case $1:
-		b, ok := y.v.($1)
+
+	case int8:
+		b, ok := y.v.(int8)
 		if !ok {
 			return e.err("type mismatch")
 		}
-		var c $1
+		var c int8
 		switch op {
 		case token.EQL:
 			return result{nil, a == b}
@@ -818,13 +922,13 @@ m4_define(INT_OPS, @case $1:
 			return e.err("invalid operation")
 		}
 		return result{x.d, c}
-@)
-m4_define(UINT_OPS, @case $1:
-		b, ok := y.v.($1)
+
+	case int16:
+		b, ok := y.v.(int16)
 		if !ok {
 			return e.err("type mismatch")
 		}
-		var c $1
+		var c int16
 		switch op {
 		case token.EQL:
 			return result{nil, a == b}
@@ -860,13 +964,265 @@ m4_define(UINT_OPS, @case $1:
 			return e.err("invalid operation")
 		}
 		return result{x.d, c}
-@)
-m4_define(FLOAT_OPS, @case $1:
-		b, ok := y.v.($1)
+
+	case int32:
+		b, ok := y.v.(int32)
 		if !ok {
 			return e.err("type mismatch")
 		}
-		var c $1
+		var c int32
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.LSS:
+			return result{nil, a < b}
+		case token.LEQ:
+			return result{nil, a <= b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.OR:
+			c = a | b
+		case token.XOR:
+			c = a ^ b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a / b
+		case token.REM:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a % b
+		case token.AND:
+			c = a & b
+		case token.AND_NOT:
+			c = a &^ b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
+	case int64:
+		b, ok := y.v.(int64)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c int64
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.LSS:
+			return result{nil, a < b}
+		case token.LEQ:
+			return result{nil, a <= b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.OR:
+			c = a | b
+		case token.XOR:
+			c = a ^ b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a / b
+		case token.REM:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a % b
+		case token.AND:
+			c = a & b
+		case token.AND_NOT:
+			c = a &^ b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
+	case uint8:
+		b, ok := y.v.(uint8)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c uint8
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.LSS:
+			return result{nil, a < b}
+		case token.LEQ:
+			return result{nil, a <= b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.OR:
+			c = a | b
+		case token.XOR:
+			c = a ^ b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a / b
+		case token.REM:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a % b
+		case token.AND:
+			c = a & b
+		case token.AND_NOT:
+			c = a &^ b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
+	case uint16:
+		b, ok := y.v.(uint16)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c uint16
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.LSS:
+			return result{nil, a < b}
+		case token.LEQ:
+			return result{nil, a <= b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.OR:
+			c = a | b
+		case token.XOR:
+			c = a ^ b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a / b
+		case token.REM:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a % b
+		case token.AND:
+			c = a & b
+		case token.AND_NOT:
+			c = a &^ b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
+	case uint32:
+		b, ok := y.v.(uint32)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c uint32
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.LSS:
+			return result{nil, a < b}
+		case token.LEQ:
+			return result{nil, a <= b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.OR:
+			c = a | b
+		case token.XOR:
+			c = a ^ b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a / b
+		case token.REM:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a % b
+		case token.AND:
+			c = a & b
+		case token.AND_NOT:
+			c = a &^ b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
+	case uint64:
+		b, ok := y.v.(uint64)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c uint64
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.LSS:
+			return result{nil, a < b}
+		case token.LEQ:
+			return result{nil, a <= b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.OR:
+			c = a | b
+		case token.XOR:
+			c = a ^ b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a / b
+		case token.REM:
+			if b == 0 {
+				return e.err("integer divide by zero")
+			}
+			c = a % b
+		case token.AND:
+			c = a & b
+		case token.AND_NOT:
+			c = a &^ b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
+	case float32:
+		b, ok := y.v.(float32)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c float32
 		switch op {
 		case token.EQL:
 			return result{nil, a == b}
@@ -886,13 +1242,39 @@ m4_define(FLOAT_OPS, @case $1:
 			return e.err("invalid operation")
 		}
 		return result{x.d, c}
-@)
-m4_define(COMPLEX_OPS, @case $1:
-		b, ok := y.v.($1)
+
+	case float64:
+		b, ok := y.v.(float64)
 		if !ok {
 			return e.err("type mismatch")
 		}
-		var c $1
+		var c float64
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.LSS:
+			return result{nil, a < b}
+		case token.LEQ:
+			return result{nil, a <= b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			c = a / b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
+	case complex64:
+		b, ok := y.v.(complex64)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c complex64
 		switch op {
 		case token.EQL:
 			return result{nil, a == b}
@@ -908,19 +1290,29 @@ m4_define(COMPLEX_OPS, @case $1:
 			return e.err("invalid operation")
 		}
 		return result{x.d, c}
-@)
-	INT_OPS(int8)
-	INT_OPS(int16)
-	INT_OPS(int32)
-	INT_OPS(int64)
-	UINT_OPS(uint8)
-	UINT_OPS(uint16)
-	UINT_OPS(uint32)
-	UINT_OPS(uint64)
-	FLOAT_OPS(float32)
-	FLOAT_OPS(float64)
-	COMPLEX_OPS(complex64)
-	COMPLEX_OPS(complex128)
+
+	case complex128:
+		b, ok := y.v.(complex128)
+		if !ok {
+			return e.err("type mismatch")
+		}
+		var c complex128
+		switch op {
+		case token.EQL:
+			return result{nil, a == b}
+		case token.ADD:
+			c = a + b
+		case token.SUB:
+			c = a - b
+		case token.MUL:
+			c = a * b
+		case token.QUO:
+			c = a / b
+		default:
+			return e.err("invalid operation")
+		}
+		return result{x.d, c}
+
 	case bool:
 		b, ok := y.v.(bool)
 		if !ok {
@@ -939,12 +1331,12 @@ m4_define(COMPLEX_OPS, @case $1:
 		}
 		return result{x.d, c}
 
-	case program.String:
-		b, ok := y.v.(program.String)
+	case debug.String:
+		b, ok := y.v.(debug.String)
 		if !ok {
 			return e.err("type mismatch")
 		}
-		var c program.String
+		var c debug.String
 		switch op {
 		// TODO: these comparison operators only use the part of the string that
 		// was read.  Very large strings do not have their entire contents read by
@@ -1298,7 +1690,7 @@ func (e *evaluator) stringResult(s string) result {
 	if !ok {
 		e.err("couldn't construct string")
 	}
-	return result{t, program.String{Length: uint64(len(s)), String: s}}
+	return result{t, debug.String{Length: uint64(len(s)), String: s}}
 }
 
 // getBaseType returns the *dwarf.Type with a given name.
@@ -1385,24 +1777,24 @@ func (e *evaluator) zero(t dwarf.Type) result {
 	case *dwarf.BoolType:
 		v = false
 	case *dwarf.PtrType:
-		v = program.Pointer{TypeID: uint64(t.Common().Offset)}
+		v = debug.Pointer{TypeID: uint64(t.Common().Offset)}
 	case *dwarf.SliceType:
-		v = program.Slice{
-			Array: program.Array{
+		v = debug.Slice{
+			Array: debug.Array{
 				ElementTypeID: uint64(typ.ElemType.Common().Offset),
 				StrideBits:    uint64(typ.ElemType.Common().ByteSize) * 8,
 			},
 		}
 	case *dwarf.StringType:
-		v = program.String{}
+		v = debug.String{}
 	case *dwarf.InterfaceType:
-		v = program.Interface{}
+		v = debug.Interface{}
 	case *dwarf.FuncType:
-		v = program.Func{}
+		v = debug.Func{}
 	case *dwarf.MapType:
-		v = program.Map{TypeID: uint64(t.Common().Offset)}
+		v = debug.Map{TypeID: uint64(t.Common().Offset)}
 	case *dwarf.ChanType:
-		v = program.Channel{
+		v = debug.Channel{
 			ElementTypeID: uint64(typ.ElemType.Common().Offset),
 			Stride:        uint64(typ.ElemType.Common().ByteSize),
 		}
@@ -1592,8 +1984,8 @@ func convertUntyped(x, y result) result {
 		}
 	case untString:
 		switch y.v.(type) {
-		case program.String:
-			return result{y.d, program.String{Length: uint64(len(a)), String: string(a)}}
+		case debug.String:
+			return result{y.d, debug.String{Length: uint64(len(a)), String: string(a)}}
 		}
 	}
 	return x
