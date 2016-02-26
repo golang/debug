@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"golang.org/x/debug"
 	"golang.org/x/debug/dwarf"
 )
 
@@ -52,6 +53,35 @@ func (s *Server) peekUint(addr uint64, n int64) (uint64, error) {
 		return 0, err
 	}
 	return s.arch.UintN(buf), nil
+}
+
+// peekSlice reads the header of a slice with the given type and address.
+func (s *Server) peekSlice(t *dwarf.SliceType, addr uint64) (debug.Slice, error) {
+	ptr, err := s.peekPtrStructField(&t.StructType, addr, "array")
+	if err != nil {
+		return debug.Slice{}, fmt.Errorf("reading slice location: %s", err)
+	}
+	length, err := s.peekUintOrIntStructField(&t.StructType, addr, "len")
+	if err != nil {
+		return debug.Slice{}, fmt.Errorf("reading slice length: %s", err)
+	}
+	capacity, err := s.peekUintOrIntStructField(&t.StructType, addr, "cap")
+	if err != nil {
+		return debug.Slice{}, fmt.Errorf("reading slice capacity: %s", err)
+	}
+	if capacity < length {
+		return debug.Slice{}, fmt.Errorf("slice's capacity %d is less than its length %d", capacity, length)
+	}
+
+	return debug.Slice{
+		debug.Array{
+			ElementTypeID: uint64(t.ElemType.Common().Offset),
+			Address:       uint64(ptr),
+			Length:        length,
+			StrideBits:    uint64(t.ElemType.Common().ByteSize) * 8,
+		},
+		capacity,
+	}, nil
 }
 
 // peekString reads a string of the given type at the given address.

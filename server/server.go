@@ -909,66 +909,101 @@ func (s *Server) handleGoroutines(req *protocol.GoroutinesRequest, resp *protoco
 		return errors.New("runtime.g is not a struct")
 	}
 
-	// Read runtime.allg.
-	allgEntry, err := s.dwarfData.LookupEntry("runtime.allg")
-	if err != nil {
-		return err
-	}
-	allgAddr, err := s.dwarfData.EntryLocation(allgEntry)
-	if err != nil {
-		return err
-	}
-	allg, err := s.peekPtr(allgAddr)
-	if err != nil {
-		return fmt.Errorf("reading allg: %v", err)
-	}
-
-	// Read runtime.allglen.
-	allglenEntry, err := s.dwarfData.LookupEntry("runtime.allglen")
-	if err != nil {
-		return err
-	}
-	off, err := s.dwarfData.EntryTypeOffset(allglenEntry)
-	if err != nil {
-		return err
-	}
-	allglenType, err := s.dwarfData.Type(off)
-	if err != nil {
-		return err
-	}
-	allglenAddr, err := s.dwarfData.EntryLocation(allglenEntry)
-	if err != nil {
-		return err
-	}
-	var allglen uint64
-	switch followTypedefs(allglenType).(type) {
-	case *dwarf.UintType, *dwarf.IntType:
-		allglen, err = s.peekUint(allglenAddr, allglenType.Common().ByteSize)
+	var (
+		allgPtr, allgLen uint64
+		allgPtrOk        bool
+	)
+	for {
+		// Try to read the slice runtime.allgs.
+		allgsEntry, err := s.dwarfData.LookupEntry("runtime.allgs")
 		if err != nil {
-			return fmt.Errorf("reading allglen: %v", err)
-		}
-	default:
-		// Some runtimes don't specify the type for allglen.  Assume it's uint32.
-		allglen, err = s.peekUint(allglenAddr, 4)
-		if err != nil {
-			return fmt.Errorf("reading allglen: %v", err)
-		}
-		if allglen != 0 {
 			break
 		}
-		// Zero?  Let's try uint64.
-		allglen, err = s.peekUint(allglenAddr, 8)
+		allgsAddr, err := s.dwarfData.EntryLocation(allgsEntry)
 		if err != nil {
-			return fmt.Errorf("reading allglen: %v", err)
+			break
+		}
+		off, err := s.dwarfData.EntryTypeOffset(allgsEntry)
+		if err != nil {
+			break
+		}
+		t, err := s.dwarfData.Type(off)
+		if err != nil {
+			break
+		}
+		allgsType, ok := followTypedefs(t).(*dwarf.SliceType)
+		if !ok {
+			break
+		}
+		allgs, err := s.peekSlice(allgsType, allgsAddr)
+		if err != nil {
+			break
+		}
+
+		allgPtr, allgLen, allgPtrOk = allgs.Address, allgs.Length, true
+		break
+	}
+	if !allgPtrOk {
+		// Read runtime.allg.
+		allgEntry, err := s.dwarfData.LookupEntry("runtime.allg")
+		if err != nil {
+			return err
+		}
+		allgAddr, err := s.dwarfData.EntryLocation(allgEntry)
+		if err != nil {
+			return err
+		}
+		allgPtr, err = s.peekPtr(allgAddr)
+		if err != nil {
+			return fmt.Errorf("reading allg: %v", err)
+		}
+
+		// Read runtime.allglen.
+		allglenEntry, err := s.dwarfData.LookupEntry("runtime.allglen")
+		if err != nil {
+			return err
+		}
+		off, err := s.dwarfData.EntryTypeOffset(allglenEntry)
+		if err != nil {
+			return err
+		}
+		allglenType, err := s.dwarfData.Type(off)
+		if err != nil {
+			return err
+		}
+		allglenAddr, err := s.dwarfData.EntryLocation(allglenEntry)
+		if err != nil {
+			return err
+		}
+		switch followTypedefs(allglenType).(type) {
+		case *dwarf.UintType, *dwarf.IntType:
+			allgLen, err = s.peekUint(allglenAddr, allglenType.Common().ByteSize)
+			if err != nil {
+				return fmt.Errorf("reading allglen: %v", err)
+			}
+		default:
+			// Some runtimes don't specify the type for allglen.  Assume it's uint32.
+			allgLen, err = s.peekUint(allglenAddr, 4)
+			if err != nil {
+				return fmt.Errorf("reading allglen: %v", err)
+			}
+			if allgLen != 0 {
+				break
+			}
+			// Zero?  Let's try uint64.
+			allgLen, err = s.peekUint(allglenAddr, 8)
+			if err != nil {
+				return fmt.Errorf("reading allglen: %v", err)
+			}
 		}
 	}
 
 	// Initialize s.goroutineStack.
 	s.goroutineStackOnce.Do(func() { s.goroutineStackInit(gType) })
 
-	for i := uint64(0); i < allglen; i++ {
+	for i := uint64(0); i < allgLen; i++ {
 		// allg is an array of pointers to g structs.  Read allg[i].
-		g, err := s.peekPtr(allg + i*uint64(s.arch.PointerSize))
+		g, err := s.peekPtr(allgPtr + i*uint64(s.arch.PointerSize))
 		if err != nil {
 			return err
 		}

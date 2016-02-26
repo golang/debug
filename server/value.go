@@ -120,31 +120,11 @@ func (s *Server) value(t dwarf.Type, addr uint64) (debug.Value, error) {
 			Address: uint64(s.arch.Uintptr(buf)),
 		}, nil
 	case *dwarf.SliceType:
-		ptr, err := s.peekPtrStructField(&t.StructType, addr, "array")
-		if err != nil {
-			return nil, fmt.Errorf("reading slice location: %s", err)
+		if s, err := s.peekSlice(t, addr); err != nil {
+			return nil, err
+		} else {
+			return s, nil
 		}
-		length, err := s.peekUintOrIntStructField(&t.StructType, addr, "len")
-		if err != nil {
-			return nil, fmt.Errorf("reading slice length: %s", err)
-		}
-		capacity, err := s.peekUintOrIntStructField(&t.StructType, addr, "cap")
-		if err != nil {
-			return nil, fmt.Errorf("reading slice capacity: %s", err)
-		}
-		if capacity < length {
-			return nil, fmt.Errorf("slice's capacity %d is less than its length %d", capacity, length)
-		}
-
-		return debug.Slice{
-			debug.Array{
-				ElementTypeID: uint64(t.ElemType.Common().Offset),
-				Address:       uint64(ptr),
-				Length:        length,
-				StrideBits:    uint64(t.ElemType.Common().ByteSize) * 8,
-			},
-			capacity,
-		}, nil
 	case *dwarf.ArrayType:
 		length := t.Count
 		stride := t.StrideBitSize
