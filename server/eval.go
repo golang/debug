@@ -1565,7 +1565,7 @@ func (e *evaluator) evalBinaryOp(op token.Token, x, y result) result {
 // The PC and SP are used to determine the current function and stack frame.
 func (s *Server) findLocalVar(name string, pc, sp uint64) (uint64, dwarf.Type) {
 	// Find the DWARF entry for the function at pc.
-	funcEntry, _, err := s.entryForPC(uint64(pc))
+	funcEntry, _, err := s.dwarfData.PCToFunction(uint64(pc))
 	if err != nil {
 		return 0, nil
 	}
@@ -1633,7 +1633,7 @@ func (s *Server) findLocalVar(name string, pc, sp uint64) (uint64, dwarf.Type) {
 // findGlobalVar finds a global variable by name, and returns its address and
 // DWARF type.  It returns a nil type on failure.
 func (s *Server) findGlobalVar(name string) (uint64, dwarf.Type) {
-	entry, err := s.dwarfData.LookupEntry(name)
+	entry, err := s.dwarfData.LookupVariable(name)
 	if err != nil {
 		return 0, nil
 	}

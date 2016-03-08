@@ -6,33 +6,36 @@ package dwarf
 
 // This file provides simple methods to access the symbol table by name and address.
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+	"sort"
+)
 
-// lookupEntry returns the Entry for the name. If tag is non-zero, only entries
-// with that tag are considered.
+// lookupEntry returns the first Entry for the name.
+// If tag is non-zero, only entries with that tag are considered.
 func (d *Data) lookupEntry(name string, tag Tag) (*Entry, error) {
-	r := d.Reader()
-	for {
-		entry, err := r.Next()
-		if err != nil {
-			return nil, err
-		}
-		if entry == nil {
-			// TODO: why don't we get an error here?
-			break
-		}
-		if tag != 0 && tag != entry.Tag {
-			continue
-		}
-		nameAttr := entry.Val(AttrName)
-		if nameAttr == nil {
-			continue
-		}
-		if nameAttr.(string) == name {
-			return entry, nil
+	x, ok := d.nameCache[name]
+	if !ok {
+		return nil, fmt.Errorf("DWARF entry for %q not found", name)
+	}
+	for ; x != nil; x = x.link {
+		if tag == 0 || x.entry.Tag == tag {
+			return x.entry, nil
 		}
 	}
-	return nil, fmt.Errorf("DWARF entry for %q not found", name)
+	return nil, fmt.Errorf("no DWARF entry for %q with tag %s", name, tag)
+}
+
+// LookupMatchingSymbols returns the names of all top-level entries matching
+// the given regular expression.
+func (d *Data) LookupMatchingSymbols(nameRE *regexp.Regexp) (result []string, err error) {
+	for name := range d.nameCache {
+		if nameRE.MatchString(name) {
+			result = append(result, name)
+		}
+	}
+	return result, nil
 }
 
 // LookupEntry returns the Entry for the named symbol.
@@ -40,38 +43,14 @@ func (d *Data) LookupEntry(name string) (*Entry, error) {
 	return d.lookupEntry(name, 0)
 }
 
-// LookupFunction returns the address of the named symbol, a function.
-func (d *Data) LookupFunction(name string) (uint64, error) {
-	entry, err := d.lookupEntry(name, TagSubprogram)
-	if err != nil {
-		return 0, err
-	}
-	addrAttr := entry.Val(AttrLowpc)
-	if addrAttr == nil {
-		return 0, fmt.Errorf("symbol %q has no LowPC attribute", name)
-	}
-	addr, ok := addrAttr.(uint64)
-	if !ok {
-		return 0, fmt.Errorf("symbol %q has non-uint64 LowPC attribute", name)
-	}
-	return addr, nil
+// LookupFunction returns the entry for a function.
+func (d *Data) LookupFunction(name string) (*Entry, error) {
+	return d.lookupEntry(name, TagSubprogram)
 }
 
-// TODO: should LookupVariable handle both globals and locals? Locals don't
-// necessarily have a fixed address. They may be in a register, or otherwise
-// move around.
-
-// LookupVariable returns the location of a named symbol, a variable.
-func (d *Data) LookupVariable(name string) (uint64, error) {
-	entry, err := d.lookupEntry(name, TagVariable)
-	if err != nil {
-		return 0, fmt.Errorf("variable %s: %s", name, err)
-	}
-	loc, err := d.EntryLocation(entry)
-	if err != nil {
-		return 0, fmt.Errorf("variable %s: %s", name, err)
-	}
-	return loc, nil
+// LookupVariable returns the entry for a (global) variable.
+func (d *Data) LookupVariable(name string) (*Entry, error) {
+	return d.lookupEntry(name, TagVariable)
 }
 
 // EntryLocation returns the address of the object referred to by the given Entry.
@@ -97,6 +76,15 @@ func (d *Data) EntryLocation(e *Entry) (uint64, error) {
 	return 0, fmt.Errorf("DWARF entry has an unimplemented Location op")
 }
 
+// EntryType returns the Type for an Entry.
+func (d *Data) EntryType(e *Entry) (Type, error) {
+	off, err := d.EntryTypeOffset(e)
+	if err != nil {
+		return nil, err
+	}
+	return d.Type(off)
+}
+
 // EntryTypeOffset returns the offset in the given Entry's type attribute.
 func (d *Data) EntryTypeOffset(e *Entry) (Offset, error) {
 	v := e.Val(AttrType)
@@ -110,46 +98,22 @@ func (d *Data) EntryTypeOffset(e *Entry) (Offset, error) {
 	return off, nil
 }
 
-// LookupPC returns the name of a symbol at the specified PC.
-func (d *Data) LookupPC(pc uint64) (string, error) {
-	entry, _, err := d.EntryForPC(pc)
-	if err != nil {
-		return "", err
+// PCToFunction returns the entry and address for the function containing the
+// specified PC.
+func (d *Data) PCToFunction(pc uint64) (entry *Entry, lowpc uint64, err error) {
+	p := d.pcToFuncEntries
+	if len(p) == 0 {
+		return nil, 0, fmt.Errorf("no function addresses loaded")
 	}
-	nameAttr := entry.Val(AttrName)
-	if nameAttr == nil {
-		// TODO: this shouldn't be possible.
-		return "", fmt.Errorf("LookupPC: TODO")
+	i := sort.Search(len(p), func(i int) bool { return p[i].pc > pc }) - 1
+	// The search failed if:
+	// - pc was before the start of any function.
+	// - The largest function bound not larger than pc was the end of a function,
+	//   not the start of one.
+	// - The largest function bound not larger than pc was the start of a function
+	//   that we don't know the end of, and the PC is much larger than the start.
+	if i == -1 || p[i].entry == nil || (i+1 == len(p) && pc-p[i].pc >= 1<<20) {
+		return nil, 0, fmt.Errorf("no function at %x", pc)
 	}
-	name, ok := nameAttr.(string)
-	if !ok {
-		return "", fmt.Errorf("name for PC %#x is not a string", pc)
-	}
-	return name, nil
-}
-
-// EntryForPC returns the entry and address for a symbol at the specified PC.
-func (d *Data) EntryForPC(pc uint64) (entry *Entry, lowpc uint64, err error) {
-	// TODO: do something better than a linear scan?
-	r := d.Reader()
-	for {
-		entry, err := r.Next()
-		if err != nil {
-			return nil, 0, err
-		}
-		if entry == nil {
-			// TODO: why don't we get an error here.
-			break
-		}
-		if entry.Tag != TagSubprogram {
-			continue
-		}
-		lowpc, lok := entry.Val(AttrLowpc).(uint64)
-		highpc, hok := entry.Val(AttrHighpc).(uint64)
-		if !lok || !hok || pc < lowpc || highpc <= pc {
-			continue
-		}
-		return entry, lowpc, nil
-	}
-	return nil, 0, fmt.Errorf("PC %#x not found", pc)
+	return p[i].entry, p[i].pc, nil
 }

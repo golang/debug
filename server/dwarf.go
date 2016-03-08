@@ -6,50 +6,25 @@ package server
 
 import (
 	"errors"
-	"regexp"
+	"fmt"
 
 	"golang.org/x/debug/dwarf"
 )
 
-func (s *Server) lookupRE(re *regexp.Regexp) (result []string, err error) {
-	r := s.dwarfData.Reader()
-	for {
-		entry, err := r.Next()
-		if err != nil {
-			return nil, err
-		}
-		if entry == nil {
-			// TODO: why don't we get an error here.
-			break
-		}
-		nameAttr := entry.Val(dwarf.AttrName)
-		if nameAttr == nil {
-			// TODO: this shouldn't be possible.
-			continue
-		}
-		name, ok := nameAttr.(string)
-		if !ok || !re.MatchString(name) {
-			continue
-		}
-		result = append(result, name)
+func (s *Server) functionStartAddress(name string) (uint64, error) {
+	entry, err := s.dwarfData.LookupFunction(name)
+	if err != nil {
+		return 0, err
 	}
-	return result, nil
-}
-
-func (s *Server) lookupFunction(name string) (uint64, error) {
-	return s.dwarfData.LookupFunction(name)
-}
-
-func (s *Server) lookupVariable(name string) (uint64, error) {
-	return s.dwarfData.LookupVariable(name)
-}
-
-func (s *Server) lookupPC(pc uint64) (string, error) {
-	return s.dwarfData.LookupPC(pc)
-}
-
-func (s *Server) entryForPC(pc uint64) (entry *dwarf.Entry, lowpc uint64, err error) {
-	return s.dwarfData.EntryForPC(pc)
+	addrAttr := entry.Val(dwarf.AttrLowpc)
+	if addrAttr == nil {
+		return 0, fmt.Errorf("symbol %q has no LowPC attribute", name)
+	}
+	addr, ok := addrAttr.(uint64)
+	if !ok {
+		return 0, fmt.Errorf("symbol %q has non-uint64 LowPC attribute", name)
+	}
+	return addr, nil
 }
 
 // evalLocation parses a DWARF location description encoded in v.  It works for

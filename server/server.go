@@ -425,7 +425,7 @@ func (s *Server) BreakpointAtFunction(req *protocol.BreakpointAtFunctionRequest,
 }
 
 func (s *Server) handleBreakpointAtFunction(req *protocol.BreakpointAtFunctionRequest, resp *protocol.BreakpointResponse) error {
-	pc, err := s.lookupFunction(req.Function)
+	pc, err := s.functionStartAddress(req.Function)
 	if err != nil {
 		return err
 	}
@@ -440,7 +440,7 @@ func (s *Server) handleBreakpointAtLine(req *protocol.BreakpointAtLineRequest, r
 	if s.dwarfData == nil {
 		return fmt.Errorf("no DWARF data")
 	}
-	if pcs, err := s.dwarfData.LineToPCs(req.File, req.Line); err != nil {
+	if pcs, err := s.dwarfData.LineToBreakpointPCs(req.File, req.Line); err != nil {
 		return err
 	} else {
 		return s.addBreakpoints(pcs, resp)
@@ -520,11 +520,11 @@ func (s *Server) eval(expr string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		return s.lookupRE(re)
+		return s.dwarfData.LookupMatchingSymbols(re)
 
 	case strings.HasPrefix(expr, "addr:"):
 		// Symbol lookup. Return address.
-		addr, err := s.lookupFunction(expr[5:])
+		addr, err := s.functionStartAddress(expr[5:])
 		if err != nil {
 			return nil, err
 		}
@@ -556,11 +556,15 @@ func (s *Server) eval(expr string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		funcName, err := s.lookupPC(addr)
+		entry, _, err := s.dwarfData.PCToFunction(addr)
 		if err != nil {
 			return nil, err
 		}
-		return []string{funcName}, nil
+		name, ok := entry.Val(dwarf.AttrName).(string)
+		if !ok {
+			return nil, fmt.Errorf("function at 0x%x has no name", addr)
+		}
+		return []string{name}, nil
 	}
 
 	return nil, fmt.Errorf("bad expression syntax: %q", expr)
@@ -582,24 +586,6 @@ func (s *Server) lookupSource(pc uint64) (file string, line uint64, err error) {
 	// TODO: The gosym equivalent also returns the relevant Func. Do that when
 	// DWARF has the same facility.
 	return s.dwarfData.PCToLine(pc)
-}
-
-// evalAddress takes a simple expression, either a symbol or hex value,
-// and evaluates it as an address.
-func (s *Server) evalAddress(expr string) (uint64, error) {
-	// Might be a symbol.
-	addr, err := s.lookupFunction(expr) // TODO: might not be a function
-	if err == nil {
-		return addr, nil
-	}
-
-	// Must be a number.
-	addr, err = strconv.ParseUint(expr, 0, 0)
-	if err != nil {
-		return 0, fmt.Errorf("eval: %q is neither symbol nor number", expr)
-	}
-
-	return addr, nil
 }
 
 func (s *Server) Frames(req *protocol.FramesRequest, resp *protocol.FramesResponse) error {
@@ -643,7 +629,7 @@ func (s *Server) walkStack(pc, sp uint64, count int) ([]debug.Frame, error) {
 			return frames, err
 		}
 		fp := sp + uint64(fpOffset)
-		entry, funcEntry, err := s.entryForPC(pc)
+		entry, funcEntry, err := s.dwarfData.PCToFunction(pc)
 		if err != nil {
 			return frames, err
 		}
@@ -720,9 +706,9 @@ func (s *Server) evaluateTopOfStackAddrs() error {
 		indirect bool
 		names    []string
 	)
-	if _, err := s.lookupVariable("runtime.rt0_goPC"); err != nil {
+	if _, err := s.dwarfData.LookupVariable("runtime.rt0_goPC"); err != nil {
 		// Look for a Go 1.3 binary (or earlier version).
-		lookup, indirect, names = s.lookupFunction, false, []string{
+		lookup, indirect, names = s.functionStartAddress, false, []string{
 			"runtime.goexit",
 			"runtime.mstart",
 			"runtime.mcall",
@@ -732,7 +718,14 @@ func (s *Server) evaluateTopOfStackAddrs() error {
 		}
 	} else {
 		// Look for a Go 1.4 binary (or later version).
-		lookup, indirect, names = s.lookupVariable, true, []string{
+		lookup = func(name string) (uint64, error) {
+			entry, err := s.dwarfData.LookupVariable(name)
+			if err != nil {
+				return 0, err
+			}
+			return s.dwarfData.EntryLocation(entry)
+		}
+		indirect, names = true, []string{
 			"runtime.goexitPC",
 			"runtime.mstartPC",
 			"runtime.mcallPC",
@@ -780,7 +773,7 @@ func (s *Server) VarByName(req *protocol.VarByNameRequest, resp *protocol.VarByN
 }
 
 func (s *Server) handleVarByName(req *protocol.VarByNameRequest, resp *protocol.VarByNameResponse) error {
-	entry, err := s.dwarfData.LookupEntry(req.Name)
+	entry, err := s.dwarfData.LookupVariable(req.Name)
 	if err != nil {
 		return fmt.Errorf("variable %s: %s", req.Name, err)
 	}
@@ -915,7 +908,7 @@ func (s *Server) handleGoroutines(req *protocol.GoroutinesRequest, resp *protoco
 	)
 	for {
 		// Try to read the slice runtime.allgs.
-		allgsEntry, err := s.dwarfData.LookupEntry("runtime.allgs")
+		allgsEntry, err := s.dwarfData.LookupVariable("runtime.allgs")
 		if err != nil {
 			break
 		}
@@ -945,7 +938,7 @@ func (s *Server) handleGoroutines(req *protocol.GoroutinesRequest, resp *protoco
 	}
 	if !allgPtrOk {
 		// Read runtime.allg.
-		allgEntry, err := s.dwarfData.LookupEntry("runtime.allg")
+		allgEntry, err := s.dwarfData.LookupVariable("runtime.allg")
 		if err != nil {
 			return err
 		}
@@ -959,7 +952,7 @@ func (s *Server) handleGoroutines(req *protocol.GoroutinesRequest, resp *protoco
 		}
 
 		// Read runtime.allglen.
-		allglenEntry, err := s.dwarfData.LookupEntry("runtime.allglen")
+		allglenEntry, err := s.dwarfData.LookupVariable("runtime.allglen")
 		if err != nil {
 			return err
 		}
@@ -1056,7 +1049,7 @@ func (s *Server) handleGoroutines(req *protocol.GoroutinesRequest, resp *protoco
 		// Best-effort attempt to get the names of the goroutine function and the
 		// function that created the goroutine.  They aren't always available.
 		functionName := func(pc uint64) string {
-			entry, _, err := s.dwarfData.EntryForPC(pc)
+			entry, _, err := s.dwarfData.PCToFunction(pc)
 			if err != nil {
 				return ""
 			}
