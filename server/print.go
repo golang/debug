@@ -274,15 +274,11 @@ func (p *Printer) printArrayAt(typ *dwarf.ArrayType, a uint64) {
 }
 
 func (p *Printer) printInterfaceAt(t *dwarf.InterfaceType, a uint64) {
-	// t should be a typedef binding a typedef binding a struct.
-	tt, ok := t.TypedefType.Type.(*dwarf.TypedefType)
+	// t embeds a TypedefType, which may point to another typedef.
+	// The underlying type should be a struct.
+	st, ok := followTypedefs(&t.TypedefType).(*dwarf.StructType)
 	if !ok {
-		p.errorf("bad interface type: not a typedef")
-		return
-	}
-	st, ok := tt.Type.(*dwarf.StructType)
-	if !ok {
-		p.errorf("bad interface type: not a typedef of a struct")
+		p.errorf("bad interface type: not a struct")
 		return
 	}
 	p.printf("(")
@@ -315,70 +311,71 @@ func (p *Printer) printTypeOfInterface(t dwarf.Type, a uint64) {
 		p.printf("<nil>")
 		return
 	}
-	// t should be a pointer to a typedef binding a struct which contains a field _type.
-	// _type should be a pointer to a typedef binding a struct which contains a field _string.
-	// _string is the name of the type.
-	t1, ok := t.(*dwarf.PtrType)
+	// t should be a pointer to a struct containing _type, which is a pointer to a
+	// struct containing _string, which is the name of the type.
+	// Depending on the compiler version, some of these types can be typedefs, and
+	// _string may be a string or a *string.
+	t1, ok := followTypedefs(t).(*dwarf.PtrType)
 	if !ok {
-		p.errorf("bad type")
+		p.errorf("interface's tab is not a pointer")
 		return
 	}
-	t2, ok := t1.Type.(*dwarf.TypedefType)
+	t2, ok := followTypedefs(t1.Type).(*dwarf.StructType)
 	if !ok {
-		p.errorf("bad type")
+		p.errorf("interface's tab is not a pointer to struct")
 		return
 	}
-	t3, ok := t2.Type.(*dwarf.StructType)
-	if !ok {
-		p.errorf("bad type")
-		return
-	}
-	typeField, err := getField(t3, "_type")
+	typeField, err := getField(t2, "_type")
 	if err != nil {
 		p.errorf("%s", err)
 		return
 	}
-	t4, ok := typeField.Type.(*dwarf.PtrType)
+	t3, ok := followTypedefs(typeField.Type).(*dwarf.PtrType)
 	if !ok {
-		p.errorf("bad type")
+		p.errorf("interface's _type is not a pointer")
 		return
 	}
-	t5, ok := t4.Type.(*dwarf.TypedefType)
+	t4, ok := followTypedefs(t3.Type).(*dwarf.StructType)
 	if !ok {
-		p.errorf("bad type")
+		p.errorf("interface's _type is not a pointer to struct")
 		return
 	}
-	t6, ok := t5.Type.(*dwarf.StructType)
-	if !ok {
-		p.errorf("bad type")
-		return
-	}
-	stringField, err := getField(t6, "_string")
+	stringField, err := getField(t4, "_string")
 	if err != nil {
 		p.errorf("%s", err)
 		return
 	}
-	t7, ok := stringField.Type.(*dwarf.PtrType)
-	if !ok {
-		p.errorf("bad type")
-		return
+	if t5, ok := stringField.Type.(*dwarf.PtrType); ok {
+		stringType, ok := t5.Type.(*dwarf.StringType)
+		if !ok {
+			p.errorf("interface _string is a pointer to %T, want string or *string", t5.Type)
+			return
+		}
+		typeAddr, err := p.server.peekPtrStructField(t2, a, "_type")
+		if err != nil {
+			p.errorf("reading interface type: %s", err)
+			return
+		}
+		stringAddr, err := p.server.peekPtrStructField(t4, typeAddr, "_string")
+		if err != nil {
+			p.errorf("reading interface type: %s", err)
+			return
+		}
+		p.printStringAt(stringType, stringAddr)
+	} else {
+		stringType, ok := stringField.Type.(*dwarf.StringType)
+		if !ok {
+			p.errorf("interface _string is a %T, want string or *string", stringField.Type)
+			return
+		}
+		typeAddr, err := p.server.peekPtrStructField(t2, a, "_type")
+		if err != nil {
+			p.errorf("reading interface type: %s", err)
+			return
+		}
+		stringAddr := typeAddr + uint64(stringField.ByteOffset)
+		p.printStringAt(stringType, stringAddr)
 	}
-	stringType, ok := t7.Type.(*dwarf.StringType)
-	if !ok {
-		p.errorf("bad type")
-		return
-	}
-	typeAddr, err := p.server.peekPtrStructField(t3, a, "_type")
-	if err != nil {
-		p.errorf("reading interface type: %s", err)
-		return
-	}
-	stringAddr, err := p.server.peekPtrStructField(t6, typeAddr, "_string")
-	if err != nil {
-		p.errorf("reading interface type: %s", err)
-		return
-	}
-	p.printStringAt(stringType, stringAddr)
 }
 
 // maxMapValuesToPrint values are printed for each map; any remaining values are
