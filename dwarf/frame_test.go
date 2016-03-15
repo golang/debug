@@ -48,7 +48,7 @@ func doPCToSPTest(self bool) bool {
 	}
 	// This command builds pcsptest from testdata/pcsptest.go.
 	pcsptestBinary = filepath.Join(pcspTempDir, "pcsptest")
-	command := fmt.Sprintf("go tool 6g -o %s.6 testdata/pcsptest.go && go tool 6l -H %s -o %s %s.6",
+	command := fmt.Sprintf("go tool compile -o %s.6 testdata/pcsptest.go && go tool link -H %s -o %s %s.6",
 		pcsptestBinary, runtime.GOOS, pcsptestBinary, pcsptestBinary)
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Stdout = os.Stdout
