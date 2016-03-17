@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"regexp"
 	"sync"
 	"testing"
 
@@ -46,14 +47,14 @@ var expectedVars = map[string]string{
 	`main.Z_channel_2`:           `(chan int16 0xX)`,
 	`main.Z_channel_buffered`:    `(chan int16 0xX [6/10])`,
 	`main.Z_channel_nil`:         `(chan int16 <nil>)`,
-	`main.Z_array_of_empties`:    `[2]struct struct {}{struct struct {} {}, (struct struct {} 0xX)}`,
+	`main.Z_array_of_empties`:    `[2]{}{{} {}, ({} 0xX)}`,
 	`main.Z_complex128`:          `(1.987654321-2.987654321i)`,
 	`main.Z_complex64`:           `(1.54321+2.54321i)`,
 	`main.Z_float32`:             `1.54321`,
 	`main.Z_float64`:             `1.987654321`,
 	`main.Z_func_int8_r_int8`:    `func(int8, *int8) void @0xX `,
 	`main.Z_func_int8_r_pint8`:   `func(int8, **int8) void @0xX `,
-	`main.Z_func_bar`:            `func(*struct main.FooStruct) void @0xX `,
+	`main.Z_func_bar`:            `func(*main.FooStruct) void @0xX `,
 	`main.Z_func_nil`:            `func(int8, *int8) void @0xX `,
 	`main.Z_int`:                 `-21`,
 	`main.Z_int16`:               `-32321`,
@@ -75,7 +76,7 @@ var expectedVars = map[string]string{
 	`main.Z_slice_2`:             `[]int8{-121, 121}`,
 	`main.Z_slice_nil`:           `[]uint8{}`,
 	`main.Z_string`:              `"I'm a string"`,
-	`main.Z_struct`:              `struct main.FooStruct {21, "hi"}`,
+	`main.Z_struct`:              `main.FooStruct {21, "hi"}`,
 	`main.Z_uint`:                `21`,
 	`main.Z_uint16`:              `54321`,
 	`main.Z_uint32`:              `3217654321`,
@@ -91,48 +92,12 @@ var expectedVars = map[string]string{
 var expectedEvaluate = map[string]debug.Value{
 	`x`:                                                          int16(42),
 	`local_array`:                                                debug.Array{42, 42, 5, 8},
-	`local_bool_false`:                                           false,
-	`local_bool_true`:                                            true,
 	`local_channel`:                                              debug.Channel{42, 42, 42, 0, 0, 2, 0},
 	`local_channel_buffered`:                                     debug.Channel{42, 42, 42, 6, 10, 2, 8},
-	`local_channel_nil`:                                          debug.Channel{42, 0, 0, 0, 0, 2, 0},
-	`local_complex128`:                                           complex128(1.987654321 - 2.987654321i),
-	`local_complex64`:                                            complex64(1.54321 + 2.54321i),
-	`local_float32`:                                              float32(1.54321),
-	`local_float64`:                                              float64(1.987654321),
-	`local_func_int8_r_int8`:                                     debug.Func{42},
-	`local_func_int8_r_pint8`:                                    debug.Func{42},
-	`local_func_bar`:                                             debug.Func{42},
-	`local_func_nil`:                                             debug.Func{0},
-	`local_int`:                                                  -21,
-	`local_int16`:                                                int16(-32321),
-	`local_int32`:                                                int32(-1987654321),
-	`local_int64`:                                                int64(-9012345678987654321),
-	`local_int8`:                                                 int8(-121),
-	`local_int_typedef`:                                          int16(88),
-	`local_interface`:                                            debug.Interface{},
-	`local_interface_nil`:                                        debug.Interface{},
-	`local_interface_typed_nil`:                                  debug.Interface{},
 	`local_map`:                                                  debug.Map{42, 42, 1},
 	`local_map_2`:                                                debug.Map{42, 42, 1},
 	`local_map_3`:                                                debug.Map{42, 42, 2},
 	`local_map_empty`:                                            debug.Map{42, 42, 0},
-	`local_map_nil`:                                              debug.Map{42, 42, 0},
-	`local_pointer`:                                              debug.Pointer{42, 42},
-	`local_pointer_nil`:                                          debug.Pointer{42, 0},
-	`local_slice`:                                                debug.Slice{debug.Array{42, 42, 5, 8}, 5},
-	`local_slice_2`:                                              debug.Slice{debug.Array{42, 42, 2, 8}, 5},
-	`local_slice_nil`:                                            debug.Slice{debug.Array{42, 0, 0, 8}, 0},
-	`local_string`:                                               debug.String{12, `I'm a string`},
-	`local_struct`:                                               debug.Struct{[]debug.StructField{{"a", debug.Var{}}, {"b", debug.Var{}}}},
-	`local_uint`:                                                 uint(21),
-	`local_uint16`:                                               uint16(54321),
-	`local_uint32`:                                               uint32(3217654321),
-	`local_uint64`:                                               uint64(12345678900987654321),
-	`local_uint8`:                                                uint8(231),
-	`local_uintptr`:                                              uint(21),
-	`local_unsafe_pointer`:                                       debug.Pointer{0, 42},
-	`local_unsafe_pointer_nil`:                                   debug.Pointer{0, 0},
 	`x + 5`:                                                      int16(47),
 	`x - 5`:                                                      int16(37),
 	`x / 5`:                                                      int16(8),
@@ -181,23 +146,13 @@ var expectedEvaluate = map[string]debug.Value{
 	`(6 + 8i) * (1 + 1i)`:                                        -2 + 14i,
 	`(6 + 8i) * (6 - 8i)`:                                        complex128(100),
 	`(6 + 8i) / (3 + 4i)`:                                        complex128(2),
-	`local_string + "!"`:                                         debug.String{13, `I'm a string!`},
-	`*local_pointer`:                                             debug.Struct{[]debug.StructField{{"a", debug.Var{}}, {"b", debug.Var{}}}},
-	`&local_int16`:                                               debug.Pointer{42, 42},
-	`*&local_int16`:                                              int16(-32321),
-	`*&*&*&*&local_int16`:                                        int16(-32321),
 	`local_array[2]`:                                             int8(3),
-	`local_slice[1]`:                                             uint8(108),
-	`local_slice_2[1]`:                                           int8(121),
 	`&local_array[1]`:                                            debug.Pointer{42, 42},
-	`&local_slice[1]`:                                            debug.Pointer{42, 42},
 	`local_map[-21]`:                                             float32(3.54321),
 	`local_map[+21]`:                                             float32(0),
 	`local_map_3[1024]`:                                          int8(1),
 	`local_map_3[512]`:                                           int8(-1),
 	`local_map_empty[21]`:                                        float32(0),
-	`local_map_nil[32]`:                                          float32(0),
-	`local_string[2]`:                                            uint8('m'),
 	`"hello"[2]`:                                                 uint8('l'),
 	`local_array[1:3][1]`:                                        int8(3),
 	`local_array[0:4][2:3][0]`:                                   int8(3),
@@ -214,20 +169,6 @@ var expectedEvaluate = map[string]debug.Value{
 	`(&local_array)[1:3]`:                                        debug.Slice{debug.Array{42, 42, 2, 8}, 4},
 	`(&local_array)[:3:4]`:                                       debug.Slice{debug.Array{42, 42, 3, 8}, 4},
 	`(&local_array)[1:3:4]`:                                      debug.Slice{debug.Array{42, 42, 2, 8}, 3},
-	`local_slice[1:5][0:3][1]`:                                   uint8('i'),
-	`local_slice[:]`:                                             debug.Slice{debug.Array{42, 42, 5, 8}, 5},
-	`local_slice[:2]`:                                            debug.Slice{debug.Array{42, 42, 2, 8}, 5},
-	`local_slice[2:]`:                                            debug.Slice{debug.Array{42, 42, 3, 8}, 3},
-	`local_slice[1:3]`:                                           debug.Slice{debug.Array{42, 42, 2, 8}, 4},
-	`local_slice[:3:4]`:                                          debug.Slice{debug.Array{42, 42, 3, 8}, 4},
-	`local_slice[1:3:4]`:                                         debug.Slice{debug.Array{42, 42, 2, 8}, 3},
-	`local_struct.a`:                                             21,
-	`(&local_struct).a`:                                          21,
-	`(*local_pointer).a`:                                         21,
-	`(&*local_pointer).a`:                                        21,
-	`(*local_pointer).b`:                                         debug.String{2, `hi`},
-	`local_pointer.a`:                                            21,
-	`local_pointer.b`:                                            debug.String{2, `hi`},
 	`lookup("main.Z_array")`:                                     debug.Array{42, 42, 5, 8},
 	`lookup("main.Z_array_empty")`:                               debug.Array{42, 42, 0, 8},
 	`lookup("main.Z_bool_false")`:                                false,
@@ -365,9 +306,15 @@ func isHex(r uint8) bool {
 	}
 }
 
+// structRE is used by matches to remove 'struct ' from type names, which is not
+// output by every version of the compiler.
+var structRE = regexp.MustCompile("struct *")
+
 // Check s matches the pattern in p.
 // An 'X' in p greedily matches one or more hex characters in s.
 func matches(p, s string) bool {
+	// Remove 'struct' and following spaces from s.
+	s = structRE.ReplaceAllString(s, "")
 	j := 0
 	for i := 0; i < len(p); i++ {
 		if j == len(s) {
@@ -753,17 +700,18 @@ func testProgram(t *testing.T, prog debug.Program) {
 	}
 
 	// Evaluate a struct.
-	val, err := prog.Evaluate(`local_struct`)
+	v := `lookup("main.Z_struct")`
+	val, err := prog.Evaluate(v)
 	if err != nil {
 		t.Fatalf("Evaluate: %s", err)
 	}
 	s, ok := val.(debug.Struct)
 	if !ok {
-		t.Fatalf("got Evaluate(`local_struct`) = %T(%v), expected debug.Struct", val, val)
+		t.Fatalf("got Evaluate(%q) = %T(%v), expected debug.Struct", v, val, val)
 	}
 	// Check the values of its fields.
 	if len(s.Fields) != 2 {
-		t.Fatalf("got Evaluate(`local_struct`) = %+v, expected 2 fields", s)
+		t.Fatalf("got Evaluate(%q) = %+v, expected 2 fields", v, s)
 	}
 	if v0, err := prog.Value(s.Fields[0].Var); err != nil {
 		t.Errorf("Value: %s", err)
