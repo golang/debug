@@ -444,6 +444,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//	TagSubrangeType or TagEnumerationType giving one dimension.
 		//	dimensions are in left to right order.
 		t := new(ArrayType)
+		t.Name, _ = e.Val(AttrName).(string)
 		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
@@ -592,6 +593,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		case TagUnionType:
 			t.Kind = "union"
 		}
+		t.Name, _ = e.Val(AttrName).(string)
 		t.StructName, _ = e.Val(AttrName).(string)
 		t.Incomplete = e.Val(AttrDeclaration) != nil
 		t.Field = make([]*StructField, 0, 8)
@@ -672,6 +674,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		// Attributes:
 		//	AttrType: subtype
 		t := new(QualType)
+		t.Name, _ = e.Val(AttrName).(string)
 		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
@@ -700,6 +703,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
+		t.Name, _ = e.Val(AttrName).(string)
 		t.EnumName, _ = e.Val(AttrName).(string)
 		t.Val = make([]*EnumValue, 0, 8)
 		for kid := next(); kid != nil; kid = next() {
@@ -724,6 +728,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//	AttrType: subtype [not required!  void* has no AttrType]
 		//	AttrAddrClass: address class [ignored]
 		t := new(PtrType)
+		t.Name, _ = e.Val(AttrName).(string)
 		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
@@ -744,6 +749,7 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		//		AttrType: type of parameter
 		//	TagUnspecifiedParameter: final ...
 		t := new(FuncType)
+		t.Name, _ = e.Val(AttrName).(string)
 		t.ReflectKind = getKind(e)
 		typ = t
 		typeCache[off] = t
