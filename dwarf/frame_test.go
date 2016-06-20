@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"golang.org/x/debug/dwarf"
 )
 
 var (
@@ -48,7 +50,7 @@ func doPCToSPTest(self bool) bool {
 	}
 	// This command builds pcsptest from testdata/pcsptest.go.
 	pcsptestBinary = filepath.Join(pcspTempDir, "pcsptest")
-	command := fmt.Sprintf("go tool 6g -o %s.6 testdata/pcsptest.go && go tool 6l -H %s -o %s %s.6",
+	command := fmt.Sprintf("go tool compile -o %s.6 testdata/pcsptest.go && go tool link -H %s -o %s %s.6",
 		pcsptestBinary, runtime.GOOS, pcsptestBinary, pcsptestBinary)
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Stdout = os.Stdout
@@ -77,13 +79,17 @@ func TestPCToSPOffset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	startPC, err := data.LookupFunction("main.test")
+	entry, err := data.LookupFunction("main.test")
 	if err != nil {
 		t.Fatal("lookup startPC:", err)
 	}
-	endPC, err := data.LookupFunction("main.afterTest")
-	if err != nil {
-		t.Fatal("lookup endPC:", err)
+	startPC, ok := entry.Val(dwarf.AttrLowpc).(uint64)
+	if !ok {
+		t.Fatal(`DWARF data for function "main.test" has no low PC`)
+	}
+	endPC, ok := entry.Val(dwarf.AttrHighpc).(uint64)
+	if !ok {
+		t.Fatal(`DWARF data for function "main.test" has no high PC`)
 	}
 
 	const addrSize = 8 // TODO: Assumes amd64.

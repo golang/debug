@@ -56,7 +56,7 @@ func dotest(self bool) bool {
 	// the resulting binary looks like it was built from pclinetest.s,
 	// but we have renamed it to keep it away from the go tool.
 	pclinetestBinary = filepath.Join(pclineTempDir, "pclinetest")
-	command := fmt.Sprintf("go tool 6a -o %s.6 ../../gosym/pclinetest.asm && go tool 6l -H %s -E main -o %s %s.6",
+	command := fmt.Sprintf("go tool asm -o %s.6 ../gosym/pclinetest.asm && go tool link -H %s -E main -o %s %s.6",
 		pclinetestBinary, runtime.GOOS, pclinetestBinary, pclinetestBinary)
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Stdout = os.Stdout
@@ -115,20 +115,42 @@ func TestPCToLine(t *testing.T) {
 	}
 
 	// Test PCToLine.
-	// TODO: Do much more than this.
-	pc, err := data.LookupFunction("linefrompc")
+	entry, err := data.LookupFunction("linefrompc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, line, err := data.PCToLine(pc)
-	if err != nil {
-		t.Fatal(err)
+	pc, ok := entry.Val(AttrLowpc).(uint64)
+	if !ok {
+		t.Fatal(`DWARF data for function "linefrompc" has no PC`)
 	}
-	// We expect <longpath>/pclinetest.asm, line 13.
-	if !strings.HasSuffix(file, "/pclinetest.asm") {
-		t.Errorf("got %s; want %s", file, ".../pclinetest.asm")
-	}
-	if line != 13 {
-		t.Errorf("got %d; want %d", line, 13)
+	for _, tt := range []struct {
+		offset, want uint64
+	}{
+		{0, 2},
+		{1, 3},
+		{2, 4},
+		{3, 4},
+		{4, 5},
+		{6, 5},
+		{7, 6},
+		{11, 6},
+		{12, 7},
+		{19, 7},
+		{20, 8},
+		{32, 8},
+		{33, 9},
+		{53, 9},
+		{54, 10},
+	} {
+		file, line, err := data.PCToLine(pc + tt.offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(file, "/pclinetest.asm") {
+			t.Errorf("got %s; want %s", file, ".../pclinetest.asm")
+		}
+		if line != tt.want {
+			t.Errorf("line for offset %d: got %d; want %d", tt.offset, line, tt.want)
+		}
 	}
 }
