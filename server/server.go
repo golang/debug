@@ -442,9 +442,8 @@ func (s *Server) handleBreakpointAtLine(req *protocol.BreakpointAtLineRequest, r
 	}
 	if pcs, err := s.dwarfData.LineToBreakpointPCs(req.File, req.Line); err != nil {
 		return err
-	} else {
-		return s.addBreakpoints(pcs, resp)
 	}
+	return s.addBreakpoints(pcs, resp)
 }
 
 // addBreakpoints adds breakpoints at the addresses in pcs, then stores pcs in the response.
@@ -685,18 +684,18 @@ func (s *Server) parseParameterOrLocal(entry *dwarf.Entry, fp uint64) (debug.Loc
 	v.Name, _ = entry.Val(dwarf.AttrName).(string)
 	if off, err := s.dwarfData.EntryTypeOffset(entry); err != nil {
 		return v, err
-	} else {
-		v.Var.TypeID = uint64(off)
 	}
+	v.Var.TypeID = uint64(off)
+
 	if i := entry.Val(dwarf.AttrLocation); i == nil {
 		return v, fmt.Errorf("missing location description")
 	} else if locationDescription, ok := i.([]uint8); !ok {
 		return v, fmt.Errorf("unsupported location description")
 	} else if offset, err := evalLocation(locationDescription); err != nil {
 		return v, err
-	} else {
-		v.Var.Address = fp + uint64(offset)
 	}
+	v.Var.Address = fp + uint64(offset)
+
 	return v, nil
 }
 
