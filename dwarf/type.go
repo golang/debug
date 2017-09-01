@@ -815,6 +815,9 @@ func (d *Data) readType(name string, r typeReader, off Offset, typeCache map[Off
 		typ = t
 		typeCache[off] = t
 		t.Name, _ = e.Val(AttrName).(string)
+
+	default:
+		err = DecodeError{name, off, "unsupported type tag"}
 	}
 
 	if err != nil {
