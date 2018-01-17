@@ -152,7 +152,9 @@ func Core(coreFile, base string) (*Process, error) {
 	}
 
 	// Memory map all the mappings.
+	hostPageSize := int64(syscall.Getpagesize())
 	for _, m := range p.mappings {
+		size := m.max.Sub(m.min)
 		if m.f == nil {
 			// We don't have any source for this data.
 			// Could be a mapped file that we couldn't find.
@@ -166,18 +168,33 @@ func Core(coreFile, base string) (*Process, error) {
 			// TODO: this allocation could be large.
 			// Use mmap to avoid real backing store for all those zeros, or
 			// perhaps split the mapping up into chunks and share the zero contents among them.
-			m.contents = make([]byte, m.max.Sub(m.min))
+			m.contents = make([]byte, size)
 			continue
 		}
 		if m.perm&Write != 0 && m.f != core {
 			p.warnings = append(p.warnings,
 				fmt.Sprintf("Writeable data at [%x %x] missing from core. Using possibly stale backup source %s.", m.min, m.max, m.f.Name()))
 		}
-		var err error
-		m.contents, err = syscall.Mmap(int(m.f.Fd()), m.off, int(m.max.Sub(m.min)), syscall.PROT_READ, syscall.MAP_SHARED)
-		if err != nil {
-			return nil, fmt.Errorf("can't memory map %s at %d: %s\n", m.f.Name(), m.off, err)
+		// Data in core file might not be aligned enough for the host.
+		// Expand memory range so we can map full pages.
+		minOff := m.off
+		maxOff := m.off + size
+		minOff -= minOff % hostPageSize
+		if maxOff%hostPageSize != 0 {
+			maxOff += hostPageSize - maxOff%hostPageSize
 		}
+
+		// Read data from file.
+		data, err := syscall.Mmap(int(m.f.Fd()), minOff, int(maxOff-minOff), syscall.PROT_READ, syscall.MAP_SHARED)
+		if err != nil {
+			return nil, fmt.Errorf("can't memory map %s at %x: %s\n", m.f.Name(), minOff, err)
+		}
+
+		// Trim any data we mapped but don't need.
+		data = data[m.off-minOff:]
+		data = data[:size]
+
+		m.contents = data
 	}
 
 	// Build page table for mapping lookup.
