@@ -44,6 +44,7 @@ type Process struct {
 	dwarf        *dwarf.Data        // debugging info (could be nil)
 	dwarfErr     error              // an error encountered while reading DWARF
 	pageTable    pageTable4         // for fast address->mapping lookups
+	warnings     []string           // warnings generated during loading
 }
 
 // Mappings returns a list of virtual memory mappings for p.
@@ -131,13 +132,6 @@ func Core(coreFile, base string) (*Process, error) {
 		return nil, err
 	}
 
-	// Double-check that we have underlying data available for all mappings.
-	for _, m := range p.mappings {
-		if m.f == nil {
-			return nil, fmt.Errorf("incomplete mapping %x %x", m.min, m.max)
-		}
-	}
-
 	// Sort then merge mappings, just to clean up a bit.
 	sort.Slice(p.mappings, func(i, j int) bool {
 		return p.mappings[i].min < p.mappings[j].min
@@ -159,10 +153,30 @@ func Core(coreFile, base string) (*Process, error) {
 
 	// Memory map all the mappings.
 	for _, m := range p.mappings {
+		if m.f == nil {
+			// We don't have any source for this data.
+			// Could be a mapped file that we couldn't find.
+			// Could be a mapping madvised as MADV_DONTDUMP.
+			// Pretend this is read-as-zero.
+			// The other option is to just throw away
+			// the mapping (and thus make Read*s of this
+			// mapping fail).
+			p.warnings = append(p.warnings,
+				fmt.Sprintf("Missing data at addresses [%x %x]. Assuming all zero.", m.min, m.max))
+			// TODO: this allocation could be large.
+			// Use mmap to avoid real backing store for all those zeros, or
+			// perhaps split the mapping up into chunks and share the zero contents among them.
+			m.contents = make([]byte, m.max.Sub(m.min))
+			continue
+		}
+		if m.perm&Write != 0 && m.f != core {
+			p.warnings = append(p.warnings,
+				fmt.Sprintf("Writeable data at [%x %x] missing from core. Using possibly stale backup source %s.", m.min, m.max, m.f.Name()))
+		}
 		var err error
 		m.contents, err = syscall.Mmap(int(m.f.Fd()), m.off, int(m.max.Sub(m.min)), syscall.PROT_READ, syscall.MAP_SHARED)
 		if err != nil {
-			return nil, fmt.Errorf("can't memory map %s at %d: %s\n", m.f, m.off, err)
+			return nil, fmt.Errorf("can't memory map %s at %d: %s\n", m.f.Name(), m.off, err)
 		}
 	}
 
@@ -257,12 +271,6 @@ func (p *Process) readLoad(f *os.File, e *elf.File, prog *elf.Prog) error {
 	}
 	if prog.Flags&elf.PF_W != 0 {
 		perm |= Write
-		if prog.Filesz != prog.Memsz {
-			return fmt.Errorf("Data at address %x is not complete. The core has %x bytes, we need %x bytes", min, prog.Filesz, prog.Memsz)
-			// For non-writeable sections, the underlying data
-			// might not be in the core file itself.
-			// The underlying data will be found during readNote.
-		}
 	}
 	if prog.Flags&elf.PF_X != 0 {
 		perm |= Exec
@@ -357,9 +365,12 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 		backing, err := os.Open(filepath.Join(p.base, name))
 		if err != nil {
 			// Can't find mapped file.
-			// TODO: if we debug on a different machine,
-			// provide a way to map from core's file spec to a real file.
-			return fmt.Errorf("can't open mapped file: %v\n", err)
+			// We don't want to make this a hard error because there are
+			// lots of possible missing files that probably aren't critical,
+			// like a random shared library.
+			p.warnings = append(p.warnings,
+				fmt.Sprintf("Missing data for addresses [%x %x] because of failure to %s. Assuming all zero.", min, max, err))
+			// Leaving backing==nil here means treat as all zero.
 		}
 
 		// TODO: this is O(n^2). Shouldn't be a big problem in practice.
@@ -374,9 +385,6 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 				panic("mapping overlapping end of file region")
 			}
 			if m.f == nil {
-				if m.perm&Write != 0 {
-					panic("writeable data missing from core")
-				}
 				m.f = backing
 				m.off = int64(off) + m.min.Sub(min)
 			} else {
@@ -394,7 +402,7 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 			// symbols return the correct addresses given where the file is
 			// mapped in memory. Not sure what to do here.
 			// Seems to work for the base executable, for now.
-			if m.perm&Exec != 0 {
+			if backing != nil && m.perm&Exec != 0 {
 				found := false
 				for _, x := range p.exec {
 					if x == m.f {
@@ -527,4 +535,8 @@ func (p *Process) readExec() error {
 		}
 	}
 	return nil
+}
+
+func (p *Process) Warnings() []string {
+	return p.warnings
 }
