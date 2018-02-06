@@ -163,3 +163,15 @@ func TestReverse(t *testing.T) {
 		t.Errorf("forward and reverse edges don't match")
 	}
 }
+
+func TestDynamicType(t *testing.T) {
+	p := loadExample(t)
+	for _, g := range p.Globals() {
+		if g.Name == "runtime.indexError" {
+			d := p.DynamicType(g.Type, g.Addr)
+			if d.Name != "runtime.errorString" {
+				t.Errorf("dynamic type wrong: got %s want runtime.errorString", d.Name)
+			}
+		}
+	}
+}

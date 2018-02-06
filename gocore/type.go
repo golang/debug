@@ -87,6 +87,29 @@ func (t *Type) field(name string) *Field {
 	return nil
 }
 
+// DynamicType returns the concrete type stored in the interface type t at address a.
+// If the interface is nil, returns nil.
+func (p *Process) DynamicType(t *Type, a core.Address) *Type {
+	switch t.Kind {
+	default:
+		panic("asking for the dynamic type of a non-interface")
+	case KindEface:
+		x := p.proc.ReadPtr(a)
+		if x == 0 {
+			return nil
+		}
+		return p.runtimeType2Type(x)
+	case KindIface:
+		x := p.proc.ReadPtr(a)
+		if x == 0 {
+			return nil
+		}
+		// Read type out of itab.
+		x = p.proc.ReadPtr(x.Add(p.proc.PtrSize()))
+		return p.runtimeType2Type(x)
+	}
+}
+
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
 func (p *Process) runtimeType2Type(a core.Address) *Type {
@@ -122,7 +145,7 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 		// A reflect-generated type.
 		// TODO: The actual name is in the runtime.reflectOffs map.
 		// Too hard to look things up in maps here, just allocate a placeholder for now.
-		name = fmt.Sprintf("reflect.generated%x", a)
+		name = fmt.Sprintf("reflect.generatedType%x", a)
 	}
 
 	// Read ptr/nonptr bits
