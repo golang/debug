@@ -7,6 +7,7 @@ package gocore
 import (
 	"debug/dwarf"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -299,12 +300,16 @@ func runtimeName(dt dwarf.Type) string {
 		return s
 	default:
 		name := dt.String()
-		if i := strings.LastIndex(name, "/"); i >= 0 {
-			name = name[i+1:] // Runtime uses only last name in package path.
-		}
-		return name
+		// The runtime uses just package names. DWARF uses whole package paths.
+		// To convert from the latter to the former, get rid of the package paths.
+		// Examples:
+		//   text/template.Template -> template.Template
+		//   map[string]compress/gzip.Writer -> map[string]gzip.Writer
+		return strings.Join(pathRegexp.Split(name, -1), "")
 	}
 }
+
+var pathRegexp = regexp.MustCompile("\\w+/")
 
 // readRuntimeConstants populates the p.rtConstants map.
 func (p *Process) readRuntimeConstants() {
