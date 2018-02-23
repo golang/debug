@@ -6,6 +6,7 @@ package gocore
 
 import (
 	"math/bits"
+	"sort"
 	"strings"
 
 	"golang.org/x/debug/core"
@@ -109,9 +110,6 @@ func (p *Process) markObjects() {
 	// Initialize firstIdx fields in the heapInfo, for fast object index lookups.
 	for i := len(p.heapInfo) - 1; i >= 0; i-- {
 		h := &p.heapInfo[i]
-		if h.mark == 0 { // not really necessary, just leave -1 sentinel as a double check.
-			continue
-		}
 		n -= bits.OnesCount64(h.mark)
 		h.firstIdx = n
 	}
@@ -186,6 +184,30 @@ func (p *Process) findObjectIndex(a core.Address) (int, int64) {
 	}
 	h := p.findHeapInfo(core.Address(x))
 	return h.firstIdx + bits.OnesCount64(h.mark&(uint64(1)<<(uint64(x)%heapInfoSize/8)-1)), off
+}
+
+func (p *Process) findObjectFromIndex(idx int) Object {
+	// Find the first heapInfo after the index we want, then go one back,
+	// so that we skip over empty chunks.
+	hIdx := sort.Search(len(p.heapInfo), func(k int) bool {
+		return p.heapInfo[k].firstIdx > idx
+	})
+	if hIdx > 0 {
+		hIdx--
+	}
+	h := p.heapInfo[hIdx]
+	gap := idx - h.firstIdx + 1
+	// TODO: use math/bits somehow?
+	for offset := core.Address(0); offset < heapInfoSize; offset += 8 {
+		if h.mark>>(offset/8)&1 == 1 {
+			gap--
+		}
+		if gap == 0 {
+			// Can't use heapInfo.base: it's the start of the *span*, not the heapInfo.
+			return Object(p.arenaStart + core.Address(hIdx*heapInfoSize) + offset)
+		}
+	}
+	panic("Overran heap info looking for live objects")
 }
 
 // ForEachObject calls fn with each object in the Go heap.
@@ -326,7 +348,7 @@ type heapInfo struct {
 	base     core.Address // start of the span containing this heap region
 	size     int64        // size of objects in the span
 	mark     uint64       // 64 mark bits, one for every 8 bytes
-	firstIdx int          // the index of the first object that starts in this region (-1 if none)
+	firstIdx int          // the index of the first object that starts in or after this region
 }
 
 // findHeapInfo finds the heapInfo structure for a.

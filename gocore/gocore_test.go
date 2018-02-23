@@ -41,6 +41,18 @@ func TestObjects(t *testing.T) {
 	}
 }
 
+func TestObjectIndexes(t *testing.T) {
+	p := loadExample(t)
+	p.ForEachObject(func(x Object) bool {
+		idx, _ := p.findObjectIndex(p.Addr(x))
+		got := p.findObjectFromIndex(idx)
+		if x != got {
+			t.Errorf("findObjectFromIndex(%v) = %#x, want %#x", idx, got, x)
+		}
+		return true
+	})
+}
+
 func TestRoots(t *testing.T) {
 	p := loadExample(t)
 	n := 0

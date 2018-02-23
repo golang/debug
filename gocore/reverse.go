@@ -110,3 +110,9 @@ func (p *Process) ForEachReversePtr(y Object, fn func(x Object, r *Root, i, j in
 		}
 	}
 }
+
+func (p *Process) findRootIndex(r *Root) int {
+	return sort.Search(len(p.rootIdx), func(k int) bool {
+		return p.rootIdx[k].Addr >= r.Addr
+	})
+}
