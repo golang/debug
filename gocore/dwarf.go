@@ -38,6 +38,8 @@ func (p *Process) readDWARFTypes() {
 		}
 	}
 
+	p.runtimeNameMap = map[string][]*Type{}
+
 	// Fill in fields of types. Postponed until now so we're sure
 	// we have all the Types allocated and available.
 	for dt, t := range p.dwarfMap {
@@ -55,7 +57,18 @@ func (p *Process) readDWARFTypes() {
 		case *dwarf.StructType:
 			t.Kind = KindStruct
 			for _, f := range x.Field {
-				t.Fields = append(t.Fields, Field{Name: f.Name, Type: p.dwarfMap[f.Type], Off: f.ByteOffset})
+				fType := p.dwarfMap[f.Type]
+
+				// Work around issue 21094. There's no guarantee that the
+				// pointer type is in the DWARF, so just invent a Type.
+				if strings.HasPrefix(t.Name, "sudog<") && f.Name == "elem" &&
+					strings.Count(t.Name, "*")+1 != strings.Count(gocoreName(f.Type), "*") {
+					ptrName := "*" + gocoreName(f.Type)
+					fType = &Type{Name: ptrName, Kind: KindPtr, Size: p.proc.PtrSize(), Elem: fType}
+					p.runtimeNameMap[ptrName] = []*Type{fType}
+				}
+
+				t.Fields = append(t.Fields, Field{Name: f.Name, Type: fType, Off: f.ByteOffset})
 			}
 		case *dwarf.BoolType:
 			t.Kind = KindBool
@@ -134,7 +147,6 @@ func (p *Process) readDWARFTypes() {
 	}
 
 	// Make a runtime name -> Type map for existing DWARF types.
-	p.runtimeNameMap = map[string][]*Type{}
 	for dt, t := range p.dwarfMap {
 		name := runtimeName(dt)
 		p.runtimeNameMap[name] = append(p.runtimeNameMap[name], t)
