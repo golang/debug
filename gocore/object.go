@@ -11,7 +11,8 @@ import (
 	"golang.org/x/debug/core"
 )
 
-// An Object represents a single object in the Go heap.
+// An Object represents a single reachable object in the Go heap.
+// Unreachable (garbage) objects are not represented as Objects.
 type Object core.Address
 
 // markObjects finds all the live objects in the heap and marks them
