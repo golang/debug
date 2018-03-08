@@ -261,7 +261,7 @@ func runtimeName(dt dwarf.Type) string {
 	case *dwarf.StructType:
 		if !strings.HasPrefix(x.StructName, "struct {") {
 			// This is a named type, return that name.
-			return x.StructName
+			return stripPackagePath(x.StructName)
 		}
 		// Figure out which fields have anonymous names.
 		var anon []bool
@@ -299,17 +299,22 @@ func runtimeName(dt dwarf.Type) string {
 		s += " }"
 		return s
 	default:
-		name := dt.String()
-		// The runtime uses just package names. DWARF uses whole package paths.
-		// To convert from the latter to the former, get rid of the package paths.
-		// Examples:
-		//   text/template.Template -> template.Template
-		//   map[string]compress/gzip.Writer -> map[string]gzip.Writer
-		return strings.Join(pathRegexp.Split(name, -1), "")
+		return stripPackagePath(dt.String())
 	}
 }
 
-var pathRegexp = regexp.MustCompile("\\w+/")
+var pathRegexp = regexp.MustCompile(`([\w.]+/)+\w+`)
+
+func stripPackagePath(name string) string {
+	// The runtime uses just package names. DWARF uses whole package paths.
+	// To convert from the latter to the former, get rid of the package paths.
+	// Examples:
+	//   text/template.Template -> template.Template
+	//   map[string]compress/gzip.Writer -> map[string]gzip.Writer
+	return pathRegexp.ReplaceAllStringFunc(name, func(path string) string {
+		return path[strings.LastIndex(path, "/")+1:]
+	})
+}
 
 // readRuntimeConstants populates the p.rtConstants map.
 func (p *Process) readRuntimeConstants() {
