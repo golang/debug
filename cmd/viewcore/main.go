@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The coreview tool is a command-line tool for exploring the state of a Go process
+// The viewcore tool is a command-line tool for exploring the state of a Go process
 // that has dumped core.
-// Run "coreview help" for a list of commands.
+// Run "viewcore help" for a list of commands.
 package main
 
 import (
@@ -24,7 +24,7 @@ func usage() {
 	fmt.Println(`
 Usage:
 
-        coreview command corefile
+        viewcore command corefile
 
 The commands are:
 
@@ -46,7 +46,7 @@ Flags applicable to all commands:
 
 func main() {
 	base := flag.String("base", "", "root directory to find core dump file references")
-	prof := flag.String("prof", "", "write cpu profile of coreview to this file (for coreview's developers)")
+	prof := flag.String("prof", "", "write cpu profile of viewcore to this file (for viewcore's developers)")
 	flag.Parse()
 
 	// Extract command.
@@ -76,7 +76,7 @@ func main() {
 	switch cmd {
 	default:
 		fmt.Fprintf(os.Stderr, "%s: unknown command %s\n", os.Args[0], cmd)
-		fmt.Fprintf(os.Stderr, "Run 'coreview help' for usage.\n")
+		fmt.Fprintf(os.Stderr, "Run 'viewcore help' for usage.\n")
 		os.Exit(2)
 	case "overview":
 	case "mappings":
@@ -97,7 +97,7 @@ func main() {
 	// All commands other than "help" need a core file.
 	if len(args) < 2 {
 		fmt.Fprintf(os.Stderr, "%s: no core dump specified for command %s\n", os.Args[0], cmd)
-		fmt.Fprintf(os.Stderr, "Run 'coreview help' for usage.\n")
+		fmt.Fprintf(os.Stderr, "Run 'viewcore help' for usage.\n")
 		os.Exit(2)
 	}
 	file := args[1]
