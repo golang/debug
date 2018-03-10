@@ -350,7 +350,11 @@ func (p *Process) readRuntimeConstants() {
 		if e.Tag != dwarf.TagConstant {
 			continue
 		}
-		name := e.AttrField(dwarf.AttrName).Val.(string)
+		f := e.AttrField(dwarf.AttrName)
+		if f == nil {
+			continue
+		}
+		name := f.Val.(string)
 		if !strings.HasPrefix(name, "runtime.") {
 			continue
 		}
@@ -377,7 +381,11 @@ func (p *Process) readGlobals() {
 		if e.Tag != dwarf.TagVariable {
 			continue
 		}
-		loc := e.AttrField(dwarf.AttrLocation).Val.([]byte)
+		f := e.AttrField(dwarf.AttrLocation)
+		if f == nil {
+			continue
+		}
+		loc := f.Val.([]byte)
 		if len(loc) == 0 || loc[0] != _DW_OP_addr {
 			continue
 		}
@@ -392,15 +400,23 @@ func (p *Process) readGlobals() {
 			// TODO: keep roots around anyway?
 			continue
 		}
-		dt, err := d.Type(e.AttrField(dwarf.AttrType).Val.(dwarf.Offset))
+		f = e.AttrField(dwarf.AttrType)
+		if f == nil {
+			continue
+		}
+		dt, err := d.Type(f.Val.(dwarf.Offset))
 		if err != nil {
 			panic(err)
 		}
 		if _, ok := dt.(*dwarf.UnspecifiedType); ok {
 			continue // Ignore markers like data/edata.
 		}
+		nf := e.AttrField(dwarf.AttrName)
+		if nf == nil {
+			continue
+		}
 		p.globals = append(p.globals, &Root{
-			Name:  e.AttrField(dwarf.AttrName).Val.(string),
+			Name:  nf.Val.(string),
 			Addr:  a,
 			Type:  p.dwarfMap[dt],
 			Frame: nil,
@@ -420,8 +436,13 @@ func (p *Process) readStackVars() {
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag == dwarf.TagSubprogram {
-			min := core.Address(e.AttrField(dwarf.AttrLowpc).Val.(uint64))
-			max := core.Address(e.AttrField(dwarf.AttrHighpc).Val.(uint64))
+			lowpc := e.AttrField(dwarf.AttrLowpc)
+			highpc := e.AttrField(dwarf.AttrHighpc)
+			if lowpc == nil || highpc == nil {
+				continue
+			}
+			min := core.Address(lowpc.Val.(uint64))
+			max := core.Address(highpc.Val.(uint64))
 			f := p.funcTab.find(min)
 			if f == nil {
 				// some func Go doesn't know about. C?
@@ -477,11 +498,19 @@ func (p *Process) readStackVars() {
 		if len(loc) != 0 {
 			continue // more stuff we don't recognize
 		}
-		dt, err := d.Type(e.AttrField(dwarf.AttrType).Val.(dwarf.Offset))
+		f := e.AttrField(dwarf.AttrType)
+		if f == nil {
+			continue
+		}
+		dt, err := d.Type(f.Val.(dwarf.Offset))
 		if err != nil {
 			panic(err)
 		}
-		name := e.AttrField(dwarf.AttrName).Val.(string)
+		nf := e.AttrField(dwarf.AttrName)
+		if nf == nil {
+			continue
+		}
+		name := nf.Val.(string)
 		vars[curfn] = append(vars[curfn], Var{name: name, off: off, typ: p.dwarfMap[dt]})
 	}
 
