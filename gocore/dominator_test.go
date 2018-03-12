@@ -134,7 +134,7 @@ func sanityCheck(t *testing.T, d ltDom) bool {
 	pRoot.idom = nil
 
 	getVertex := func(n vName) *sanityVertex {
-		r, o := findVertexByName(d.p, n)
+		r, o := d.findVertexByName(n)
 		switch {
 		case n == pseudoRoot:
 			return &pRoot

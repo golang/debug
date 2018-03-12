@@ -35,6 +35,9 @@ type vNumber int
 type ltDom struct {
 	p *Process
 
+	// mapping from object ID to object
+	objs []Object
+
 	// number -> name
 	vertices []vName
 
@@ -55,6 +58,11 @@ type ltDom struct {
 }
 
 type dominators struct {
+	p *Process
+
+	// mapping from object ID to object
+	objs []Object
+
 	// name -> dominator name
 	idom []vName
 
@@ -68,7 +76,7 @@ type dominators struct {
 
 func (p *Process) calculateDominators() *dominators {
 	lt := runLT(p)
-	d := dominators{idom: lt.idom}
+	d := dominators{p: p, idom: lt.idom, objs: lt.objs}
 	lt = ltDom{}
 
 	d.reverse()
@@ -83,6 +91,7 @@ func runLT(p *Process) ltDom {
 		p:         p,
 		nRoots:    len(p.rootIdx),
 		nVertices: nVertices,
+		objs:      make([]Object, p.nObj),
 		vertices:  make([]vName, nVertices),
 		parents:   make([]vName, nVertices),
 		semis:     make([]vNumber, nVertices),
@@ -111,6 +120,14 @@ func (d *ltDom) initialize() {
 		name       vName
 		parentName vName
 	}
+
+	// Initialize objs for mapping from object index back to Object.
+	i := 0
+	d.p.ForEachObject(func(x Object) bool {
+		d.objs[i] = x
+		i++
+		return true
+	})
 
 	// Add roots to the work stack, essentially pretending to visit
 	// the pseudo-root, numbering it 0.
@@ -145,7 +162,7 @@ func (d *ltDom) initialize() {
 			return true
 		}
 
-		root, object := findVertexByName(d.p, item.name)
+		root, object := d.findVertexByName(item.name)
 		if root != nil {
 			d.p.ForEachRootPtr(root, visitChild)
 		} else {
@@ -156,14 +173,23 @@ func (d *ltDom) initialize() {
 }
 
 // findVertexByName returns the root/object named by n, or nil,0 for the pseudo-root.
-func findVertexByName(p *Process, n vName) (*Root, Object) {
+func (d *ltDom) findVertexByName(n vName) (*Root, Object) {
 	if n == 0 {
 		return nil, 0
 	}
-	if int(n) < len(p.rootIdx)+1 {
-		return p.rootIdx[n-1], 0
+	if int(n) < len(d.p.rootIdx)+1 {
+		return d.p.rootIdx[n-1], 0
 	}
-	return nil, p.findObjectFromIndex(int(n) - len(p.rootIdx) - 1)
+	return nil, d.objs[int(n)-len(d.p.rootIdx)-1]
+}
+func (d *dominators) findVertexByName(n vName) (*Root, Object) {
+	if n == 0 {
+		return nil, 0
+	}
+	if int(n) < len(d.p.rootIdx)+1 {
+		return d.p.rootIdx[n-1], 0
+	}
+	return nil, d.objs[int(n)-len(d.p.rootIdx)-1]
 }
 
 // calculate runs the main part of LT.
@@ -188,7 +214,7 @@ func (d *ltDom) calculate() {
 		}
 
 		// Step 2. Compute the semidominators of all nodes.
-		root, obj := findVertexByName(d.p, w)
+		root, obj := d.findVertexByName(w)
 		// This loop never visits the pseudo-root.
 		if root != nil {
 			u := d.eval(pseudoRoot)
@@ -337,7 +363,7 @@ func (d *dominators) calcSize(p *Process) {
 
 		work = work[:len(work)-1]
 
-		root, obj := findVertexByName(p, item.v)
+		root, obj := d.findVertexByName(item.v)
 		var size int64
 		switch {
 		case item.v == pseudoRoot:
@@ -358,7 +384,7 @@ func (d *ltDom) dot(w io.Writer) {
 	fmt.Fprintf(w, "digraph %s {\nrankdir=\"LR\"\n", "dominators")
 	for number, name := range d.vertices {
 		var label string
-		root, obj := findVertexByName(d.p, name)
+		root, obj := d.findVertexByName(name)
 
 		switch {
 		case name == 0:

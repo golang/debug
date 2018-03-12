@@ -6,7 +6,6 @@ package gocore
 
 import (
 	"math/bits"
-	"sort"
 	"strings"
 
 	"golang.org/x/debug/core"
@@ -31,13 +30,13 @@ func (p *Process) markObjects() {
 	// Function to call when we find a new pointer.
 	add := func(x core.Address) {
 		h := p.findHeapInfo(x)
-		if h == nil || h.base == 0 { // not in heap or not in a valid span
+		if h == nil { // not in heap or not in a valid span
 			// Invalid spans can happen with intra-stack pointers.
 			return
 		}
 		// Round down to object start.
 		x = h.base.Add(x.Sub(h.base) / h.size * h.size)
-		// Object start may map to a different info. Reload.
+		// Object start may map to a different info. Reload heap info.
 		h = p.findHeapInfo(x)
 		// Find mark bit
 		b := uint64(x) % heapInfoSize / 8
@@ -108,10 +107,17 @@ func (p *Process) markObjects() {
 	p.nObj = n
 
 	// Initialize firstIdx fields in the heapInfo, for fast object index lookups.
-	for i := len(p.heapInfo) - 1; i >= 0; i-- {
-		h := &p.heapInfo[i]
-		n -= bits.OnesCount64(h.mark)
-		h.firstIdx = n
+	n = 0
+	p.ForEachObject(func(x Object) bool {
+		h := p.findHeapInfo(p.Addr(x))
+		if h.firstIdx == -1 {
+			h.firstIdx = n
+		}
+		n++
+		return true
+	})
+	if n != p.nObj {
+		panic("object count wrong")
 	}
 
 	// Update stats to include the live/garbage distinction.
@@ -125,19 +131,14 @@ func (p *Process) markObjects() {
 // isPtrFromHeap reports whether the inferior at address a contains a pointer.
 // a must be somewhere in the heap.
 func (p *Process) isPtrFromHeap(a core.Address) bool {
-	// Convert arena offset in words to bitmap offset in bits.
-	off := a.Sub(p.arenaStart)
-	off >>= p.proc.LogPtrSize()
-
-	// Find bit in bitmap. It goes backwards from the end.
-	// Each byte contains pointer/nonpointer bits for 4 words in its low nybble.
-	return p.proc.ReadUint8(p.bitmapEnd.Add(-(off>>2)-1))>>uint(off&3)&1 != 0
+	return p.findHeapInfo(a).IsPtr(a, p.proc.PtrSize())
 }
 
 // IsPtr reports whether the inferior at address a contains a pointer.
 func (p *Process) IsPtr(a core.Address) bool {
-	if a >= p.arenaStart && a < p.arenaUsed {
-		return p.isPtrFromHeap(a)
+	h := p.findHeapInfo(a)
+	if h != nil {
+		return h.IsPtr(a, p.proc.PtrSize())
 	}
 	for _, m := range p.modules {
 		for _, s := range [2]string{"data", "bss"} {
@@ -163,7 +164,7 @@ func (p *Process) IsPtr(a core.Address) bool {
 func (p *Process) FindObject(a core.Address) (Object, int64) {
 	// Round down to the start of an object.
 	h := p.findHeapInfo(a)
-	if h == nil || h.size == 0 {
+	if h == nil {
 		// Not in Go heap, or in a span
 		// that doesn't hold Go objects (freed, stacks, ...)
 		return 0, 0
@@ -171,7 +172,7 @@ func (p *Process) FindObject(a core.Address) (Object, int64) {
 	x := h.base.Add(a.Sub(h.base) / h.size * h.size)
 	// Check if object is marked.
 	h = p.findHeapInfo(x)
-	if h.mark>>(uint64(x)%heapInfoSize/8)&1 == 0 {
+	if h.mark>>(uint64(x)%heapInfoSize/8)&1 == 0 { // free or garbage
 		return 0, 0
 	}
 	return Object(x), a.Sub(x)
@@ -186,40 +187,21 @@ func (p *Process) findObjectIndex(a core.Address) (int, int64) {
 	return h.firstIdx + bits.OnesCount64(h.mark&(uint64(1)<<(uint64(x)%heapInfoSize/8)-1)), off
 }
 
-func (p *Process) findObjectFromIndex(idx int) Object {
-	// Find the first heapInfo after the index we want, then go one back,
-	// so that we skip over empty chunks.
-	hIdx := sort.Search(len(p.heapInfo), func(k int) bool {
-		return p.heapInfo[k].firstIdx > idx
-	})
-	if hIdx > 0 {
-		hIdx--
-	}
-	h := p.heapInfo[hIdx]
-	gap := idx - h.firstIdx + 1
-	// TODO: use math/bits somehow?
-	for offset := core.Address(0); offset < heapInfoSize; offset += 8 {
-		if h.mark>>(offset/8)&1 == 1 {
-			gap--
-		}
-		if gap == 0 {
-			// Can't use heapInfo.base: it's the start of the *span*, not the heapInfo.
-			return Object(p.arenaStart + core.Address(hIdx*heapInfoSize) + offset)
-		}
-	}
-	panic("Overran heap info looking for live objects")
-}
-
 // ForEachObject calls fn with each object in the Go heap.
 // If fn returns false, ForEachObject returns immediately.
 func (p *Process) ForEachObject(fn func(x Object) bool) {
-	for i := 0; i < len(p.heapInfo); i++ {
-		m := p.heapInfo[i].mark
-		for m != 0 {
-			j := bits.TrailingZeros64(m)
-			m &= m - 1
-			if !fn(Object(p.arenaStart.Add(int64(i)*heapInfoSize + int64(j)*8))) {
-				return
+	for _, k := range p.pages {
+		pt := p.pageTable[k]
+		for i := range pt {
+			h := &pt[i]
+			m := h.mark
+			for m != 0 {
+				j := bits.TrailingZeros64(m)
+				m &= m - 1
+				x := Object(k)*pageTableSize*heapInfoSize + Object(i)*heapInfoSize + Object(j)*8
+				if !fn(x) {
+					return
+				}
 			}
 		}
 	}
@@ -348,15 +330,69 @@ type heapInfo struct {
 	base     core.Address // start of the span containing this heap region
 	size     int64        // size of objects in the span
 	mark     uint64       // 64 mark bits, one for every 8 bytes
-	firstIdx int          // the index of the first object that starts in or after this region
+	firstIdx int          // the index of the first object that starts in this region, or -1 if none
+	// For 64-bit inferiors, ptr[0] contains 64 pointer bits, one
+	// for every 8 bytes.  On 32-bit inferiors, ptr contains 128
+	// pointer bits, one for every 4 bytes.
+	ptr [2]uint64
 }
+
+func (h *heapInfo) IsPtr(a core.Address, ptrSize int64) bool {
+	if ptrSize == 8 {
+		i := uint(a%heapInfoSize) / 8
+		return h.ptr[0]>>i&1 != 0
+	}
+	i := a % heapInfoSize / 4
+	return h.ptr[i/64]>>(i%64)&1 != 0
+}
+
+// setHeapPtr records that the memory at heap address a contains a pointer.
+func (p *Process) setHeapPtr(a core.Address) {
+	h := p.allocHeapInfo(a)
+	if p.proc.PtrSize() == 8 {
+		i := uint(a%heapInfoSize) / 8
+		h.ptr[0] |= uint64(1) << i
+		return
+	}
+	i := a % heapInfoSize / 4
+	h.ptr[i/64] |= uint64(1) << (i % 64)
+}
+
+// Heap info structures cover 9 bits of address.
+// A page table entry covers 20 bits of address (1MB).
+const pageTableSize = 1 << 11
+
+type pageTableEntry [pageTableSize]heapInfo
 
 // findHeapInfo finds the heapInfo structure for a.
 // Returns nil if a is not a heap address.
 func (p *Process) findHeapInfo(a core.Address) *heapInfo {
-	if a < p.arenaStart || a >= p.arenaUsed {
+	k := a / heapInfoSize / pageTableSize
+	i := a / heapInfoSize % pageTableSize
+	t := p.pageTable[k]
+	if t == nil {
 		return nil
 	}
-	i := a.Sub(p.arenaStart) / heapInfoSize
-	return &p.heapInfo[i]
+	h := &t[i]
+	if h.base == 0 {
+		return nil
+	}
+	return h
+}
+
+// Same as findHeapInfo, but allocates the heapInfo if it
+// hasn't been allocated yet.
+func (p *Process) allocHeapInfo(a core.Address) *heapInfo {
+	k := a / heapInfoSize / pageTableSize
+	i := a / heapInfoSize % pageTableSize
+	t := p.pageTable[k]
+	if t == nil {
+		t = new(pageTableEntry)
+		for j := 0; j < pageTableSize; j++ {
+			t[j].firstIdx = -1
+		}
+		p.pageTable[k] = t
+		p.pages = append(p.pages, k)
+	}
+	return &t[i]
 }

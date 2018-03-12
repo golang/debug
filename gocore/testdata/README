@@ -12,3 +12,5 @@ The core file includes the executable by reference using an absolute
 path.  The executable was at /tmp/test, so that path is reproduced
 here so the core dump reader can find the executable using this
 testdata directory as the base directory.
+
+core1.10 is produced in the same way, except using go1.10.0.

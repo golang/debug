@@ -5,6 +5,7 @@
 package gocore
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -29,6 +30,21 @@ func loadExample(t *testing.T) *Process {
 	return p
 }
 
+func loadExampleVersion(t *testing.T, version string) *Process {
+	if version == "1.9" {
+		version = ""
+	}
+	c, err := core.Core(fmt.Sprintf("testdata/core%s", version), "testdata")
+	if err != nil {
+		t.Fatalf("can't load test core file: %s", err)
+	}
+	p, err := Core(c, FlagTypes|FlagReverse)
+	if err != nil {
+		t.Fatalf("can't parse Go core: %s", err)
+	}
+	return p
+}
+
 func TestObjects(t *testing.T) {
 	p := loadExample(t)
 	n := 0
@@ -39,18 +55,6 @@ func TestObjects(t *testing.T) {
 	if n != 104 {
 		t.Errorf("#objects = %d, want 104", n)
 	}
-}
-
-func TestObjectIndexes(t *testing.T) {
-	p := loadExample(t)
-	p.ForEachObject(func(x Object) bool {
-		idx, _ := p.findObjectIndex(p.Addr(x))
-		got := p.findObjectFromIndex(idx)
-		if x != got {
-			t.Errorf("findObjectFromIndex(%v) = %#x, want %#x", idx, got, x)
-		}
-		return true
-	})
 }
 
 func TestRoots(t *testing.T) {
@@ -186,4 +190,8 @@ func TestDynamicType(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestVersions(t *testing.T) {
+	loadExampleVersion(t, "1.10")
 }

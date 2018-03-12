@@ -157,3 +157,25 @@ func (r region) Field(f string) region {
 	}
 	return region{p: r.p, a: r.a.Add(finfo.Off), typ: finfo.Type}
 }
+
+func (r region) HasField(f string) bool {
+	finfo := r.typ.field(f)
+	return finfo != nil
+}
+
+func (r region) ArrayLen() int64 {
+	if r.typ.Kind != KindArray {
+		panic("can't ArrayLen a non-array")
+	}
+	return r.typ.Count
+}
+
+func (r region) ArrayIndex(i int64) region {
+	if r.typ.Kind != KindArray {
+		panic("can't ArrayIndex a non-array")
+	}
+	if i < 0 || i >= r.typ.Count {
+		panic("array index out of bounds")
+	}
+	return region{p: r.p, a: r.a.Add(i * r.typ.Elem.Size), typ: r.typ.Elem}
+}

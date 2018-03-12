@@ -16,12 +16,11 @@ import (
 type Process struct {
 	proc *core.Process
 
-	arenaStart core.Address
-	arenaUsed  core.Address
-	bitmapEnd  core.Address
-
 	// data structure for fast object finding
-	heapInfo []heapInfo
+	// The key to these maps is the object address divided by
+	// pageTableSize * heapInfoSize.
+	pageTable map[core.Address]*pageTableEntry
+	pages     []core.Address // deterministic ordering of keys of pageTable
 
 	// number of live objects
 	nObj int
@@ -168,7 +167,7 @@ func Core(proc *core.Process, flags Flags) (p *Process, err error) {
 	// Read all the data that depend on runtime globals.
 	p.buildVersion = p.rtGlobals["buildVersion"].String()
 	p.readModules()
-	p.readSpans()
+	p.readHeap()
 	p.readGs()
 	p.readStackVars() // needs to be after readGs.
 	p.markObjects()   // needs to be after readGlobals, readStackVars.
@@ -182,21 +181,108 @@ func Core(proc *core.Process, flags Flags) (p *Process, err error) {
 	return p, nil
 }
 
-func (p *Process) readSpans() {
+type arena struct {
+	heapMin core.Address
+	heapMax core.Address
+
+	bitmapMin core.Address
+	bitmapMax core.Address
+
+	spanTableMin core.Address
+	spanTableMax core.Address
+}
+
+func (p *Process) readHeap() {
+	ptrSize := p.proc.PtrSize()
+	logPtrSize := p.proc.LogPtrSize()
+	p.pageTable = map[core.Address]*pageTableEntry{}
 	mheap := p.rtGlobals["mheap_"]
+	var arenas []arena
 
-	spanTableStart := mheap.Field("spans").SlicePtr().Address()
-	spanTableEnd := spanTableStart.Add(mheap.Field("spans").SliceCap() * p.proc.PtrSize())
-	arenaStart := core.Address(mheap.Field("arena_start").Uintptr())
-	arenaUsed := core.Address(mheap.Field("arena_used").Uintptr())
-	arenaEnd := core.Address(mheap.Field("arena_end").Uintptr())
-	bitmapEnd := core.Address(mheap.Field("bitmap").Uintptr())
-	bitmapStart := bitmapEnd.Add(-int64(mheap.Field("bitmap_mapped").Uintptr()))
+	if mheap.HasField("spans") {
+		// go 1.9 or 1.10. There is a single arena.
+		arenaStart := core.Address(mheap.Field("arena_start").Uintptr())
+		arenaUsed := core.Address(mheap.Field("arena_used").Uintptr())
+		arenaEnd := core.Address(mheap.Field("arena_end").Uintptr())
+		bitmapEnd := core.Address(mheap.Field("bitmap").Uintptr())
+		bitmapStart := bitmapEnd.Add(-int64(mheap.Field("bitmap_mapped").Uintptr()))
+		spanTableStart := mheap.Field("spans").SlicePtr().Address()
+		spanTableEnd := spanTableStart.Add(mheap.Field("spans").SliceCap() * ptrSize)
+		arenas = append(arenas, arena{
+			heapMin:      arenaStart,
+			heapMax:      arenaEnd,
+			bitmapMin:    bitmapStart,
+			bitmapMax:    bitmapEnd,
+			spanTableMin: spanTableStart,
+			spanTableMax: spanTableEnd,
+		})
 
-	p.arenaStart = arenaStart
-	p.arenaUsed = arenaUsed
-	p.bitmapEnd = bitmapEnd
+		// Copy pointer bits to heap info.
+		// Note that the pointer bits are stored backwards.
+		for a := arenaStart; a < arenaUsed; a = a.Add(ptrSize) {
+			off := a.Sub(arenaStart) >> logPtrSize
+			if p.proc.ReadUint8(bitmapEnd.Add(-(off>>2)-1))>>uint(off&3)&1 != 0 {
+				p.setHeapPtr(a)
+			}
+		}
+	} else {
+		// go 1.11+. Has multiple arenas.
+		arenaSize := p.rtConstants["heapArenaBytes"]
+		if arenaSize%heapInfoSize != 0 {
+			panic("arenaSize not a multiple of heapInfoSize")
+		}
+		arenaBaseOffset := p.rtConstants["arenaBaseOffset"]
+		if ptrSize == 4 && arenaBaseOffset != 0 {
+			panic("arenaBaseOffset must be 0 for 32-bit inferior")
+		}
+		level1Table := mheap.Field("arenas")
+		level1size := level1Table.ArrayLen()
+		for level1 := int64(0); level1 < level1size; level1++ {
+			ptr := level1Table.ArrayIndex(level1)
+			if ptr.Address() == 0 {
+				continue
+			}
+			level2table := ptr.Deref()
+			level2size := level2table.ArrayLen()
+			for level2 := int64(0); level2 < level2size; level2++ {
+				ptr = level2table.ArrayIndex(level2)
+				if ptr.Address() == 0 {
+					continue
+				}
+				a := ptr.Deref()
 
+				min := core.Address(arenaSize*(level2+level1*level2size) - arenaBaseOffset)
+				max := min.Add(arenaSize)
+				bitmap := a.Field("bitmap")
+				spans := a.Field("spans")
+
+				arenas = append(arenas, arena{
+					heapMin:      min,
+					heapMax:      max,
+					bitmapMin:    bitmap.a,
+					bitmapMax:    bitmap.a.Add(bitmap.ArrayLen()),
+					spanTableMin: spans.a,
+					spanTableMax: spans.a.Add(spans.ArrayLen() * ptrSize),
+				})
+
+				// Copy out ptr/nonptr bits
+				n := bitmap.ArrayLen()
+				for i := int64(0); i < n; i++ {
+					m := bitmap.ArrayIndex(i).Uint8()
+					for j := int64(0); j < 8; j++ {
+						if m>>uint(j)&1 != 0 {
+							p.setHeapPtr(min.Add((i*8 + j) * ptrSize))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	p.readSpans(mheap, arenas)
+}
+
+func (p *Process) readSpans(mheap region, arenas []arena) {
 	var all int64
 	var text int64
 	var readOnly int64
@@ -228,9 +314,11 @@ func (p *Process) readSpans() {
 					size -= b.Sub(a)
 				}
 			}
-			attribute(spanTableStart, spanTableEnd, &spanTable)
-			attribute(arenaStart, arenaEnd, &heap)
-			attribute(bitmapStart, bitmapEnd, &bitmap)
+			for _, a := range arenas {
+				attribute(a.heapMin, a.heapMax, &heap)
+				attribute(a.bitmapMin, a.bitmapMax, &bitmap)
+				attribute(a.spanTableMin, a.spanTableMax, &spanTable)
+			}
 			// Any other anonymous mapping is bss.
 			// TODO: how to distinguish original bss from anonymous mmap?
 			bss += size
@@ -250,7 +338,6 @@ func (p *Process) readSpans() {
 	if pageSize%heapInfoSize != 0 {
 		panic(fmt.Sprintf("page size not a multiple of %d", heapInfoSize))
 	}
-	p.heapInfo = make([]heapInfo, (p.arenaUsed-p.arenaStart)/heapInfoSize)
 	allspans := mheap.Field("allspans")
 	var allSpanSize int64
 	var freeSpanSize int64
@@ -294,8 +381,12 @@ func (p *Process) readSpans() {
 				}
 			}
 			spanRoundSize += spanSize - n*elemSize
+
+			// initialize heap info records for all inuse spans.
 			for a := min; a < max; a += heapInfoSize {
-				p.heapInfo[(a.Sub(p.arenaStart))/heapInfoSize] = heapInfo{base: min, size: elemSize, firstIdx: -1}
+				h := p.allocHeapInfo(a)
+				h.base = min
+				h.size = elemSize
 			}
 
 			// Process special records.
