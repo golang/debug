@@ -530,39 +530,49 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	case KindEface, KindIface:
 		// interface. Use the type word to determine the type
 		// of the pointed-to object.
-		typ := r.ReadPtr(a)
-		if typ == 0 { // nil interface
+		typPtr := r.ReadPtr(a)
+		if typPtr == 0 { // nil interface
 			return
 		}
-		ptr := r.ReadPtr(a.Add(ptrSize))
+		data := a.Add(ptrSize)
 		if t.Kind == KindIface {
-			typ = p.proc.ReadPtr(typ.Add(p.findType("runtime.itab").field("_type").Off))
+			typPtr = p.proc.ReadPtr(typPtr.Add(p.findType("runtime.itab").field("_type").Off))
 		}
-		// TODO: for KindEface, type the typ pointer. It might point to the heap
+		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
-		dt := p.runtimeType2Type(typ)
-		typr := region{p: p, a: typ, typ: p.findType("runtime._type")}
-		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) != 0 {
-			// Find the base type of the pointer held in the interface.
-		findptr:
-			if dt.Kind == KindArray {
-				dt = dt.Elem
-				goto findptr
+		typ := p.runtimeType2Type(typPtr)
+		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
+		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
+			// Indirect interface: the interface introduced a new
+			// level of indirection, not reflected in the type.
+			// Read through it.
+			add(r.ReadPtr(data), typ, 1)
+			return
+		}
+
+		// Direct interface: the contained type is a single pointer.
+		// Figure out what it is and type it. See isdirectiface() for the rules.
+		directTyp := typ
+	findDirect:
+		for {
+			if directTyp.Kind == KindArray {
+				directTyp = typ.Elem
+				continue findDirect
 			}
-			if dt.Kind == KindStruct {
-				for _, f := range dt.Fields {
+			if directTyp.Kind == KindStruct {
+				for _, f := range directTyp.Fields {
 					if f.Type.Size != 0 {
-						dt = f.Type
-						goto findptr
+						directTyp = f.Type
+						continue findDirect
 					}
 				}
 			}
-			if dt.Kind != KindPtr {
-				panic(fmt.Sprintf("direct type isn't a pointer %s", dt.Kind))
+			if directTyp.Kind != KindFunc && directTyp.Kind != KindPtr {
+				panic(fmt.Sprintf("type of direct interface, originally %s (kind %s), isn't a pointer: %s (kind %s)", typ, typ.Kind, directTyp, directTyp.Kind))
 			}
-			dt = dt.Elem
+			break
 		}
-		add(ptr, dt, 1)
+		add(data, directTyp, 1)
 	case KindString:
 		ptr := r.ReadPtr(a)
 		len := r.ReadInt(a.Add(ptrSize))
