@@ -38,9 +38,9 @@ The commands are:
     objgraph: dump object graph to the file tmp.dot
    reachable: find path from root to an object
         html: start an http server on :8080 for browsing core file data
+        read: read a chunk of memory
 
-Flags applicable to all commands:
-`)
+Flags applicable to all commands:\n`)
 	flag.PrintDefaults()
 }
 
@@ -92,6 +92,7 @@ func main() {
 		flags = gocore.FlagTypes | gocore.FlagReverse
 	case "html":
 		flags = gocore.FlagTypes | gocore.FlagReverse
+	case "read":
 	}
 
 	// All commands other than "help" need a core file.
@@ -385,6 +386,42 @@ func main() {
 		}
 	case "html":
 		serveHTML(c)
+	case "read":
+		if len(args) < 3 {
+			fmt.Fprintf(os.Stderr, "no address provided\n")
+			os.Exit(1)
+		}
+		n, err := strconv.ParseInt(args[2], 16, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "can't parse %s as an object address\n", args[2])
+			os.Exit(1)
+		}
+		a := core.Address(n)
+		if len(args) < 4 {
+			n = 256
+		} else {
+			n, err = strconv.ParseInt(args[3], 10, 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "can't parse %s as a byte count\n", args[3])
+				os.Exit(1)
+			}
+		}
+		if !p.ReadableN(a, n) {
+			fmt.Fprintf(os.Stderr, "address range [%x,%x] not readable\n", a, a.Add(n))
+			os.Exit(1)
+		}
+		b := make([]byte, n)
+		p.ReadAt(b, a)
+		for i, x := range b {
+			if i%16 == 0 {
+				if i > 0 {
+					fmt.Println()
+				}
+				fmt.Printf("%x:", a.Add(int64(i)))
+			}
+			fmt.Printf(" %02x", x)
+		}
+		fmt.Println()
 	}
 }
 
