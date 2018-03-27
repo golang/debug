@@ -22,6 +22,10 @@ func (p *Process) readDWARFTypes() {
 	r := d.Reader()
 	var types []*Type
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
+		if isNonGoCU(e) {
+			r.SkipChildren()
+			continue
+		}
 		switch e.Tag {
 		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
 			dt, err := d.Type(e.Offset)
@@ -91,7 +95,6 @@ func (p *Process) readDWARFTypes() {
 	}
 
 	// Copy info from base types into typedefs.
-	r = d.Reader()
 	for dt, t := range p.dwarfMap {
 		tt, ok := dt.(*dwarf.TypedefType)
 		if !ok {
@@ -185,6 +188,14 @@ func (p *Process) readDWARFTypes() {
 	}
 }
 
+func isNonGoCU(e *dwarf.Entry) bool {
+	if e.Tag != dwarf.TagCompileUnit {
+		return false
+	}
+	prod := e.AttrField(dwarf.AttrProducer).Val.(string)
+	return !strings.Contains(prod, "Go cmd/compile")
+}
+
 // dwarfSize is used to compute the size of a DWARF type.
 // dt.Size() is wrong when it returns a negative number.
 // This function implements just enough to correct the bad behavior.
@@ -201,7 +212,7 @@ func dwarfSize(dt dwarf.Type, ptrSize int64) int64 {
 	case *dwarf.TypedefType:
 		return dwarfSize(x.Type, ptrSize)
 	default:
-		panic(fmt.Sprintf("unhandled: %T", x))
+		panic(fmt.Sprintf("unhandled: %s, %T", x, x))
 	}
 }
 
@@ -378,6 +389,11 @@ func (p *Process) readGlobals() {
 	d, _ := p.proc.DWARF()
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
+		if isNonGoCU(e) {
+			r.SkipChildren()
+			continue
+		}
+
 		if e.Tag != dwarf.TagVariable {
 			continue
 		}
@@ -435,6 +451,11 @@ func (p *Process) readStackVars() {
 	d, _ := p.proc.DWARF()
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
+		if isNonGoCU(e) {
+			r.SkipChildren()
+			continue
+		}
+
 		if e.Tag == dwarf.TagSubprogram {
 			lowpc := e.AttrField(dwarf.AttrLowpc)
 			highpc := e.AttrField(dwarf.AttrHighpc)
