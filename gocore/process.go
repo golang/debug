@@ -339,7 +339,6 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 		panic(fmt.Sprintf("page size not a multiple of %d", heapInfoSize))
 	}
 	allspans := mheap.Field("allspans")
-	var allSpanSize int64
 	var freeSpanSize int64
 	var releasedSpanSize int64
 	var manualSpanSize int64
@@ -357,7 +356,16 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 		nPages := int64(s.Field("npages").Uintptr())
 		spanSize := nPages * pageSize
 		max := min.Add(spanSize)
-		allSpanSize += spanSize
+		for a := min; a != max; a = a.Add(pageSize) {
+			if !p.proc.Readable(a) {
+				// Sometimes allocated but not yet touched pages or
+				// MADV_DONTNEEDed pages are not written
+				// to the core file.  Don't count these pages toward
+				// space usage (otherwise it can look like the heap
+				// is larger than the total memory used).
+				spanSize -= pageSize
+			}
+		}
 		switch s.Field("state").Uint8() {
 		case spanInUse:
 			inUseSpanSize += spanSize
