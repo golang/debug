@@ -405,7 +405,11 @@ func (s *Server) waitForTrap(pid int, allowBreakpointsChange bool) (wpid int, er
 		if status.StopSignal() == syscall.SIGTRAP && status.TrapCause() != syscall.PTRACE_EVENT_CLONE {
 			return wpid, nil
 		}
-		err = s.ptraceCont(wpid, 0) // TODO: non-zero when wait catches other signals?
+		if status.StopSignal() == syscall.SIGPROF {
+			err = s.ptraceCont(wpid, int(syscall.SIGPROF))
+		} else {
+			err = s.ptraceCont(wpid, 0) // TODO: non-zero when wait catches other signals?
+		}
 		if err != nil {
 			return 0, fmt.Errorf("ptraceCont: %v", err)
 		}
