@@ -1,0 +1,13 @@
+This directory contains vendored packages used by viewcore.
+
+# How to update
+
+We use govendor to manage vendored packages
+
+  $ go get -u github.com/kardianos/govendor
+
+  $ cd `go env GOPATH`/src/golang.org/x/debug/cmd/viewcore
+  $ govendor fetch github.com/spf13/cobra
+
+Check the updated vendor.json file carefully and
+create a review request.
