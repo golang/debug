@@ -10,104 +10,136 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 	"runtime/pprof"
 	"sort"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 
+	"github.com/chzyer/readline" // TODO: vendor
 	"github.com/spf13/cobra"
 	"golang.org/x/debug/internal/core"
 	"golang.org/x/debug/internal/gocore"
 )
 
+// Top-level command.
 var cmdRoot = &cobra.Command{
-	Use:               "viewcore <command>",
-	Short:             "viewcore is a tool for analyzing core dumped from Go process",
+	Use:   "viewcore <corefile>",
+	Short: "viewcore is a set of tools for analyzing core dumped from Go process",
+	Long: `
+viewcore is a set of tools for analyzing core dumped from Go process.
+
+The following command starts an interactive shell for analysis of the
+specified core.
+
+  viewcore <corefile>
+
+When provided a command in the following form, viewcore invokes the
+command directly rather than starting in interactive mode.
+
+  viewcore <corefile> <command>
+
+Example:
+
+  viewcore mycore overview
+
+For available analysis tools, run the following command.
+
+  viewcore help
+`,
 	PersistentPreRun:  func(cmd *cobra.Command, args []string) { startProfile() },
 	PersistentPostRun: func(cmd *cobra.Command, args []string) { endProfile() },
+
+	Args: cobra.ExactArgs(0), // either empty, <corefile> or help <subcommand>
+	Run:  runRoot,
 }
 
-var cfg struct {
-	// flags
-	base    string
-	cpuprof string
-}
-
+// Subcommands
 var (
 	cmdOverview = &cobra.Command{
-		Use:   "overview <corefile>",
+		Use:   "overview",
 		Short: "print a few overall statistics",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runOverview,
 	}
 
 	cmdMappings = &cobra.Command{
-		Use:   "mappings <corefile>",
+		Use:   "mappings",
 		Short: "print virtual memory mappings",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runMappings,
 	}
 
 	cmdGoroutines = &cobra.Command{
-		Use:   "goroutines <corefile>",
+		Use:   "goroutines",
 		Short: "list goroutines",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runGoroutines,
 	}
 
 	cmdHistogram = &cobra.Command{
-		Use:   "histogram <corefile>",
+		Use:   "histogram",
 		Short: "print histogram of heap memory use by Go type",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runHistogram,
 	}
 
 	cmdBreakdown = &cobra.Command{
-		Use:   "breakdown <corefile>",
+		Use:   "breakdown",
 		Short: "print memory use by class",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runBreakdown,
 	}
 
 	cmdObjects = &cobra.Command{
-		Use:   "objects <corefile>",
+		Use:   "objects",
 		Short: "print a list of all live objects",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runObjects,
 	}
 
 	cmdObjgraph = &cobra.Command{
-		Use:   "objgraph <corefile>",
+		Use:   "objgraph",
 		Short: "dump object graph to the file tmp.dot",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runObjgraph,
 
 		// TODO: output file name flag
 	}
 
 	cmdReachable = &cobra.Command{
-		Use:   "reachable <corefile> <address>",
+		Use:   "reachable <address>",
 		Short: "find path from root to an object",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(1),
 		Run:   runReachable,
 	}
 
 	cmdHTML = &cobra.Command{
-		Use:   "html <corefile>",
+		Use:   "html",
 		Short: "start an http server on :8080 for browsing core file data",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(0),
 		Run:   runHTML,
 
 		// TODO: port flag
 	}
 
 	cmdRead = &cobra.Command{
-		Use:   "read <corefile> <address> [<size>]",
+		Use:   "read <address> [<size>]",
 		Short: "read a chunk of memory", // oh very helpful!
-		Args:  cobra.RangeArgs(2, 3),
+		Args:  cobra.RangeArgs(1, 2),
 		Run:   runRead,
 	}
 )
+
+var cfg struct {
+	// Set based on os.Args[1]
+	corefile string
+
+	// flags
+	base    string
+	cpuprof string
+}
 
 func init() {
 	cmdRoot.PersistentFlags().StringVar(&cfg.base, "base", "", "root directory to find core dump file references")
@@ -124,31 +156,194 @@ func init() {
 		cmdReachable,
 		cmdHTML,
 		cmdRead)
+
+	// customize the usage template - viewcore's command structure
+	// is not typical of cobra-based command line tool.
+	cobra.AddTemplateFunc("viewcoreUseLine", useLine)
+	cmdRoot.SetUsageTemplate(usageTmpl)
 }
 
+// useLine is like cobra.Command.UseLine but tweaked to use commandPath.
+func useLine(c *cobra.Command) string {
+	var useline string
+	if c.HasParent() {
+		useline = commandPath(c.Parent()) + " " + c.Use
+	} else {
+		useline = c.Use
+	}
+	if c.DisableFlagsInUseLine {
+		return useline
+	}
+	if c.HasAvailableFlags() && !strings.Contains(useline, "[flags]") {
+		useline += " [flags]"
+	}
+	return useline
+}
+
+// commandPath is like cobra.Command.CommandPath but tweaked to
+// use c.Use instead of c.Name for the root command so it works
+// with viewcore's unusual command structure.
+func commandPath(c *cobra.Command) string {
+	if c.HasParent() {
+		return commandPath(c) + " " + c.Name()
+	}
+	return c.Use
+}
+
+const usageTmpl = `Usage:{{if .Runnable}}
+  {{viewcoreUseLine .}}{{end}}{{if .HasAvailableSubCommands}}
+  {{viewcoreUseLine .}} [command]{{end}}{{if gt (len .Aliases) 0}}
+
+Aliases:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
+
+Examples:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+
+Available Commands:{{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
+
+Global Flags:
+{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasHelpSubCommands}}
+
+Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
+  {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
+
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+`
+
 func main() {
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] != "help" && !strings.HasPrefix(args[0], "-") {
+		cfg.corefile = args[0]
+		args = args[1:]
+	}
+	cmdRoot.SetArgs(args)
 	cmdRoot.Execute()
 }
 
+var coreCache = &struct {
+	corefile string
+	base     string
+	p        *core.Process
+	err      error
+}{}
+
 // readCore reads corefile and returns core and gocore process states.
 func readCore(corefile, base string, flags gocore.Flags) (*core.Process, *gocore.Process, error) {
-	p, err := core.Core(corefile, base)
-	if err != nil {
-		return nil, nil, err
+	cc := coreCache
+	if cc.corefile != corefile || cc.base != base {
+		cc.corefile = corefile
+		cc.base = base
+		cc.p, cc.err = core.Core(corefile, base)
 	}
-	for _, w := range p.Warnings() {
+	if cc.err != nil {
+		return nil, nil, cc.err
+	}
+	for _, w := range cc.p.Warnings() {
 		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
-	c, err := gocore.Core(p, flags)
+	// TODO: Cache gocore.Core object too.
+	// The tricky part of gocore is the flags. Change gocore
+	// API to initialize parts on first use so the processed
+	// results, which are expensive, can be cached.
+	c, err := gocore.Core(cc.p, flags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return nil, nil, err
 	}
-	return p, c, nil
+	return cc.p, c, nil
+}
+
+func runRoot(cmd *cobra.Command, args []string) {
+	if cfg.corefile == "" {
+		cmd.Usage()
+		return
+	}
+	_, _, err := readCore(cfg.corefile, cfg.base, 0)
+	if err != nil {
+		exitf("%v\n", err)
+	}
+
+	// Create a dummy root to run in shell.
+	root := &cobra.Command{}
+	// Make all subcommands of viewcore available in the shell.
+	root.AddCommand(cmd.Commands()...)
+	// Also, add exit command to terminate the shell.
+	root.AddCommand(&cobra.Command{
+		Use:     "exit",
+		Aliases: []string{"quit", "bye"},
+		Short:   "exit from interactive mode",
+		Run: func(*cobra.Command, []string) {
+			exitf("bye!\n\n")
+		},
+	})
+
+	rootCompleter := readline.NewPrefixCompleter()
+	for _, child := range root.Commands() {
+		cmdToCompleter(rootCompleter, child)
+	}
+
+	shell, err := readline.NewEx(&readline.Config{
+		Prompt:       "(viewcore) ",
+		AutoComplete: rootCompleter,
+		EOFPrompt:    "bye!\n\n",
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer shell.Close()
+
+	welcomeMsg := `
+  Corefile: %s
+  Base: %s
+
+Entering interactive mode (type 'help' for commands)
+`
+	fmt.Fprintf(shell.Terminal, welcomeMsg, cfg.corefile, cfg.base)
+
+	for {
+		l, err := shell.Readline()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			break
+		}
+
+		err = capturePanic(func() {
+			root.ResetFlags()
+			root.SetArgs(strings.Fields(l))
+			root.Execute()
+		})
+		if err != nil {
+			fmt.Printf("Error while trying to run command %q: %v", l, err)
+		}
+	}
+}
+
+func capturePanic(fn func()) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v\nStack: %s\n", r, debug.Stack())
+		}
+	}()
+
+	fn()
+	return nil
+}
+
+func cmdToCompleter(parent readline.PrefixCompleterInterface, c *cobra.Command) {
+	completer := readline.PcItem(c.Name())
+	parent.SetChildren(append(parent.GetChildren(), completer))
+	for _, child := range c.Commands() {
+		cmdToCompleter(completer, child)
+	}
 }
 
 func runOverview(cmd *cobra.Command, args []string) {
-	p, c, err := readCore(args[0], cfg.base, 0)
+	p, c, err := readCore(cfg.corefile, cfg.base, 0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -165,7 +360,7 @@ func runOverview(cmd *cobra.Command, args []string) {
 }
 
 func runMappings(cmd *cobra.Command, args []string) {
-	p, _, err := readCore(args[0], cfg.base, 0)
+	p, _, err := readCore(cfg.corefile, cfg.base, 0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -200,7 +395,7 @@ func runMappings(cmd *cobra.Command, args []string) {
 }
 
 func runGoroutines(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(args[0], cfg.base, 0)
+	_, c, err := readCore(cfg.corefile, cfg.base, 0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -224,7 +419,7 @@ func runGoroutines(cmd *cobra.Command, args []string) {
 }
 
 func runHistogram(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(args[0], cfg.base, gocore.FlagTypes)
+	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -260,7 +455,7 @@ func runHistogram(cmd *cobra.Command, args []string) {
 }
 
 func runBreakdown(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(args[0], cfg.base, 0)
+	_, c, err := readCore(cfg.corefile, cfg.base, 0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -290,7 +485,7 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 }
 
 func runObjgraph(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(args[0], cfg.base, gocore.FlagTypes)
+	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -354,7 +549,7 @@ func runObjgraph(cmd *cobra.Command, args []string) {
 }
 
 func runObjects(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(args[0], cfg.base, gocore.FlagTypes)
+	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -366,11 +561,11 @@ func runObjects(cmd *cobra.Command, args []string) {
 }
 
 func runReachable(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(args[0], cfg.base, gocore.FlagTypes|gocore.FlagReverse)
+	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes|gocore.FlagReverse)
 	if err != nil {
 		exitf("%v\n", err)
 	}
-	n, err := strconv.ParseInt(args[1], 16, 64)
+	n, err := strconv.ParseInt(args[0], 16, 64)
 	if err != nil {
 		exitf("can't parse %q as an object address\n", args[1])
 	}
@@ -450,7 +645,7 @@ func runReachable(cmd *cobra.Command, args []string) {
 }
 
 func runHTML(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(args[0], cfg.base, gocore.FlagTypes|gocore.FlagReverse)
+	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes|gocore.FlagReverse)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -458,19 +653,19 @@ func runHTML(cmd *cobra.Command, args []string) {
 }
 
 func runRead(cmd *cobra.Command, args []string) {
-	p, _, err := readCore(args[0], cfg.base, 0)
+	p, _, err := readCore(cfg.corefile, cfg.base, 0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
-	n, err := strconv.ParseInt(args[1], 16, 64)
+	n, err := strconv.ParseInt(args[0], 16, 64)
 	if err != nil {
 		exitf("can't parse %q as an object address\n", args[1])
 	}
 	a := core.Address(n)
-	if len(args) < 3 {
+	if len(args) < 2 {
 		n = 256
 	} else {
-		n, err = strconv.ParseInt(args[2], 10, 64)
+		n, err = strconv.ParseInt(args[1], 10, 64)
 		if err != nil {
 			exitf("can't parse %q as a byte count\n", args[2])
 		}
