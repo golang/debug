@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"golang.org/x/debug/core"
+	"golang.org/x/debug/internal/core"
 )
 
 // A Process represents the state of a Go process that core dumped.

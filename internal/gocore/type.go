@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"golang.org/x/debug/core"
+	"golang.org/x/debug/internal/core"
 )
 
 // A Type is the representation of the type of a Go object.

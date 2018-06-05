@@ -4,7 +4,7 @@
 
 package gocore
 
-import "golang.org/x/debug/core"
+import "golang.org/x/debug/internal/core"
 
 // A region is a piece of the virtual address space of the inferior.
 // It has an address and a type.

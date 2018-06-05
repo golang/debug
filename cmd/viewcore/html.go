@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"golang.org/x/debug/core"
-	"golang.org/x/debug/gocore"
+	"golang.org/x/debug/internal/core"
+	"golang.org/x/debug/internal/gocore"
 )
 
 func serveHTML(c *gocore.Process) {

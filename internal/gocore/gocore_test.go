@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"golang.org/x/debug/core"
+	"golang.org/x/debug/internal/core"
 )
 
 // loadTest loads a simple core file which resulted from running the

@@ -16,8 +16,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/debug/core"
-	"golang.org/x/debug/gocore"
+	"golang.org/x/debug/internal/core"
+	"golang.org/x/debug/internal/gocore"
 )
 
 var cmdRoot = &cobra.Command{
