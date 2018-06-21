@@ -30,7 +30,9 @@ import (
 
 // A Process represents the state of the process that core dumped.
 type Process struct {
-	base         string             // base directory from which files in the core can be found
+	base    string // base directory from which files in the core can be found
+	exePath string // user-supplied main executable path
+
 	exec         []*os.File         // executables (more than one for shlibs)
 	mappings     []*Mapping         // virtual address mappings
 	threads      []*Thread          // os threads (TODO: map from pid?)
@@ -117,14 +119,13 @@ func (p *Process) Symbols() (map[string]Address, error) {
 
 // Core takes the name of a core file and returns a Process that
 // represents the state of the inferior that generated the core file.
-func Core(coreFile, base string) (*Process, error) {
+func Core(coreFile, base, exePath string) (*Process, error) {
 	core, err := os.Open(coreFile)
 	if err != nil {
 		return nil, err
 	}
 
-	p := new(Process)
-	p.base = base
+	p := &Process{base: base, exePath: exePath}
 	if err := p.readCore(core); err != nil {
 		return nil, err
 	}
@@ -361,6 +362,8 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 	desc = desc[8:]
 	filenames := string(desc[3*8*count:])
 	desc = desc[:3*8*count]
+
+	origExePath := ""
 	for i := uint64(0); i < count; i++ {
 		min := Address(e.ByteOrder.Uint64(desc))
 		desc = desc[8:]
@@ -379,7 +382,22 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 			filenames = ""
 		}
 
-		backing, err := os.Open(filepath.Join(p.base, name))
+		// Assume the first entry is the main binary.
+		if i == 0 {
+			origExePath = name
+		}
+
+		var backing *os.File
+		var err error
+
+		// If the name matches the cached original executable path
+		// and user-provided executable is available, use the
+		// user-provided one.
+		if p.exePath != "" && origExePath == name {
+			backing, err = os.Open(p.exePath)
+		} else {
+			backing, err = os.Open(filepath.Join(p.base, name))
+		}
 		if err != nil {
 			// Can't find mapped file.
 			// We don't want to make this a hard error because there are

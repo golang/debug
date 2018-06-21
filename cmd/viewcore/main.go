@@ -132,17 +132,21 @@ var (
 	}
 )
 
-var cfg struct {
+type config struct {
 	// Set based on os.Args[1]
 	corefile string
 
 	// flags
 	base    string
-	cpuprof string
+	exePath string
+	cpuprof string // TODO: move to subcommand config.
 }
+
+var cfg config
 
 func init() {
 	cmdRoot.PersistentFlags().StringVar(&cfg.base, "base", "", "root directory to find core dump file references")
+	cmdRoot.PersistentFlags().StringVar(&cfg.exePath, "exe", "", "main executable file")
 	cmdRoot.PersistentFlags().StringVar(&cfg.cpuprof, "prof", "", "write cpu profile of viewcore to this file for viewcore's developers")
 
 	cmdRoot.AddCommand(
@@ -226,19 +230,19 @@ func main() {
 }
 
 var coreCache = &struct {
-	corefile string
-	base     string
-	p        *core.Process
-	err      error
+	// copy of params used to generate p.
+	cfg config
+
+	p   *core.Process
+	err error
 }{}
 
 // readCore reads corefile and returns core and gocore process states.
-func readCore(corefile, base string, flags gocore.Flags) (*core.Process, *gocore.Process, error) {
+func readCore(flags gocore.Flags) (*core.Process, *gocore.Process, error) {
 	cc := coreCache
-	if cc.corefile != corefile || cc.base != base {
-		cc.corefile = corefile
-		cc.base = base
-		cc.p, cc.err = core.Core(corefile, base)
+	if cc.cfg != cfg {
+		cc.cfg = cfg
+		cc.p, cc.err = core.Core(cfg.corefile, cfg.base, cfg.exePath)
 	}
 	if cc.err != nil {
 		return nil, nil, cc.err
@@ -263,7 +267,7 @@ func runRoot(cmd *cobra.Command, args []string) {
 		cmd.Usage()
 		return
 	}
-	_, _, err := readCore(cfg.corefile, cfg.base, 0)
+	p, _, err := readCore(0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -297,13 +301,32 @@ func runRoot(cmd *cobra.Command, args []string) {
 	}
 	defer shell.Close()
 
+	// TODO(hyangah): the following code retrieves the main
+	// program path from the mapping information.
+	// The intention is to help users confirm viewcore
+	// picked up correct executable and core file for analysis.
+	// The usefulness of this info is debatable.
+	// Another idea is to present the executable file info
+	// embedded in prpsinfo which will provide useful
+	// new information about the corefile to analyze.
+	exe := "unknown"
+	if m := p.Mappings(); len(m) > 0 {
+		src, _ := m[0].Source()
+		if m[0].CopyOnWrite() {
+			src, _ = m[0].OrigSource()
+		}
+		if src != "" {
+			exe = src
+		}
+	}
+
 	welcomeMsg := `
   Corefile: %s
-  Base: %s
+  Program : %s
 
 Entering interactive mode (type 'help' for commands)
 `
-	fmt.Fprintf(shell.Terminal, welcomeMsg, cfg.corefile, cfg.base)
+	fmt.Fprintf(shell.Terminal, welcomeMsg, cfg.corefile, exe)
 
 	for {
 		l, err := shell.Readline()
@@ -343,7 +366,7 @@ func cmdToCompleter(parent readline.PrefixCompleterInterface, c *cobra.Command) 
 }
 
 func runOverview(cmd *cobra.Command, args []string) {
-	p, c, err := readCore(cfg.corefile, cfg.base, 0)
+	p, c, err := readCore(0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -360,7 +383,7 @@ func runOverview(cmd *cobra.Command, args []string) {
 }
 
 func runMappings(cmd *cobra.Command, args []string) {
-	p, _, err := readCore(cfg.corefile, cfg.base, 0)
+	p, _, err := readCore(0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -395,7 +418,7 @@ func runMappings(cmd *cobra.Command, args []string) {
 }
 
 func runGoroutines(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(cfg.corefile, cfg.base, 0)
+	_, c, err := readCore(0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -419,7 +442,7 @@ func runGoroutines(cmd *cobra.Command, args []string) {
 }
 
 func runHistogram(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes)
+	_, c, err := readCore(gocore.FlagTypes)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -455,7 +478,7 @@ func runHistogram(cmd *cobra.Command, args []string) {
 }
 
 func runBreakdown(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(cfg.corefile, cfg.base, 0)
+	_, c, err := readCore(0)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -485,7 +508,7 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 }
 
 func runObjgraph(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes)
+	_, c, err := readCore(gocore.FlagTypes)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -549,7 +572,7 @@ func runObjgraph(cmd *cobra.Command, args []string) {
 }
 
 func runObjects(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes)
+	_, c, err := readCore(gocore.FlagTypes)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -561,7 +584,7 @@ func runObjects(cmd *cobra.Command, args []string) {
 }
 
 func runReachable(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes|gocore.FlagReverse)
+	_, c, err := readCore(gocore.FlagTypes | gocore.FlagReverse)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -645,7 +668,7 @@ func runReachable(cmd *cobra.Command, args []string) {
 }
 
 func runHTML(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(cfg.corefile, cfg.base, gocore.FlagTypes|gocore.FlagReverse)
+	_, c, err := readCore(gocore.FlagTypes | gocore.FlagReverse)
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -653,7 +676,7 @@ func runHTML(cmd *cobra.Command, args []string) {
 }
 
 func runRead(cmd *cobra.Command, args []string) {
-	p, _, err := readCore(cfg.corefile, cfg.base, 0)
+	p, _, err := readCore(0)
 	if err != nil {
 		exitf("%v\n", err)
 	}

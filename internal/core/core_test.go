@@ -5,17 +5,25 @@
 package core
 
 import (
+	"fmt"
 	"testing"
 )
 
-// loadTest loads a simple core file which resulted from running the
+// loadExample loads a simple core file which resulted from running the
 // following program on linux/amd64 with go 1.9.0 (the earliest supported runtime):
 // package main
 // func main() {
 //         _ = *(*int)(nil)
 // }
-func loadExample(t *testing.T) *Process {
-	p, err := Core("testdata/core", "testdata")
+func loadExample(t *testing.T, useExePath bool) *Process {
+	t.Helper()
+	var p *Process
+	var err error
+	if useExePath {
+		p, err = Core("testdata/core", "", "testdata/tmp/test")
+	} else {
+		p, err = Core("testdata/core", "testdata", "")
+	}
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
 	}
@@ -24,44 +32,53 @@ func loadExample(t *testing.T) *Process {
 
 // TestMappings makes sure we can find and load some data.
 func TestMappings(t *testing.T) {
-	p := loadExample(t)
-	s, err := p.Symbols()
-	if err != nil {
-		t.Errorf("can't read symbols: %s\n", err)
+	test := func(t *testing.T, useExePath bool) {
+		p := loadExample(t, useExePath)
+		s, err := p.Symbols()
+		if err != nil {
+			t.Errorf("can't read symbols: %s\n", err)
+		}
+
+		a := s["main.main"]
+		m := p.findMapping(a)
+		if m == nil {
+			t.Errorf("text mapping missing")
+		}
+		if m.Perm() != Read|Exec {
+			t.Errorf("bad code section permissions")
+		}
+		if opcode := p.ReadUint8(a); opcode != 0x31 {
+			// 0x31 = xorl instruction.
+			// There's no particular reason why this instruction
+			// is first. This just tests that reading code works
+			// for our specific test binary.
+			t.Errorf("opcode=0x%x, want 0x31", opcode)
+		}
+
+		a = s["runtime.class_to_size"]
+		m = p.findMapping(a)
+		if m == nil {
+			t.Errorf("data mapping missing")
+		}
+		if m.Perm() != Read|Write {
+			t.Errorf("bad data section permissions")
+		}
+		if size := p.ReadUint16(a.Add(2)); size != 8 {
+			t.Errorf("class_to_size[1]=%d, want 8", size)
+		}
 	}
 
-	a := s["main.main"]
-	m := p.findMapping(a)
-	if m == nil {
-		t.Errorf("text mapping missing")
-	}
-	if m.Perm() != Read|Exec {
-		t.Errorf("bad code section permissions")
-	}
-	if opcode := p.ReadUint8(a); opcode != 0x31 {
-		// 0x31 = xorl instruction.
-		// There's no particular reason why this instruction
-		// is first. This just tests that reading code works
-		// for our specific test binary.
-		t.Errorf("opcode=0x%x, want 0x31", opcode)
-	}
-
-	a = s["runtime.class_to_size"]
-	m = p.findMapping(a)
-	if m == nil {
-		t.Errorf("data mapping missing")
-	}
-	if m.Perm() != Read|Write {
-		t.Errorf("bad data section permissions")
-	}
-	if size := p.ReadUint16(a.Add(2)); size != 8 {
-		t.Errorf("class_to_size[1]=%d, want 8", size)
+	for _, useExePath := range []bool{false, true} {
+		name := fmt.Sprintf("useExePath=%t", useExePath)
+		t.Run(name, func(t *testing.T) {
+			test(t, useExePath)
+		})
 	}
 }
 
 // TestConfig checks the configuration accessors.
 func TestConfig(t *testing.T) {
-	p := loadExample(t)
+	p := loadExample(t, false)
 	if arch := p.Arch(); arch != "amd64" {
 		t.Errorf("arch=%s, want amd64", arch)
 	}
@@ -78,7 +95,7 @@ func TestConfig(t *testing.T) {
 
 // TestThread makes sure we get information about running threads.
 func TestThread(t *testing.T) {
-	p := loadExample(t)
+	p := loadExample(t, true)
 	syms, err := p.Symbols()
 	if err != nil {
 		t.Errorf("can't read symbols: %s\n", err)

@@ -19,7 +19,7 @@ import (
 //         _ = *(*int)(nil)
 // }
 func loadExample(t *testing.T) *Process {
-	c, err := core.Core("testdata/core", "testdata")
+	c, err := core.Core("testdata/core", "testdata", "")
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
 	}
@@ -34,7 +34,7 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 	if version == "1.9" {
 		version = ""
 	}
-	c, err := core.Core(fmt.Sprintf("testdata/core%s", version), "testdata")
+	c, err := core.Core(fmt.Sprintf("testdata/core%s", version), "testdata", "")
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
 	}
