@@ -117,3 +117,11 @@ func TestThread(t *testing.T) {
 		t.Errorf("can't find thread that did runtime.raise")
 	}
 }
+
+func TestArgs(t *testing.T) {
+	p := loadExample(t, true)
+	if got := p.Args(); got != "./test" {
+		// this is how the program of testdata/core was invoked.
+		t.Errorf("Args() = %q, want './test'", got)
+	}
+}

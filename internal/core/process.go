@@ -17,6 +17,7 @@
 package core
 
 import (
+	"bytes"
 	"debug/dwarf"
 	"debug/elf" // TODO: use golang.org/x/debug/elf instead?
 	"encoding/binary"
@@ -33,9 +34,10 @@ type Process struct {
 	base    string // base directory from which files in the core can be found
 	exePath string // user-supplied main executable path
 
-	exec         []*os.File         // executables (more than one for shlibs)
-	mappings     []*Mapping         // virtual address mappings
-	threads      []*Thread          // os threads (TODO: map from pid?)
+	exec     []*os.File // executables (more than one for shlibs)
+	mappings []*Mapping // virtual address mappings
+	threads  []*Thread  // os threads (TODO: map from pid?)
+
 	arch         string             // amd64, ...
 	ptrSize      int64              // 4 or 8
 	logPtrSize   uint               // 2 or 3
@@ -46,7 +48,9 @@ type Process struct {
 	dwarf        *dwarf.Data        // debugging info (could be nil)
 	dwarfErr     error              // an error encountered while reading DWARF
 	pageTable    pageTable4         // for fast address->mapping lookups
-	warnings     []string           // warnings generated during loading
+	args         string             // first part of args retrieved from NT_PRPSINFO
+
+	warnings []string // warnings generated during loading
 }
 
 // Mappings returns a list of virtual memory mappings for p.
@@ -336,20 +340,22 @@ func (p *Process) readNote(f *os.File, e *elf.File, off, size uint64) error {
 		b = b[(descsz+3)/4*4:]
 
 		if name == "CORE" && typ == NT_FILE {
-			err := p.readNTFile(f, e, desc)
-			if err != nil {
-				return err
+			if err := p.readNTFile(f, e, desc); err != nil {
+				return fmt.Errorf("reading NT_FILE: %v", err)
 			}
 		}
 		if name == "CORE" && typ == elf.NT_PRSTATUS {
 			// An OS thread (an M)
-			err := p.readPRStatus(f, e, desc)
-			if err != nil {
-				return err
+			if err := p.readPRStatus(f, e, desc); err != nil {
+				return fmt.Errorf("reading NT_PRSTATUS: %v", err)
+			}
+		}
+		if name == "CORE" && typ == elf.NT_PRPSINFO {
+			if err := p.readPRPSInfo(desc); err != nil {
+				return fmt.Errorf("reading NT_PRPSINFO: %v", err)
 			}
 		}
 		// TODO: NT_FPREGSET for floating-point registers
-		// TODO: NT_PRPSINFO for ???
 	}
 	return nil
 }
@@ -481,6 +487,21 @@ func (p *Process) splitMappingsAt(a Address) {
 	}
 }
 
+func (p *Process) readPRPSInfo(desc []byte) error {
+	r := bytes.NewReader(desc)
+	switch p.arch {
+	default:
+		// TODO: return error?
+	case "amd64":
+		prpsinfo := &linuxPrPsInfo{}
+		if err := binary.Read(r, binary.LittleEndian, prpsinfo); err != nil {
+			return err
+		}
+		p.args = strings.Trim(string(prpsinfo.Args[:]), "\x00 ")
+	}
+	return nil
+}
+
 func (p *Process) readPRStatus(f *os.File, e *elf.File, desc []byte) error {
 	t := &Thread{}
 	p.threads = append(p.threads, t)
@@ -574,4 +595,25 @@ func (p *Process) readExec() error {
 
 func (p *Process) Warnings() []string {
 	return p.warnings
+}
+
+// Args returns the initial part of the program arguments.
+func (p *Process) Args() string {
+	return p.args
+}
+
+// ELF/Linux types
+
+// linuxPrPsInfo is the info embedded in NT_PRPSINFO.
+type linuxPrPsInfo struct {
+	State                uint8
+	Sname                int8
+	Zomb                 uint8
+	Nice                 int8
+	_                    [4]uint8
+	Flag                 uint64
+	Uid, Gid             uint32
+	Pid, Ppid, Pgrp, Sid int32
+	Fname                [16]uint8 // filename of executables
+	Args                 [80]uint8 // first part of program args
 }
