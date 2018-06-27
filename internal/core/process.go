@@ -121,6 +121,10 @@ func (p *Process) Symbols() (map[string]Address, error) {
 	return p.syms, p.symErr
 }
 
+var mapFile = func(fd int, offset int64, length int) (data []byte, err error) {
+	return nil, fmt.Errorf("file mapping is not implemented yet")
+}
+
 // Core takes the name of a core file and returns a Process that
 // represents the state of the inferior that generated the core file.
 func Core(coreFile, base, exePath string) (*Process, error) {
@@ -190,7 +194,7 @@ func Core(coreFile, base, exePath string) (*Process, error) {
 		}
 
 		// Read data from file.
-		data, err := syscall.Mmap(int(m.f.Fd()), minOff, int(maxOff-minOff), syscall.PROT_READ, syscall.MAP_SHARED)
+		data, err := mapFile(int(m.f.Fd()), minOff, int(maxOff-minOff))
 		if err != nil {
 			return nil, fmt.Errorf("can't memory map %s at %x: %s\n", m.f.Name(), minOff, err)
 		}
