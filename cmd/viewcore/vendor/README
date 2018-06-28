@@ -8,6 +8,7 @@ We use govendor to manage vendored packages
 
   $ cd `go env GOPATH`/src/golang.org/x/debug/cmd/viewcore
   $ govendor fetch github.com/spf13/cobra
+  $ govendor fetch github.com/chzyer/readline
 
 Check the updated vendor.json file carefully and
 create a review request.

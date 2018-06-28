@@ -1,24 +1,12 @@
 {
 	"comment": "",
-	"ignore": "",
+	"ignore": "test",
 	"package": [
 		{
-			"checksumSHA1": "pccX+tLMoPXwqW6wFXOHQxq23eU=",
-			"path": "github.com/chzyer/logex",
-			"revision": "445be9e134b204a8c920a30fedad02b2f2ab1efd",
-			"revisionTime": "2017-03-29T06:48:20Z"
-		},
-		{
-			"checksumSHA1": "R/zioKKcEGi2axgzZMdBhWugP+E=",
+			"checksumSHA1": "cJ/yTXO11AXO9FJaVKcL78x6LyU=",
 			"path": "github.com/chzyer/readline",
 			"revision": "2972be24d48e78746da79ba8e24e8b488c9880de",
 			"revisionTime": "2018-06-03T13:26:55Z"
-		},
-		{
-			"checksumSHA1": "dFr+xfpmqeLbtAbZUGxIpPuo7Kc=",
-			"path": "github.com/chzyer/test",
-			"revision": "a1ea475d72b168a29f44221e0ad031a842642302",
-			"revisionTime": "2018-02-12T23:58:34Z"
 		},
 		{
 			"checksumSHA1": "40vJyUB4ezQSn/NSadsKEOrudMc=",
@@ -27,22 +15,22 @@
 			"revisionTime": "2014-10-17T20:07:13Z"
 		},
 		{
-			"checksumSHA1": "D7hWCay3XKO5RjeVj7C1ACkHk6s=",
+			"checksumSHA1": "Xnlls27MEcxIHhpRdsiUa2BqcFk=",
 			"path": "github.com/spf13/cobra",
-			"revision": "ef82de70bb3f60c65fb8eebacbb2d122ef517385",
-			"revisionTime": "2018-04-27T13:45:50Z"
+			"revision": "1e58aa3361fd650121dceeedc399e7189c05674a",
+			"revisionTime": "2018-05-31T18:03:38Z"
 		},
 		{
-			"checksumSHA1": "fTUB2LRINzrW2q0Wp5h9VILSu6A=",
+			"checksumSHA1": "OJI0OgC5V8gZtfS1e0CDYMhkDNc=",
 			"path": "github.com/spf13/pflag",
-			"revision": "583c0c0531f06d5278b7d917446061adc344b5cd",
-			"revisionTime": "2018-04-12T12:09:13Z"
+			"revision": "3ebe029320b2676d667ae88da602a5f854788a8a",
+			"revisionTime": "2018-06-01T13:25:42Z"
 		},
 		{
-			"checksumSHA1": "fQRmHeOLiQ/Lbklrl9BfevodvEM=",
+			"checksumSHA1": "e66DmNWQKgI97tvj4BH7rHYnyJs=",
 			"path": "golang.org/x/sys/unix",
-			"revision": "c4afb3effaa53fd9a06ca61262dc7ce8df4c081b",
-			"revisionTime": "2018-06-26T06:41:42Z"
+			"revision": "7138fd3d9dc8335c567ca206f4333fb75eb05d56",
+			"revisionTime": "2018-06-27T13:57:12Z"
 		}
 	],
 	"rootPath": "golang.org/x/debug/cmd/viewcore"
