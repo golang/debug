@@ -25,7 +25,7 @@ func loadExample(t *testing.T) *Process {
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
 	}
-	p, err := Core(c, FlagTypes|FlagReverse)
+	p, err := Core(c)
 	if err != nil {
 		t.Fatalf("can't parse Go core: %s", err)
 	}
@@ -40,7 +40,7 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
 	}
-	p, err := Core(c, FlagTypes|FlagReverse)
+	p, err := Core(c)
 	if err != nil {
 		t.Fatalf("can't parse Go core: %s", err)
 	}

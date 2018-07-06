@@ -326,174 +326,176 @@ func (c typeChunk) String() string {
 
 // typeHeap tries to label all the heap objects with types.
 func (p *Process) typeHeap() {
-	// Type info for the start of each object. a.k.a. "0 offset" typings.
-	p.types = make([]typeInfo, p.nObj)
+	p.initTypeHeap.Do(func() {
+		// Type info for the start of each object. a.k.a. "0 offset" typings.
+		p.types = make([]typeInfo, p.nObj)
 
-	// Type info for the interior of objects, a.k.a. ">0 offset" typings.
-	// Type information is arranged in chunks. Chunks are stored in an
-	// arbitrary order, and are guaranteed to not overlap. If types are
-	// equal, chunks are also guaranteed not to abut.
-	// Interior typings are kept separate because they hopefully are rare.
-	// TODO: They aren't really that rare. On some large heaps I tried
-	// ~50% of objects have an interior pointer into them.
-	// Keyed by object index.
-	interior := map[int][]typeChunk{}
+		// Type info for the interior of objects, a.k.a. ">0 offset" typings.
+		// Type information is arranged in chunks. Chunks are stored in an
+		// arbitrary order, and are guaranteed to not overlap. If types are
+		// equal, chunks are also guaranteed not to abut.
+		// Interior typings are kept separate because they hopefully are rare.
+		// TODO: They aren't really that rare. On some large heaps I tried
+		// ~50% of objects have an interior pointer into them.
+		// Keyed by object index.
+		interior := map[int][]typeChunk{}
 
-	// Typings we know about but haven't scanned yet.
-	type workRecord struct {
-		a core.Address
-		t *Type
-		r int64
-	}
-	var work []workRecord
-
-	// add records the fact that we know the object at address a has
-	// r copies of type t.
-	add := func(a core.Address, t *Type, r int64) {
-		if a == 0 { // nil pointer
-			return
+		// Typings we know about but haven't scanned yet.
+		type workRecord struct {
+			a core.Address
+			t *Type
+			r int64
 		}
-		i, off := p.findObjectIndex(a)
-		if i < 0 { // pointer doesn't point to an object in the Go heap
-			return
-		}
-		if off == 0 {
-			// We have a 0-offset typing. Replace existing 0-offset typing
-			// if the new one is larger.
-			ot := p.types[i].t
-			or := p.types[i].r
-			if ot == nil || r*t.Size > or*ot.Size {
-				if t == ot {
-					// Scan just the new section.
-					work = append(work, workRecord{
-						a: a.Add(or * ot.Size),
-						t: t,
-						r: r - or,
-					})
-				} else {
-					// Rescan the whole typing using the updated type.
-					work = append(work, workRecord{
-						a: a,
-						t: t,
-						r: r,
-					})
-				}
-				p.types[i].t = t
-				p.types[i].r = r
+		var work []workRecord
+
+		// add records the fact that we know the object at address a has
+		// r copies of type t.
+		add := func(a core.Address, t *Type, r int64) {
+			if a == 0 { // nil pointer
+				return
 			}
-			return
-		}
+			i, off := p.findObjectIndex(a)
+			if i < 0 { // pointer doesn't point to an object in the Go heap
+				return
+			}
+			if off == 0 {
+				// We have a 0-offset typing. Replace existing 0-offset typing
+				// if the new one is larger.
+				ot := p.types[i].t
+				or := p.types[i].r
+				if ot == nil || r*t.Size > or*ot.Size {
+					if t == ot {
+						// Scan just the new section.
+						work = append(work, workRecord{
+							a: a.Add(or * ot.Size),
+							t: t,
+							r: r - or,
+						})
+					} else {
+						// Rescan the whole typing using the updated type.
+						work = append(work, workRecord{
+							a: a,
+							t: t,
+							r: r,
+						})
+					}
+					p.types[i].t = t
+					p.types[i].r = r
+				}
+				return
+			}
 
-		// Add an interior typing to object #i.
-		c := typeChunk{off: off, t: t, r: r}
+			// Add an interior typing to object #i.
+			c := typeChunk{off: off, t: t, r: r}
 
-		// Merge the given typing into the chunks we already know.
-		// TODO: this could be O(n) per insert if there are lots of internal pointers.
-		chunks := interior[i]
-		newchunks := chunks[:0]
-		addWork := true
-		for _, d := range chunks {
-			if c.max() <= d.min() || c.min() >= d.max() {
-				// c does not overlap with d.
-				if c.t == d.t && (c.max() == d.min() || c.min() == d.max()) {
-					// c and d abut and share the same base type. Merge them.
+			// Merge the given typing into the chunks we already know.
+			// TODO: this could be O(n) per insert if there are lots of internal pointers.
+			chunks := interior[i]
+			newchunks := chunks[:0]
+			addWork := true
+			for _, d := range chunks {
+				if c.max() <= d.min() || c.min() >= d.max() {
+					// c does not overlap with d.
+					if c.t == d.t && (c.max() == d.min() || c.min() == d.max()) {
+						// c and d abut and share the same base type. Merge them.
+						c = c.merge(d)
+						continue
+					}
+					// Keep existing chunk d.
+					// Overwrites chunks slice, but we're only merging chunks so it
+					// can't overwrite to-be-processed elements.
+					newchunks = append(newchunks, d)
+					continue
+				}
+				// There is some overlap. There are a few possibilities:
+				// 1) One is completely contained in the other.
+				// 2) Both are slices of a larger underlying array.
+				// 3) Some unsafe trickery has happened. Non-containing overlap
+				//    can only happen in safe Go via case 2.
+				if c.min() >= d.min() && c.max() <= d.max() {
+					// 1a: c is contained within the existing chunk d.
+					// Note that there can be a type mismatch between c and d,
+					// but we don't care. We use the larger chunk regardless.
+					c = d
+					addWork = false // We've already scanned all of c.
+					continue
+				}
+				if d.min() >= c.min() && d.max() <= c.max() {
+					// 1b: existing chunk d is completely covered by c.
+					continue
+				}
+				if c.t == d.t && c.matchingAlignment(d) {
+					// Union two regions of the same base type. Case 2 above.
 					c = c.merge(d)
 					continue
 				}
-				// Keep existing chunk d.
-				// Overwrites chunks slice, but we're only merging chunks so it
-				// can't overwrite to-be-processed elements.
-				newchunks = append(newchunks, d)
-				continue
-			}
-			// There is some overlap. There are a few possibilities:
-			// 1) One is completely contained in the other.
-			// 2) Both are slices of a larger underlying array.
-			// 3) Some unsafe trickery has happened. Non-containing overlap
-			//    can only happen in safe Go via case 2.
-			if c.min() >= d.min() && c.max() <= d.max() {
-				// 1a: c is contained within the existing chunk d.
-				// Note that there can be a type mismatch between c and d,
-				// but we don't care. We use the larger chunk regardless.
-				c = d
-				addWork = false // We've already scanned all of c.
-				continue
-			}
-			if d.min() >= c.min() && d.max() <= c.max() {
-				// 1b: existing chunk d is completely covered by c.
-				continue
-			}
-			if c.t == d.t && c.matchingAlignment(d) {
-				// Union two regions of the same base type. Case 2 above.
-				c = c.merge(d)
-				continue
-			}
-			if c.size() < d.size() {
-				// Keep the larger of the two chunks.
-				c = d
-				addWork = false
-			}
-		}
-		// Add new chunk to list of chunks for object.
-		newchunks = append(newchunks, c)
-		interior[i] = newchunks
-		// Also arrange to scan the new chunk. Note that if we merged
-		// with an existing chunk (or chunks), those will get rescanned.
-		// Duplicate work, but that's ok. TODO: but could be expensive.
-		if addWork {
-			work = append(work, workRecord{
-				a: a.Add(c.off - off),
-				t: c.t,
-				r: c.r,
-			})
-		}
-	}
-
-	// Get typings starting at roots.
-	fr := &frameReader{p: p}
-	p.ForEachRoot(func(r *Root) bool {
-		if r.Frame != nil {
-			fr.live = r.Frame.Live
-			p.typeObject(r.Addr, r.Type, fr, add)
-		} else {
-			p.typeObject(r.Addr, r.Type, p.proc, add)
-		}
-		return true
-	})
-
-	// Propagate typings through the heap.
-	for len(work) > 0 {
-		c := work[len(work)-1]
-		work = work[:len(work)-1]
-		for i := int64(0); i < c.r; i++ {
-			p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
-		}
-	}
-
-	// Merge any interior typings with the 0-offset typing.
-	for i, chunks := range interior {
-		t := p.types[i].t
-		r := p.types[i].r
-		if t == nil {
-			continue // We have no type info at offset 0.
-		}
-		for _, c := range chunks {
-			if c.max() <= r*t.Size {
-				// c is completely contained in the 0-offset typing. Ignore it.
-				continue
-			}
-			if c.min() <= r*t.Size {
-				// Typings overlap or abut. Extend if we can.
-				if c.t == t && c.min()%t.Size == 0 {
-					r = c.max() / t.Size
-					p.types[i].r = r
+				if c.size() < d.size() {
+					// Keep the larger of the two chunks.
+					c = d
+					addWork = false
 				}
-				continue
 			}
-			// Note: at this point we throw away any interior typings that weren't
-			// merged with the 0-offset typing.  TODO: make more use of this info.
+			// Add new chunk to list of chunks for object.
+			newchunks = append(newchunks, c)
+			interior[i] = newchunks
+			// Also arrange to scan the new chunk. Note that if we merged
+			// with an existing chunk (or chunks), those will get rescanned.
+			// Duplicate work, but that's ok. TODO: but could be expensive.
+			if addWork {
+				work = append(work, workRecord{
+					a: a.Add(c.off - off),
+					t: c.t,
+					r: c.r,
+				})
+			}
 		}
-	}
+
+		// Get typings starting at roots.
+		fr := &frameReader{p: p}
+		p.ForEachRoot(func(r *Root) bool {
+			if r.Frame != nil {
+				fr.live = r.Frame.Live
+				p.typeObject(r.Addr, r.Type, fr, add)
+			} else {
+				p.typeObject(r.Addr, r.Type, p.proc, add)
+			}
+			return true
+		})
+
+		// Propagate typings through the heap.
+		for len(work) > 0 {
+			c := work[len(work)-1]
+			work = work[:len(work)-1]
+			for i := int64(0); i < c.r; i++ {
+				p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
+			}
+		}
+
+		// Merge any interior typings with the 0-offset typing.
+		for i, chunks := range interior {
+			t := p.types[i].t
+			r := p.types[i].r
+			if t == nil {
+				continue // We have no type info at offset 0.
+			}
+			for _, c := range chunks {
+				if c.max() <= r*t.Size {
+					// c is completely contained in the 0-offset typing. Ignore it.
+					continue
+				}
+				if c.min() <= r*t.Size {
+					// Typings overlap or abut. Extend if we can.
+					if c.t == t && c.min()%t.Size == 0 {
+						r = c.max() / t.Size
+						p.types[i].r = r
+					}
+					continue
+				}
+				// Note: at this point we throw away any interior typings that weren't
+				// merged with the 0-offset typing.  TODO: make more use of this info.
+			}
+		}
+	})
 }
 
 type reader interface {

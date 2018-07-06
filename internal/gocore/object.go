@@ -238,8 +238,9 @@ func (p *Process) Size(x Object) int64 {
 
 // Type returns the type and repeat count for the object x.
 // x contains at least repeat copies of the returned type.
-// FlagTypes must have been passed to Core when p was constructed.
 func (p *Process) Type(x Object) (*Type, int64) {
+	p.typeHeap()
+
 	i, _ := p.findObjectIndex(core.Address(x))
 	return p.types[i].t, p.types[i].r
 }

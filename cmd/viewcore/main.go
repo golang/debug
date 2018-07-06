@@ -233,33 +233,33 @@ var coreCache = &struct {
 	// copy of params used to generate p.
 	cfg config
 
-	p   *core.Process
-	err error
+	coreP   *core.Process
+	gocoreP *gocore.Process
+	err     error
 }{}
 
 // readCore reads corefile and returns core and gocore process states.
-func readCore(flags gocore.Flags) (*core.Process, *gocore.Process, error) {
+func readCore() (*core.Process, *gocore.Process, error) {
 	cc := coreCache
-	if cc.cfg != cfg {
-		cc.cfg = cfg
-		cc.p, cc.err = core.Core(cfg.corefile, cfg.base, cfg.exePath)
+	if cc.cfg == cfg {
+		return cc.coreP, cc.gocoreP, cc.err
 	}
-	if cc.err != nil {
-		return nil, nil, cc.err
-	}
-	for _, w := range cc.p.Warnings() {
-		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
-	}
-	// TODO: Cache gocore.Core object too.
-	// The tricky part of gocore is the flags. Change gocore
-	// API to initialize parts on first use so the processed
-	// results, which are expensive, can be cached.
-	c, err := gocore.Core(cc.p, flags)
+	c, err := core.Core(cfg.corefile, cfg.base, cfg.exePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return nil, nil, err
 	}
-	return cc.p, c, nil
+	p, err := gocore.Core(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, w := range c.Warnings() {
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
+	cc.cfg = cfg
+	cc.coreP = c
+	cc.gocoreP = p
+	cc.err = nil
+	return c, p, nil
 }
 
 func runRoot(cmd *cobra.Command, args []string) {
@@ -267,7 +267,7 @@ func runRoot(cmd *cobra.Command, args []string) {
 		cmd.Usage()
 		return
 	}
-	p, _, err := readCore(0)
+	p, _, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -346,7 +346,7 @@ func cmdToCompleter(parent readline.PrefixCompleterInterface, c *cobra.Command) 
 }
 
 func runOverview(cmd *cobra.Command, args []string) {
-	p, c, err := readCore(0)
+	p, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -363,7 +363,7 @@ func runOverview(cmd *cobra.Command, args []string) {
 }
 
 func runMappings(cmd *cobra.Command, args []string) {
-	p, _, err := readCore(0)
+	p, _, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -398,7 +398,7 @@ func runMappings(cmd *cobra.Command, args []string) {
 }
 
 func runGoroutines(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(0)
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -422,7 +422,7 @@ func runGoroutines(cmd *cobra.Command, args []string) {
 }
 
 func runHistogram(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(gocore.FlagTypes)
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -458,7 +458,7 @@ func runHistogram(cmd *cobra.Command, args []string) {
 }
 
 func runBreakdown(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(0)
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -488,7 +488,7 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 }
 
 func runObjgraph(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(gocore.FlagTypes)
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -552,7 +552,7 @@ func runObjgraph(cmd *cobra.Command, args []string) {
 }
 
 func runObjects(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(gocore.FlagTypes)
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -564,7 +564,7 @@ func runObjects(cmd *cobra.Command, args []string) {
 }
 
 func runReachable(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(gocore.FlagTypes | gocore.FlagReverse)
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -648,7 +648,7 @@ func runReachable(cmd *cobra.Command, args []string) {
 }
 
 func runHTML(cmd *cobra.Command, args []string) {
-	_, c, err := readCore(gocore.FlagTypes | gocore.FlagReverse)
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -656,7 +656,7 @@ func runHTML(cmd *cobra.Command, args []string) {
 }
 
 func runRead(cmd *cobra.Command, args []string) {
-	p, _, err := readCore(0)
+	p, _, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}

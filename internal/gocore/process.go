@@ -8,6 +8,7 @@ import (
 	"debug/dwarf"
 	"fmt"
 	"strings"
+	"sync"
 
 	"golang.org/x/debug/internal/core"
 )
@@ -56,16 +57,16 @@ type Process struct {
 	globals []*Root
 
 	// Types of each object, indexed by object index.
-	// Only initialized if FlagTypes is passed to Core.
-	types []typeInfo
+	initTypeHeap sync.Once
+	types        []typeInfo
 
 	// Reverse edges.
 	// The reverse edges for object #i are redge[ridx[i]:ridx[i+1]].
 	// A "reverse edge" for object #i is a location in memory where a pointer
 	// to object #i lives.
-	// Only initialized if FlagReverse is passed to Core.
-	redge []core.Address
-	ridx  []int64
+	initReverseEdges sync.Once
+	redge            []core.Address
+	ridx             []int64
 	// Sorted list of all roots.
 	// Only initialized if FlagReverse is passed to Core.
 	rootIdx []*Root
@@ -107,23 +108,8 @@ func (p *Process) findType(name string) *Type {
 	return s[0]
 }
 
-// A Flags indicates optional analyses for Core to compute.
-type Flags uint8
-
-const (
-	// FlagTypes requests that Core compute type information for all Go objects,
-	// required to use the Type function.
-	// Setting this flag will require more initialization time and use more memory.
-	FlagTypes Flags = 1 << iota
-	// FlagReverse requests that Core compute reverse edge information,
-	// required to use ForEachReversePtr.
-	// Setting this flag will require more initialization time and use more memory.
-	FlagReverse
-)
-
 // Core takes a loaded core file and extracts Go information from it.
-// flags is a bitmask of data that should be extracted from the core.
-func Core(proc *core.Process, flags Flags) (p *Process, err error) {
+func Core(proc *core.Process) (p *Process, err error) {
 	// Make sure we have DWARF info.
 	if _, err := proc.DWARF(); err != nil {
 		return nil, err
@@ -171,12 +157,6 @@ func Core(proc *core.Process, flags Flags) (p *Process, err error) {
 	p.readGs()
 	p.readStackVars() // needs to be after readGs.
 	p.markObjects()   // needs to be after readGlobals, readStackVars.
-	if flags&FlagTypes != 0 {
-		p.typeHeap() // needs to be after markObjects.
-	}
-	if flags&FlagReverse != 0 {
-		p.reverseEdges() // needs to be after markObjects.
-	}
 
 	return p, nil
 }
