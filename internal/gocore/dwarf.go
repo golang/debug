@@ -413,6 +413,10 @@ func (p *Process) readGlobals() {
 		if f == nil {
 			continue
 		}
+		if f.Class != dwarf.ClassExprLoc {
+			// Globals are all encoded with this class.
+			continue
+		}
 		loc := f.Val.([]byte)
 		if len(loc) == 0 || loc[0] != _DW_OP_addr {
 			continue
@@ -496,6 +500,13 @@ func (p *Process) readStackVars() {
 		}
 		aloc := e.AttrField(dwarf.AttrLocation)
 		if aloc == nil {
+			continue
+		}
+		if aloc.Class != dwarf.ClassExprLoc {
+			// TODO: handle ClassLocListPtr here.
+			// As of go 1.11, locals are encoded this way.
+			// Until we fix this TODO, viewcore will not be able to
+			// show local variables.
 			continue
 		}
 		// Interpret locations of the form
