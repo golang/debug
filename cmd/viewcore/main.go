@@ -80,10 +80,14 @@ var (
 	}
 
 	cmdHistogram = &cobra.Command{
-		Use:   "histogram",
-		Short: "print histogram of heap memory use by Go type",
-		Args:  cobra.ExactArgs(0),
-		Run:   runHistogram,
+		Use:     "histogram",
+		Aliases: []string{"histo"},
+		Short:   "print histogram of heap memory use by Go type",
+		Long: "print histogram of heap memory use by Go type.\n" +
+			"If N is specified, it will reports only the top N buckets\n" +
+			"based on the total bytes.",
+		Args: cobra.ExactArgs(0),
+		Run:  runHistogram,
 	}
 
 	cmdBreakdown = &cobra.Command{
@@ -148,7 +152,10 @@ func init() {
 	cmdRoot.PersistentFlags().StringVar(&cfg.exePath, "exe", "", "main executable file")
 	cmdRoot.PersistentFlags().StringVar(&cfg.cpuprof, "prof", "", "write cpu profile of viewcore to this file for viewcore's developers")
 
+	// subcommand flags
 	cmdHTML.Flags().IntP("port", "p", 8080, "port for http server")
+
+	cmdHistogram.Flags().Int("top", 0, "reports only top N entries if N>0")
 
 	cmdRoot.AddCommand(
 		cmdOverview,
@@ -426,6 +433,10 @@ func runGoroutines(cmd *cobra.Command, args []string) {
 }
 
 func runHistogram(cmd *cobra.Command, args []string) {
+	topN, err := cmd.Flags().GetInt("top")
+	if err != nil {
+		exitf("%v\n", err)
+	}
 	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
@@ -452,6 +463,12 @@ func runHistogram(cmd *cobra.Command, args []string) {
 	sort.Slice(buckets, func(i, j int) bool {
 		return buckets[i].size*buckets[i].count > buckets[j].size*buckets[j].count
 	})
+
+	// report only top N if requested
+	if topN > 0 && len(buckets) > topN {
+		buckets = buckets[:topN]
+	}
+
 	t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
 	fmt.Fprintf(t, "%s\t%s\t%s\t %s\n", "count", "size", "bytes", "type")
 	for _, e := range buckets {
