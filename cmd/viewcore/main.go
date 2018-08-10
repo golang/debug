@@ -286,7 +286,13 @@ func runRoot(cmd *cobra.Command, args []string) {
 	// Create a dummy root to run in shell.
 	root := &cobra.Command{}
 	// Make all subcommands of viewcore available in the shell.
-	root.AddCommand(cmd.Commands()...)
+	for _, subcmd := range cmd.Commands() {
+		if subcmd.Name() == "help" {
+			root.SetHelpCommand(subcmd)
+			continue
+		}
+		root.AddCommand(subcmd)
+	}
 	// Also, add exit command to terminate the shell.
 	root.AddCommand(&cobra.Command{
 		Use:     "exit",
