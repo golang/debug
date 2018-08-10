@@ -15,7 +15,9 @@ import (
 	"golang.org/x/debug/internal/gocore"
 )
 
-func serveHTML(c *gocore.Process) {
+// serveHTML starts and serves a webserver on the port.
+// If async is true, it returns immediately after starting the server.
+func serveHTML(c *gocore.Process, port int, async bool) {
 	http.HandleFunc("/object", func(w http.ResponseWriter, r *http.Request) {
 		objs, ok := r.URL.Query()["o"]
 		if !ok || len(objs) != 1 {
@@ -199,8 +201,18 @@ func serveHTML(c *gocore.Process) {
 		p(c.Stats(), "")
 		fmt.Fprintf(w, "</table>\n")
 	})
-	fmt.Println("serving on :8080")
-	http.ListenAndServe(":8080", nil)
+
+	if port <= 0 {
+		port = 8080
+	}
+	fmt.Printf("start serving on http://localhost:%d\n", port)
+
+	httpAddr := fmt.Sprintf(":%d", port)
+	if async {
+		go http.ListenAndServe(httpAddr, nil)
+		return
+	}
+	http.ListenAndServe(httpAddr, nil)
 }
 
 func htmlObject(w http.ResponseWriter, c *gocore.Process, name string, a core.Address, t *gocore.Type, live map[core.Address]bool) {

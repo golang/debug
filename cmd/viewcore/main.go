@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/chzyer/readline" // TODO: vendor
@@ -117,11 +118,9 @@ var (
 
 	cmdHTML = &cobra.Command{
 		Use:   "html",
-		Short: "start an http server on :8080 for browsing core file data",
+		Short: "start an http server for browsing core file data on the port specified with -port",
 		Args:  cobra.ExactArgs(0),
 		Run:   runHTML,
-
-		// TODO: port flag
 	}
 
 	cmdRead = &cobra.Command{
@@ -133,6 +132,8 @@ var (
 )
 
 type config struct {
+	interactive bool
+
 	// Set based on os.Args[1]
 	corefile string
 
@@ -148,6 +149,8 @@ func init() {
 	cmdRoot.PersistentFlags().StringVar(&cfg.base, "base", "", "root directory to find core dump file references")
 	cmdRoot.PersistentFlags().StringVar(&cfg.exePath, "exe", "", "main executable file")
 	cmdRoot.PersistentFlags().StringVar(&cfg.cpuprof, "prof", "", "write cpu profile of viewcore to this file for viewcore's developers")
+
+	cmdHTML.Flags().IntP("port", "p", 8080, "port for http server")
 
 	cmdRoot.AddCommand(
 		cmdOverview,
@@ -271,6 +274,9 @@ func runRoot(cmd *cobra.Command, args []string) {
 	if err != nil {
 		exitf("%v\n", err)
 	}
+
+	// Interactive mode.
+	cfg.interactive = true
 
 	// Create a dummy root to run in shell.
 	root := &cobra.Command{}
@@ -454,7 +460,6 @@ func runHistogram(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(t, "%d\t%d\t%d\t %s\n", e.count, e.size, e.count*e.size, e.name)
 	}
 	t.Flush()
-
 }
 
 func runBreakdown(cmd *cobra.Command, args []string) {
@@ -647,12 +652,32 @@ func runReachable(cmd *cobra.Command, args []string) {
 	}
 }
 
+// httpServer is the singleton http server, initialized by
+// the first call to runHTML.
+var httpServer struct {
+	sync.Mutex
+	port int
+}
+
 func runHTML(cmd *cobra.Command, args []string) {
+	httpServer.Lock()
+	defer httpServer.Unlock()
+	if httpServer.port != 0 {
+		fmt.Printf("already serving on http://localhost:%d\n", httpServer.port)
+		return
+	}
 	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
-	serveHTML(c)
+
+	port, err := cmd.Flags().GetInt("port")
+	if err != nil {
+		exitf("%v\n", err)
+	}
+	serveHTML(c, port, cfg.interactive)
+	httpServer.port = port
+	// TODO: launch web browser
 }
 
 func runRead(cmd *cobra.Command, args []string) {
