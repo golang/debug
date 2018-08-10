@@ -18,7 +18,7 @@ import (
 	"sync"
 	"text/tabwriter"
 
-	"github.com/chzyer/readline" // TODO: vendor
+	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
 	"golang.org/x/debug/internal/core"
 	"golang.org/x/debug/internal/gocore"
@@ -101,12 +101,10 @@ var (
 	}
 
 	cmdObjgraph = &cobra.Command{
-		Use:   "objgraph",
-		Short: "dump object graph to the file tmp.dot",
-		Args:  cobra.ExactArgs(0),
+		Use:   "objgraph <output_filename>",
+		Short: "dump object graph (dot)",
+		Args:  cobra.ExactArgs(1),
 		Run:   runObjgraph,
-
-		// TODO: output file name flag
 	}
 
 	cmdReachable = &cobra.Command{
@@ -497,8 +495,11 @@ func runObjgraph(cmd *cobra.Command, args []string) {
 	if err != nil {
 		exitf("%v\n", err)
 	}
+
+	fname := args[0]
+
 	// Dump object graph to output file.
-	w, err := os.Create("tmp.dot")
+	w, err := os.Create(fname)
 	if err != nil {
 		panic(err)
 	}
@@ -553,7 +554,7 @@ func runObjgraph(cmd *cobra.Command, args []string) {
 	})
 	fmt.Fprintf(w, "}")
 	w.Close()
-
+	fmt.Fprintf(os.Stderr, "wrote the object graph to %q\n", fname)
 }
 
 func runObjects(cmd *cobra.Command, args []string) {
