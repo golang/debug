@@ -9,6 +9,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
 	"runtime/pprof"
@@ -299,7 +300,7 @@ func runRoot(cmd *cobra.Command, args []string) {
 		Aliases: []string{"quit", "bye"},
 		Short:   "exit from interactive mode",
 		Run: func(*cobra.Command, []string) {
-			exitf("bye!\n\n")
+			os.Exit(0)
 		},
 	})
 
@@ -311,7 +312,7 @@ func runRoot(cmd *cobra.Command, args []string) {
 	shell, err := readline.NewEx(&readline.Config{
 		Prompt:       "(viewcore) ",
 		AutoComplete: rootCompleter,
-		EOFPrompt:    "bye!\n\n",
+		EOFPrompt:    "\n",
 	})
 	if err != nil {
 		panic(err)
@@ -328,7 +329,9 @@ func runRoot(cmd *cobra.Command, args []string) {
 	for {
 		l, err := shell.Readline()
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			if err != io.EOF {
+				fmt.Printf("Error: %v\n", err)
+			}
 			break
 		}
 
