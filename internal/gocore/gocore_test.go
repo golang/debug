@@ -196,4 +196,5 @@ func TestDynamicType(t *testing.T) {
 
 func TestVersions(t *testing.T) {
 	loadExampleVersion(t, "1.10")
+	loadExampleVersion(t, "1.11")
 }
