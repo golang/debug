@@ -516,7 +516,11 @@ func (p *Process) readG(r region) *Goroutine {
 		return g
 	}
 	for {
-		f := p.readFrame(sp, pc)
+		f, err := p.readFrame(sp, pc)
+		if err != nil {
+			fmt.Printf("warning: giving up on backtrace: %v\n", err)
+			break
+		}
 		if f.f.name == "runtime.goexit" {
 			break
 		}
@@ -553,13 +557,16 @@ func (p *Process) readG(r region) *Goroutine {
 	return g
 }
 
-func (p *Process) readFrame(sp, pc core.Address) *Frame {
+func (p *Process) readFrame(sp, pc core.Address) (*Frame, error) {
 	f := p.funcTab.find(pc)
 	if f == nil {
-		panic(fmt.Errorf("  pc not found %x\n", pc))
+		return nil, fmt.Errorf("cannot find func for pc=%#x", pc)
 	}
 	off := pc.Sub(f.entry)
-	size := f.frameSize.find(off)
+	size, err := f.frameSize.find(off)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read frame size at pc=%#x: %v", pc, err)
+	}
 	size += p.proc.PtrSize() // TODO: on amd64, the pushed return address
 
 	frame := &Frame{f: f, pc: pc, min: sp, max: sp.Add(size)}
@@ -570,7 +577,10 @@ func (p *Process) readFrame(sp, pc core.Address) *Frame {
 		locals := region{p: p, a: f.funcdata[x], typ: p.findType("runtime.stackmap")}
 		n := locals.Field("n").Int32()       // # of bitmaps
 		nbit := locals.Field("nbit").Int32() // # of bits per bitmap
-		idx := f.stackMap.find(off)
+		idx, err := f.stackMap.find(off)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read stack map at pc=%#x: %v", pc, err)
+		}
 		if idx < 0 {
 			idx = 0
 		}
@@ -590,7 +600,10 @@ func (p *Process) readFrame(sp, pc core.Address) *Frame {
 		args := region{p: p, a: f.funcdata[x], typ: p.findType("runtime.stackmap")}
 		n := args.Field("n").Int32()       // # of bitmaps
 		nbit := args.Field("nbit").Int32() // # of bits per bitmap
-		idx := f.stackMap.find(off)
+		idx, err := f.stackMap.find(off)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read stack map at pc=%#x: %v", pc, err)
+		}
 		if idx < 0 {
 			idx = 0
 		}
@@ -607,7 +620,7 @@ func (p *Process) readFrame(sp, pc core.Address) *Frame {
 	}
 	frame.Live = live
 
-	return frame
+	return frame, nil
 }
 
 // A Stats struct is the node of a tree representing the entire memory

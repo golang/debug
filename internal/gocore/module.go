@@ -167,14 +167,14 @@ func (t *pcTab) setEmpty() {
 	t.entries = []pcTabEntry{{bytes: 1<<63 - 1, val: -1}}
 }
 
-func (t *pcTab) find(off int64) int64 {
+func (t *pcTab) find(off int64) (int64, error) {
 	for _, e := range t.entries {
 		if off < e.bytes {
-			return e.val
+			return e.val, nil
 		}
 		off -= e.bytes
 	}
-	panic("can't find pctab entry")
+	return 0, fmt.Errorf("can't find pctab entry for offset %#x", off)
 }
 
 // readVarint reads a varint from the core file.
