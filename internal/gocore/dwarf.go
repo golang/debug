@@ -204,7 +204,10 @@ func isNonGoCU(e *dwarf.Entry) bool {
 	if e.Tag != dwarf.TagCompileUnit {
 		return false
 	}
-	prod := e.AttrField(dwarf.AttrProducer).Val.(string)
+	prod, ok := e.Val(dwarf.AttrProducer).(string)
+	if !ok {
+		return true
+	}
 	return !strings.Contains(prod, "Go cmd/compile")
 }
 
