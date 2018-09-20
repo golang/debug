@@ -258,6 +258,9 @@ func readCore() (*core.Process, *gocore.Process, error) {
 		return nil, nil, err
 	}
 	p, err := gocore.Core(c)
+	if _, ok := err.(*core.ExecNotFoundError); ok && cfg.exePath == "" {
+		return nil, nil, fmt.Errorf("%v; consider specifying the --exe flag", err)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

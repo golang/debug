@@ -34,9 +34,10 @@ type Process struct {
 	base    string // base directory from which files in the core can be found
 	exePath string // user-supplied main executable path
 
-	exec     []*os.File // executables (more than one for shlibs)
-	mappings []*Mapping // virtual address mappings
-	threads  []*Thread  // os threads (TODO: map from pid?)
+	origExePath string     // main executable path found in the core, set by readCore
+	exec        []*os.File // executables (more than one for shlibs)
+	mappings    []*Mapping // virtual address mappings
+	threads     []*Thread  // os threads (TODO: map from pid?)
 
 	arch         string             // amd64, ...
 	ptrSize      int64              // 4 or 8
@@ -373,7 +374,6 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 	filenames := string(desc[3*8*count:])
 	desc = desc[:3*8*count]
 
-	origExePath := ""
 	for i := uint64(0); i < count; i++ {
 		min := Address(e.ByteOrder.Uint64(desc))
 		desc = desc[8:]
@@ -394,7 +394,7 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 
 		// Assume the first entry is the main binary.
 		if i == 0 {
-			origExePath = name
+			p.origExePath = name
 		}
 
 		var backing *os.File
@@ -403,7 +403,7 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 		// If the name matches the cached original executable path
 		// and user-provided executable is available, use the
 		// user-provided one.
-		if p.exePath != "" && origExePath == name {
+		if p.exePath != "" && p.origExePath == name {
 			backing, err = os.Open(p.exePath)
 		} else {
 			backing, err = os.Open(filepath.Join(p.base, name))
@@ -594,7 +594,22 @@ func (p *Process) readExec() error {
 			p.dwarf = dwarf
 		}
 	}
+	if p.dwarf == nil && p.dwarfErr == nil {
+		exe := p.origExePath
+		if p.exePath != "" {
+			exe = p.exePath
+		}
+		p.dwarfErr = &ExecNotFoundError{exe}
+	}
 	return nil
+}
+
+type ExecNotFoundError struct {
+	path string
+}
+
+func (e *ExecNotFoundError) Error() string {
+	return fmt.Sprintf("missing executable %q", e.path)
 }
 
 func (p *Process) Warnings() []string {
