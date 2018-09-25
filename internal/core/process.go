@@ -34,10 +34,11 @@ type Process struct {
 	base    string // base directory from which files in the core can be found
 	exePath string // user-supplied main executable path
 
-	origExePath string     // main executable path found in the core, set by readCore
-	exec        []*os.File // executables (more than one for shlibs)
-	mappings    []*Mapping // virtual address mappings
-	threads     []*Thread  // os threads (TODO: map from pid?)
+	files map[string]*file // files found from the note section
+	exe   string           // open main executable name
+
+	mappings []*Mapping // virtual address mappings
+	threads  []*Thread  // os threads (TODO: map from pid?)
 
 	arch         string             // amd64, ...
 	ptrSize      int64              // 4 or 8
@@ -52,6 +53,11 @@ type Process struct {
 	args         string             // first part of args retrieved from NT_PRPSINFO
 
 	warnings []string // warnings generated during loading
+}
+
+type file struct {
+	f   *os.File
+	err error
 }
 
 // Mappings returns a list of virtual memory mappings for p.
@@ -134,7 +140,7 @@ func Core(coreFile, base, exePath string) (*Process, error) {
 		return nil, err
 	}
 
-	p := &Process{base: base, exePath: exePath}
+	p := &Process{base: base, exePath: exePath, files: make(map[string]*file)}
 	if err := p.readCore(core); err != nil {
 		return nil, err
 	}
@@ -392,32 +398,6 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 			filenames = ""
 		}
 
-		// Assume the first entry is the main binary.
-		if i == 0 {
-			p.origExePath = name
-		}
-
-		var backing *os.File
-		var err error
-
-		// If the name matches the cached original executable path
-		// and user-provided executable is available, use the
-		// user-provided one.
-		if p.exePath != "" && p.origExePath == name {
-			backing, err = os.Open(p.exePath)
-		} else {
-			backing, err = os.Open(filepath.Join(p.base, name))
-		}
-		if err != nil {
-			// Can't find mapped file.
-			// We don't want to make this a hard error because there are
-			// lots of possible missing files that probably aren't critical,
-			// like a random shared library.
-			p.warnings = append(p.warnings,
-				fmt.Sprintf("Missing data for addresses [%x %x] because of failure to %s. Assuming all zero.", min, max, err))
-			// Leaving backing==nil here means treat as all zero.
-		}
-
 		// TODO: this is O(n^2). Shouldn't be a big problem in practice.
 		p.splitMappingsAt(min)
 		p.splitMappingsAt(max)
@@ -429,40 +409,58 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 			if !(m.min >= min && m.max <= max) {
 				panic("mapping overlapping end of file region")
 			}
+
+			f, err := p.openMappedFile(name, m)
+			if err != nil {
+				// Can't find mapped file.
+				// We don't want to make this a hard error because there are
+				// lots of possible missing files that probably aren't critical,
+				// like a random shared library.
+				p.warnings = append(p.warnings, fmt.Sprintf("Missing data for addresses [%x %x] because of failure to %s. Assuming all zero.", m.min, m.max, err))
+			}
+
 			if m.f == nil {
-				m.f = backing
+				m.f = f
 				m.off = int64(off) + m.min.Sub(min)
 			} else {
 				// Data is both in the core file and in a mapped file.
 				// The mapped file may be stale (even if it is readonly now,
 				// it may have been writeable at some point).
 				// Keep the file+offset just for printing.
-				m.origF = backing
+				m.origF = f
 				m.origOff = int64(off) + m.min.Sub(min)
-			}
-
-			// Save a reference to the executable files.
-			// We keep them around so we can try to get symbols from them.
-			// TODO: we should really only keep those files for which the
-			// symbols return the correct addresses given where the file is
-			// mapped in memory. Not sure what to do here.
-			// Seems to work for the base executable, for now.
-			if backing != nil && m.perm&Exec != 0 {
-				found := false
-				for _, x := range p.exec {
-					if x == m.f {
-						found = true
-						break
-					}
-
-				}
-				if !found {
-					p.exec = append(p.exec, m.f)
-				}
 			}
 		}
 	}
 	return nil
+}
+
+func (p *Process) openMappedFile(fname string, m *Mapping) (*os.File, error) {
+	if fname == "" {
+		return nil, nil
+	}
+
+	if backing := p.files[fname]; backing != nil {
+		return backing.f, backing.err
+	}
+
+	backing := &file{}
+
+	isMainExe := m.perm&Exec != 0 && p.exe == ""
+	if !isMainExe {
+		backing.f, backing.err = os.Open(filepath.Join(p.base, fname))
+	} else { // keep main executable in p.mainFile
+		p.exe = fname
+		if p.exePath != "" {
+			backing.f, backing.err = os.Open(p.exePath)
+		} else {
+			backing.f, backing.err = os.Open(filepath.Join(p.base, fname))
+		}
+	}
+
+	p.files[fname] = backing
+
+	return backing.f, backing.err
 }
 
 // splitMappingsAt ensures that a is not in the middle of any mapping.
@@ -568,48 +566,55 @@ func (p *Process) readPRStatus(f *os.File, e *elf.File, desc []byte) error {
 
 func (p *Process) readExec() error {
 	p.syms = map[string]Address{}
-	for _, exec := range p.exec {
-		e, err := elf.NewFile(exec)
+	// Read symbols from all available files.
+	for _, f := range p.files {
+		if f.f == nil {
+			continue
+		}
+		e, err := elf.NewFile(f.f)
 		if err != nil {
 			return err
 		}
-		if e.Type != elf.ET_EXEC {
-			// This happens for shared libraries, the core file itself, ...
-			continue
-		}
+
 		syms, err := e.Symbols()
 		if err != nil {
-			p.symErr = fmt.Errorf("can't read symbols from %s", exec.Name())
-		} else {
-			for _, s := range syms {
-				p.syms[s.Name] = Address(s.Value)
-			}
+			p.symErr = fmt.Errorf("can't read symbols from %s", f.f.Name())
+			continue
 		}
-		// An error while reading DWARF info is not an immediate error,
-		// but any error will be returned if the caller asks for DWARF.
-		dwarf, err := e.DWARF()
-		if err != nil {
-			p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", exec.Name(), err)
-		} else {
-			p.dwarf = dwarf
+		for _, s := range syms {
+			p.syms[s.Name] = Address(s.Value)
 		}
 	}
-	if p.dwarf == nil && p.dwarfErr == nil {
-		exe := p.origExePath
-		if p.exePath != "" {
-			exe = p.exePath
-		}
-		p.dwarfErr = &ExecNotFoundError{exe}
+
+	// Prepare DWARF from the main exe.
+	// An error while reading DWARF info is not an immediate error,
+	// but any error will be returned if the caller asks for DWARF.
+	if p.exe == "" {
+		// TODO(hyangah): p.exe == "" is possible only if there is no executable
+		// mapping or all executable mapppings have no file name. Is it possible?
+		// If so, shouldn't this be a hard error?
+		p.dwarfErr = fmt.Errorf("can't find mappings with executable permission")
+		return nil
 	}
+
+	f := p.files[p.exe]
+	if f.err != nil {
+		p.dwarfErr = f.err
+		return nil
+	}
+	e, err := elf.NewFile(f.f)
+	if err != nil {
+		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", f.f.Name(), err)
+		return nil
+	}
+
+	dwarf, err := e.DWARF()
+	if err != nil {
+		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", f.f.Name(), err)
+		return nil
+	}
+	p.dwarf = dwarf
 	return nil
-}
-
-type ExecNotFoundError struct {
-	path string
-}
-
-func (e *ExecNotFoundError) Error() string {
-	return fmt.Sprintf("missing executable %q", e.path)
 }
 
 func (p *Process) Warnings() []string {
