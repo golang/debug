@@ -31,14 +31,15 @@ import (
 
 // A Process represents the state of the process that core dumped.
 type Process struct {
-	base    string // base directory from which files in the core can be found
-	exePath string // user-supplied main executable path
+	base string   // base directory from which files in the core can be found
+	exe  *os.File // user-supplied main executable path
 
-	files map[string]*file // files found from the note section
-	exe   string           // open main executable name
+	files        map[string]*file // files found from the note section
+	mainExecName string           // open main executable name
 
-	mappings []*Mapping // virtual address mappings
-	threads  []*Thread  // os threads (TODO: map from pid?)
+	entryPoint Address
+	memory     splicedMemory // virtual address mappings
+	threads    []*Thread     // os threads (TODO: map from pid?)
 
 	arch         string             // amd64, ...
 	ptrSize      int64              // 4 or 8
@@ -62,7 +63,7 @@ type file struct {
 
 // Mappings returns a list of virtual memory mappings for p.
 func (p *Process) Mappings() []*Mapping {
-	return p.mappings
+	return p.memory.mappings
 }
 
 // Readable reports whether the address a is readable.
@@ -137,25 +138,39 @@ var mapFile = func(fd int, offset int64, length int) (data []byte, err error) {
 func Core(coreFile, base, exePath string) (*Process, error) {
 	core, err := os.Open(coreFile)
 	if err != nil {
+		return nil, fmt.Errorf("failed to open core file: %v", err)
+	}
+
+	p := &Process{base: base, files: make(map[string]*file)}
+	if exePath != "" {
+		bin, err := os.Open(exePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open executable file: %v", err)
+		}
+		p.exe = bin
+	}
+
+	if err := p.readExec(p.exe); err != nil {
 		return nil, err
 	}
 
-	p := &Process{base: base, exePath: exePath, files: make(map[string]*file)}
 	if err := p.readCore(core); err != nil {
 		return nil, err
 	}
-	if err := p.readExec(); err != nil {
+
+	if err := p.readDebugInfo(); err != nil {
 		return nil, err
 	}
 
 	// Sort then merge mappings, just to clean up a bit.
-	sort.Slice(p.mappings, func(i, j int) bool {
-		return p.mappings[i].min < p.mappings[j].min
+	mappings := p.memory.mappings
+	sort.Slice(mappings, func(i, j int) bool {
+		return mappings[i].min < mappings[j].min
 	})
-	ms := p.mappings[1:]
-	p.mappings = p.mappings[:1]
+	ms := mappings[1:]
+	mappings = mappings[:1]
 	for _, m := range ms {
-		k := p.mappings[len(p.mappings)-1]
+		k := mappings[len(mappings)-1]
 		if m.min == k.max &&
 			m.perm == k.perm &&
 			m.f == k.f &&
@@ -163,13 +178,14 @@ func Core(coreFile, base, exePath string) (*Process, error) {
 			k.max = m.max
 			// TODO: also check origF?
 		} else {
-			p.mappings = append(p.mappings, m)
+			mappings = append(mappings, m)
 		}
 	}
+	p.memory.mappings = mappings
 
 	// Memory map all the mappings.
 	hostPageSize := int64(syscall.Getpagesize())
-	for _, m := range p.mappings {
+	for _, m := range p.memory.mappings {
 		size := m.max.Sub(m.min)
 		if m.f == nil {
 			// We don't have any source for this data.
@@ -214,7 +230,7 @@ func Core(coreFile, base, exePath string) (*Process, error) {
 	}
 
 	// Build page table for mapping lookup.
-	for _, m := range p.mappings {
+	for _, m := range p.memory.mappings {
 		err := p.addMapping(m)
 		if err != nil {
 			return nil, err
@@ -222,6 +238,25 @@ func Core(coreFile, base, exePath string) (*Process, error) {
 	}
 
 	return p, nil
+}
+
+func (p *Process) readExec(exe *os.File) error {
+	if exe == nil {
+		return nil
+	}
+	e, err := elf.NewFile(exe)
+	if err != nil {
+		return err
+	}
+	// Load virtual memory mappings.
+	for _, prog := range e.Progs {
+		if prog.Type == elf.PT_LOAD {
+			if err := p.readLoad(exe, e, prog); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (p *Process) readCore(core *os.File) error {
@@ -312,19 +347,16 @@ func (p *Process) readLoad(f *os.File, e *elf.File, prog *elf.Prog) error {
 		// TODO: keep these nothing-mapped mappings?
 		return nil
 	}
-	m := &Mapping{min: min, max: max, perm: perm}
-	p.mappings = append(p.mappings, m)
 	if prog.Filesz > 0 {
 		// Data backing this mapping is in the core file.
-		m.f = f
-		m.off = int64(prog.Off)
-		if prog.Filesz < uint64(m.max.Sub(m.min)) {
-			// We only have partial data for this mapping in the core file.
-			// Trim the mapping and allocate an anonymous mapping for the remainder.
-			m2 := &Mapping{min: m.min.Add(int64(prog.Filesz)), max: m.max, perm: m.perm}
-			m.max = m2.min
-			p.mappings = append(p.mappings, m2)
-		}
+		p.memory.Add(min, max, perm, f, int64(prog.Off))
+	} else {
+		p.memory.Add(min, max, perm, nil, 0)
+	}
+	if prog.Filesz < prog.Memsz {
+		// We only have partial data for this mapping in the core file.
+		// Trim the mapping and allocate an anonymous mapping for the remainder.
+		p.memory.Add(min.Add(int64(prog.Filesz)), max, perm, nil, 0)
 	}
 	return nil
 }
@@ -332,6 +364,7 @@ func (p *Process) readLoad(f *os.File, e *elf.File, prog *elf.Prog) error {
 func (p *Process) readNote(f *os.File, e *elf.File, off, size uint64) error {
 	// TODO: add this to debug/elf?
 	const NT_FILE elf.NType = 0x46494c45
+	const NT_AUXV elf.NType = 0x6 // auxv
 
 	b := make([]byte, size)
 	_, err := f.ReadAt(b, int64(off))
@@ -350,25 +383,53 @@ func (p *Process) readNote(f *os.File, e *elf.File, off, size uint64) error {
 		desc := b[:descsz]
 		b = b[(descsz+3)/4*4:]
 
-		if name == "CORE" && typ == NT_FILE {
+		if name != "CORE" { // what does this mean?
+			continue
+		}
+		switch typ {
+		case NT_FILE:
 			if err := p.readNTFile(f, e, desc); err != nil {
 				return fmt.Errorf("reading NT_FILE: %v", err)
 			}
-		}
-		if name == "CORE" && typ == elf.NT_PRSTATUS {
+		case elf.NT_PRSTATUS:
 			// An OS thread (an M)
 			if err := p.readPRStatus(f, e, desc); err != nil {
 				return fmt.Errorf("reading NT_PRSTATUS: %v", err)
 			}
-		}
-		if name == "CORE" && typ == elf.NT_PRPSINFO {
+		case elf.NT_PRPSINFO:
 			if err := p.readPRPSInfo(desc); err != nil {
 				return fmt.Errorf("reading NT_PRPSINFO: %v", err)
+			}
+		case NT_AUXV:
+			if entry, ok := findEntryPoint(desc, e.ByteOrder); ok {
+				p.entryPoint = entry
 			}
 		}
 		// TODO: NT_FPREGSET for floating-point registers
 	}
 	return nil
+}
+
+func findEntryPoint(auxvDesc []byte, order binary.ByteOrder) (Address, bool) {
+	// amd64 only?
+	const _AT_ENTRY_AMD64 = 9
+
+	buf := bytes.NewBuffer(auxvDesc)
+	for {
+		var tag, val uint64
+		if err := binary.Read(buf, order, &tag); err != nil {
+			panic(err)
+			return 0, false
+		}
+		if err := binary.Read(buf, order, &val); err != nil {
+			panic(err)
+			return 0, false
+		}
+		if tag == _AT_ENTRY_AMD64 {
+			return Address(val), true
+		}
+	}
+	return 0, false
 }
 
 func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
@@ -401,7 +462,7 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 		// TODO: this is O(n^2). Shouldn't be a big problem in practice.
 		p.splitMappingsAt(min)
 		p.splitMappingsAt(max)
-		for _, m := range p.mappings {
+		for _, m := range p.memory.mappings {
 			if m.max <= min || m.min >= max {
 				continue
 			}
@@ -446,13 +507,19 @@ func (p *Process) openMappedFile(fname string, m *Mapping) (*os.File, error) {
 
 	backing := &file{}
 
-	isMainExe := m.perm&Exec != 0 && p.exe == ""
+	isMainExe := m.perm&Exec != 0 && p.mainExecName == "" // first executable region
+	if p.entryPoint != 0 && m.Min() <= p.entryPoint && p.entryPoint < m.Max() {
+		// Or if we have the entry point info and it falls into this mappint, this is the region
+		// the main executable is mapped.
+		isMainExe = true
+	}
+
 	if !isMainExe {
 		backing.f, backing.err = os.Open(filepath.Join(p.base, fname))
-	} else { // keep main executable in p.mainFile
-		p.exe = fname
-		if p.exePath != "" {
-			backing.f, backing.err = os.Open(p.exePath)
+	} else { // keep main executable in p.mainExecName
+		p.mainExecName = fname
+		if p.exe != nil {
+			backing.f, backing.err = p.exe, nil
 		} else {
 			backing.f, backing.err = os.Open(filepath.Join(p.base, fname))
 		}
@@ -466,7 +533,7 @@ func (p *Process) openMappedFile(fname string, m *Mapping) (*os.File, error) {
 // splitMappingsAt ensures that a is not in the middle of any mapping.
 // Splits mappings as necessary.
 func (p *Process) splitMappingsAt(a Address) {
-	for _, m := range p.mappings {
+	for _, m := range p.memory.mappings {
 		if a < m.min || a > m.max {
 			continue
 		}
@@ -484,7 +551,7 @@ func (p *Process) splitMappingsAt(a Address) {
 		if m2.origF != nil {
 			m2.origOff += m.Size()
 		}
-		p.mappings = append(p.mappings, m2)
+		p.memory.mappings = append(p.memory.mappings, m2)
 		return
 	}
 }
@@ -564,7 +631,7 @@ func (p *Process) readPRStatus(f *os.File, e *elf.File, desc []byte) error {
 	return nil
 }
 
-func (p *Process) readExec() error {
+func (p *Process) readDebugInfo() error {
 	p.syms = map[string]Address{}
 	// Read symbols from all available files.
 	for _, f := range p.files {
@@ -589,28 +656,30 @@ func (p *Process) readExec() error {
 	// Prepare DWARF from the main exe.
 	// An error while reading DWARF info is not an immediate error,
 	// but any error will be returned if the caller asks for DWARF.
-	if p.exe == "" {
-		// TODO(hyangah): p.exe == "" is possible only if there is no executable
-		// mapping or all executable mapppings have no file name. Is it possible?
-		// If so, shouldn't this be a hard error?
-		p.dwarfErr = fmt.Errorf("can't find mappings with executable permission")
+	exe := p.exe
+	if exe == nil {
+		f := p.files[p.mainExecName]
+		if f.err != nil {
+			p.dwarfErr = f.err
+			return nil
+		}
+		exe = f.f
+	}
+
+	if exe == nil {
+		p.dwarfErr = fmt.Errorf("can't find mappings for the main executable")
 		return nil
 	}
 
-	f := p.files[p.exe]
-	if f.err != nil {
-		p.dwarfErr = f.err
-		return nil
-	}
-	e, err := elf.NewFile(f.f)
+	e, err := elf.NewFile(exe)
 	if err != nil {
-		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", f.f.Name(), err)
+		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", exe.Name(), err)
 		return nil
 	}
 
 	dwarf, err := e.DWARF()
 	if err != nil {
-		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", f.f.Name(), err)
+		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", exe.Name(), err)
 		return nil
 	}
 	p.dwarf = dwarf

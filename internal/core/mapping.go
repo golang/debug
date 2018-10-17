@@ -109,6 +109,8 @@ type pageTable2 [1 << 10]*pageTable1
 type pageTable3 [1 << 10]*pageTable2
 type pageTable4 [1 << 12]*pageTable3
 
+const pageSize Address = 1 << 12
+
 // findMapping is simple enough that it inlines.
 func (p *Process) findMapping(a Address) *Mapping {
 	t3 := p.pageTable[a>>52]
@@ -131,10 +133,10 @@ func (p *Process) findMapping(a Address) *Mapping {
 }
 
 func (p *Process) addMapping(m *Mapping) error {
-	if m.min%(1<<12) != 0 {
+	if m.min%(pageSize) != 0 {
 		return fmt.Errorf("mapping start %x isn't a multiple of 4096", m.min)
 	}
-	if m.max%(1<<12) != 0 {
+	if m.max%(pageSize) != 0 {
 		return fmt.Errorf("mapping end %x isn't a multiple of 4096", m.max)
 	}
 	for a := m.min; a < m.max; a += 1 << 12 {
@@ -165,4 +167,80 @@ func (p *Process) addMapping(m *Mapping) error {
 		t0[a>>12%(1<<10)] = m
 	}
 	return nil
+}
+
+// splicedMemory represents a memory space formed from multiple regions.
+// Much of the logic was copied from delve/pkg/proc/core.go.
+type splicedMemory struct {
+	mappings []*Mapping
+}
+
+func (s *splicedMemory) Add(min, max Address, perm Perm, f *os.File, off int64) {
+	if max-min <= 0 {
+		return
+	}
+
+	// Align max.
+	if max%pageSize != 0 {
+		max = (max + pageSize) & ^(pageSize - 1)
+	}
+	// Align min.
+	if gap := min % pageSize; gap != 0 {
+		off -= int64(gap)
+		min -= gap
+	}
+
+	newMappings := make([]*Mapping, 0, len(s.mappings)+1)
+	add := func(m *Mapping) {
+		if m.Size() <= 0 {
+			return
+		}
+		newMappings = append(newMappings, m)
+	}
+
+	inserted := false
+	for _, entry := range s.mappings {
+		switch {
+		case entry.max < min: // entry is completely before the new region.
+			add(entry)
+		case max < entry.min: // entry is completely after the new region.
+			if !inserted {
+				add(&Mapping{min: min, max: max, perm: perm, f: f, off: off})
+				inserted = true
+			}
+			add(entry)
+		case min <= entry.min && entry.max <= max:
+			// entry is completely overwritten by the new region. Drop.
+		case entry.min <= min && entry.max <= max:
+			// new region overwrites the end of the entry.
+			entry.max = min
+			add(entry)
+		case min <= entry.min && max <= entry.max:
+			// new region overwrites the begining of the entry.
+			if !inserted {
+				add(&Mapping{min: min, max: max, perm: perm, f: f, off: off})
+				inserted = true
+			}
+			entry.off += int64(max - entry.min)
+			entry.min = max
+			add(entry)
+		case entry.min < min && max < entry.max:
+			// new region punches a hole in the entry.
+			entry2 := *entry
+
+			entry.max = min
+			entry2.off += int64(max - entry.min)
+			entry2.min = max
+			add(entry)
+			add(&Mapping{min: min, max: max, perm: perm, f: f, off: off})
+			add(&entry2)
+			inserted = true
+		default:
+			panic(fmt.Sprintf("Unhandled case: existing entry is (min:0x%x max:0x%x), new entry is (min:0x%x max:0x%x)", entry.min, entry.max, min, max))
+		}
+	}
+	if !inserted {
+		add(&Mapping{min: min, max: max, perm: perm, f: f, off: off})
+	}
+	s.mappings = newMappings
 }
