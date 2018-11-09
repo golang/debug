@@ -419,11 +419,9 @@ func findEntryPoint(auxvDesc []byte, order binary.ByteOrder) (Address, bool) {
 		var tag, val uint64
 		if err := binary.Read(buf, order, &tag); err != nil {
 			panic(err)
-			return 0, false
 		}
 		if err := binary.Read(buf, order, &val); err != nil {
 			panic(err)
-			return 0, false
 		}
 		if tag == _AT_ENTRY_AMD64 {
 			return Address(val), true
