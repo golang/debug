@@ -15,3 +15,18 @@ testdata directory as the base directory.
 
 core1.10 is produced in the same way, except using go1.10.0.
 core1.11 is produced in the same way, except using go1.11.0.
+
+
+steps for subsequent versions:
+
+mkdir /tmp/coretest
+cd /tmp/coretest
+rm -fr *   // in case there's old junk there
+cat the above program into test.go
+go build test.go
+ulimit -c unlimited
+GOTRACEBACK=crash ./test
+zip 1.12.zip /tmp/coretest/core /tmp/coretest/test  // use your version number
+
+Then move the 1.12.zip to this directory.
+Add a new test to TestVersions in ../gocore_test.go.

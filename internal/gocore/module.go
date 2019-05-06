@@ -69,7 +69,12 @@ func (m *module) readFunc(r region, pcln region) *Func {
 		a = a.Add(4)
 	}
 	a = a.Align(r.p.proc.PtrSize())
-	n = r.Field("nfuncdata").Int32()
+
+	if nfd := r.Field("nfuncdata"); nfd.typ.Size == 1 { // go 1.12 and beyond, this is a uint8
+		n = int32(nfd.Uint8())
+	} else { // go 1.11 and earlier, this is an int32
+		n = nfd.Int32()
+	}
 	for i := int32(0); i < n; i++ {
 		f.funcdata = append(f.funcdata, r.p.proc.ReadPtr(a))
 		a = a.Add(r.p.proc.PtrSize())

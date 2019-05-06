@@ -400,8 +400,14 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			}
 		case spanFree:
 			freeSpanSize += spanSize
-			nReleased := int64(s.Field("npreleased").Uintptr())
-			releasedSpanSize += nReleased * pageSize
+			if s.HasField("npreleased") { // go 1.11 and earlier
+				nReleased := int64(s.Field("npreleased").Uintptr())
+				releasedSpanSize += nReleased * pageSize
+			} else { // go 1.12 and beyond
+				if s.Field("scavenged").Bool() {
+					releasedSpanSize += spanSize
+				}
+			}
 		case spanDead:
 			// These are just deallocated span descriptors. They use no heap.
 		case spanManual:

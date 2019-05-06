@@ -7,8 +7,15 @@
 package gocore
 
 import (
+	"archive/zip"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"os"
+	"path"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"golang.org/x/debug/internal/core"
@@ -36,7 +43,26 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 	if version == "1.9" {
 		version = ""
 	}
-	c, err := core.Core(fmt.Sprintf("testdata/core%s", version), "testdata", "")
+	var file string
+	var base string
+	if strings.HasSuffix(version, ".zip") {
+		// Make temporary directory.
+		dir, err := ioutil.TempDir("", strings.TrimSuffix(version, ".zip")+"_")
+		if err != nil {
+			t.Fatalf("can't make temp directory: %s", err)
+		}
+		defer os.RemoveAll(dir)
+
+		// Unpack test into directory.
+		unzip(t, filepath.Join("testdata", version), dir)
+
+		file = filepath.Join(dir, "tmp", "coretest", "core")
+		base = dir
+	} else {
+		file = fmt.Sprintf("testdata/core%s", version)
+		base = "testdata"
+	}
+	c, err := core.Core(file, base, "")
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
 	}
@@ -45,6 +71,40 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 		t.Fatalf("can't parse Go core: %s", err)
 	}
 	return p
+}
+
+// unzip unpacks the zip file name into the directory dir.
+func unzip(t *testing.T, name, dir string) {
+	r, err := zip.OpenReader(name)
+	if err != nil {
+		t.Fatalf("can't read zip file %s: %s", name, err)
+	}
+	for _, f := range r.File {
+		rf, err := f.Open()
+		if err != nil {
+			t.Fatalf("can't read entry %s: %s", f.Name, err)
+		}
+		err = os.MkdirAll(path.Dir(filepath.Join(dir, f.Name)), 0777)
+		if err != nil {
+			t.Fatalf("can't make directory: %s", err)
+		}
+		wf, err := os.Create(filepath.Join(dir, f.Name))
+		if err != nil {
+			t.Fatalf("can't write entry %s: %s", f.Name, err)
+		}
+		_, err = io.Copy(wf, rf)
+		if err != nil {
+			t.Fatalf("can't copy %s: %s", f.Name, err)
+		}
+		err = rf.Close()
+		if err != nil {
+			t.Fatalf("can't close reader %s: %s", f.Name, err)
+		}
+		err = wf.Close()
+		if err != nil {
+			t.Fatalf("can't close writer %s: %s", f.Name, err)
+		}
+	}
 }
 
 func TestObjects(t *testing.T) {
@@ -197,4 +257,5 @@ func TestDynamicType(t *testing.T) {
 func TestVersions(t *testing.T) {
 	loadExampleVersion(t, "1.10")
 	loadExampleVersion(t, "1.11")
+	loadExampleVersion(t, "1.12.zip")
 }

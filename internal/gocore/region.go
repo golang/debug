@@ -102,6 +102,15 @@ func (r region) Uint8() uint8 {
 	return r.p.proc.ReadUint8(r.a)
 }
 
+// Bool returns the bool value stored in r.
+// r must have type bool.
+func (r region) Bool() bool {
+	if r.typ.Kind != KindBool {
+		panic("bad bool type " + r.typ.Name)
+	}
+	return r.p.proc.ReadUint8(r.a) != 0
+}
+
 // String returns the value of the string stored in r.
 func (r region) String() string {
 	if r.typ.Kind != KindString {
