@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Skip aix for now: github.com/chzyer/readline doesn't support it.
+// (https://golang.org/issue/32839)
+//
+// +build !aix
+
 // The viewcore tool is a command-line tool for exploring the state of a Go process
 // that has dumped core.
 // Run "viewcore help" for a list of commands.
