@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -28,6 +29,9 @@ import (
 //         _ = *(*int)(nil)
 // }
 func loadExample(t *testing.T) *Process {
+	if runtime.GOOS == "android" {
+		t.Skip("skipping test on android")
+	}
 	c, err := core.Core("testdata/core", "testdata", "")
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
