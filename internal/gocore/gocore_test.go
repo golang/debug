@@ -29,6 +29,7 @@ import (
 //         _ = *(*int)(nil)
 // }
 func loadExample(t *testing.T) *Process {
+	t.Helper()
 	if runtime.GOOS == "android" {
 		t.Skip("skipping test on android")
 	}
@@ -44,6 +45,10 @@ func loadExample(t *testing.T) *Process {
 }
 
 func loadExampleVersion(t *testing.T, version string) *Process {
+	t.Helper()
+	if runtime.GOOS == "android" {
+		t.Skip("skipping test on android")
+	}
 	if version == "1.9" {
 		version = ""
 	}
@@ -79,6 +84,7 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 
 // unzip unpacks the zip file name into the directory dir.
 func unzip(t *testing.T, name, dir string) {
+	t.Helper()
 	r, err := zip.OpenReader(name)
 	if err != nil {
 		t.Fatalf("can't read zip file %s: %s", name, err)
