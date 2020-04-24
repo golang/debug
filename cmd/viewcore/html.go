@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build !aix
+// +build !aix,!plan9
 // (https://golang.org/issue/32839)
 
 package main
