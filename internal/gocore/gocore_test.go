@@ -269,4 +269,5 @@ func TestVersions(t *testing.T) {
 	loadExampleVersion(t, "1.11")
 	loadExampleVersion(t, "1.12.zip")
 	loadExampleVersion(t, "1.13.zip")
+	loadExampleVersion(t, "1.13.3.zip")
 }

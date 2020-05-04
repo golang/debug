@@ -306,6 +306,14 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			panic("weird mapping " + m.Perm().String())
 		}
 	}
+	if mheap.HasField("curArena") {
+		// Subtract from the heap unallocated space
+		// in the current arena.
+		ca := mheap.Field("curArena")
+		unused := int64(ca.Field("end").Uintptr() - ca.Field("base").Uintptr())
+		heap -= unused
+		all -= unused
+	}
 	pageSize := p.rtConstants["_PageSize"]
 
 	// Span types
