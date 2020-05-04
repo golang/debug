@@ -354,7 +354,11 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 				spanSize -= pageSize
 			}
 		}
-		switch s.Field("state").Uint8() {
+		st := s.Field("state")
+		if st.IsStruct() && st.HasField("s") { // go1.14+
+			st = st.Field("s")
+		}
+		switch st.Uint8() {
 		case spanInUse:
 			inUseSpanSize += spanSize
 			n := int64(s.Field("nelems").Uintptr())

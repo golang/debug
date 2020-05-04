@@ -188,3 +188,7 @@ func (r region) ArrayIndex(i int64) region {
 	}
 	return region{p: r.p, a: r.a.Add(i * r.typ.Elem.Size), typ: r.typ.Elem}
 }
+
+func (r region) IsStruct() bool {
+	return r.typ.Kind == KindStruct
+}
