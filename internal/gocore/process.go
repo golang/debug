@@ -7,6 +7,7 @@ package gocore
 import (
 	"debug/dwarf"
 	"fmt"
+	"math/bits"
 	"strings"
 	"sync"
 
@@ -306,7 +307,7 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			panic("weird mapping " + m.Perm().String())
 		}
 	}
-	if mheap.HasField("curArena") {
+	if mheap.HasField("curArena") { // go1.13.3 and up
 		// Subtract from the heap unallocated space
 		// in the current arena.
 		ca := mheap.Field("curArena")
@@ -429,6 +430,54 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 				manualAllocSize -= elemSize
 				manualFreeSize += elemSize
 			}
+		}
+	}
+	if mheap.HasField("pages") { // go1.14+
+		// There are no longer "free" mspans to represent unused pages.
+		// Instead, there are just holes in the pagemap into which we can allocate.
+		// Look through the page allocator and count the total free space.
+		// Also keep track of how much has been scavenged.
+		pages := mheap.Field("pages")
+		chunks := pages.Field("chunks")
+		arenaBaseOffset := p.rtConstants["arenaBaseOffset"]
+		pallocChunkBytes := p.rtConstants["pallocChunkBytes"]
+		pallocChunksL1Bits := p.rtConstants["pallocChunksL1Bits"]
+		pallocChunksL2Bits := p.rtConstants["pallocChunksL2Bits"]
+		inuse := pages.Field("inUse")
+		ranges := inuse.Field("ranges")
+		for i := int64(0); i < ranges.SliceLen(); i++ {
+			r := ranges.SliceIndex(i)
+			base := core.Address(r.Field("base").Uintptr())
+			limit := core.Address(r.Field("limit").Uintptr())
+			chunkBase := (int64(base) + arenaBaseOffset) / pallocChunkBytes
+			chunkLimit := (int64(limit) + arenaBaseOffset) / pallocChunkBytes
+			for chunkIdx := chunkBase; chunkIdx < chunkLimit; chunkIdx++ {
+				var l1, l2 int64
+				if pallocChunksL1Bits == 0 {
+					l2 = chunkIdx
+				} else {
+					l1 = chunkIdx >> uint(pallocChunksL2Bits)
+					l2 = chunkIdx & (1<<uint(pallocChunksL2Bits) - 1)
+				}
+				chunk := chunks.ArrayIndex(l1).Deref().ArrayIndex(l2)
+				// Count the free bits in this chunk.
+				alloc := chunk.Field("pallocBits")
+				for i := int64(0); i < pallocChunkBytes/pageSize/64; i++ {
+					freeSpanSize += int64(bits.OnesCount64(^alloc.ArrayIndex(i).Uint64())) * pageSize
+				}
+				// Count the scavenged bits in this chunk.
+				scavenged := chunk.Field("scavenged")
+				for i := int64(0); i < pallocChunkBytes/pageSize/64; i++ {
+					releasedSpanSize += int64(bits.OnesCount64(scavenged.ArrayIndex(i).Uint64())) * pageSize
+				}
+			}
+		}
+		// Also count pages in the page cache for each P.
+		allp := p.rtGlobals["allp"]
+		for i := int64(0); i < allp.SliceLen(); i++ {
+			pcache := allp.SliceIndex(i).Deref().Field("pcache")
+			freeSpanSize += int64(bits.OnesCount64(pcache.Field("cache").Uint64())) * pageSize
+			releasedSpanSize += int64(bits.OnesCount64(pcache.Field("scav").Uint64())) * pageSize
 		}
 	}
 
