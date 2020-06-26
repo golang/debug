@@ -173,6 +173,15 @@ type arena struct {
 	spanTableMax core.Address
 }
 
+func (p *Process) getArenaBaseOffset() int64 {
+	if x, ok := p.rtConstants["arenaBaseOffsetUintptr"]; ok { // go1.15+
+		// arenaBaseOffset changed sign in 1.15. Callers treat this
+		// value as it was specified in 1.14, so we negate it here.
+		return -x
+	}
+	return p.rtConstants["arenaBaseOffset"]
+}
+
 func (p *Process) readHeap() {
 	ptrSize := p.proc.PtrSize()
 	logPtrSize := p.proc.LogPtrSize()
@@ -212,7 +221,7 @@ func (p *Process) readHeap() {
 		if arenaSize%heapInfoSize != 0 {
 			panic("arenaSize not a multiple of heapInfoSize")
 		}
-		arenaBaseOffset := p.rtConstants["arenaBaseOffset"]
+		arenaBaseOffset := p.getArenaBaseOffset()
 		if ptrSize == 4 && arenaBaseOffset != 0 {
 			panic("arenaBaseOffset must be 0 for 32-bit inferior")
 		}
@@ -439,7 +448,7 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 		// Also keep track of how much has been scavenged.
 		pages := mheap.Field("pages")
 		chunks := pages.Field("chunks")
-		arenaBaseOffset := p.rtConstants["arenaBaseOffset"]
+		arenaBaseOffset := p.getArenaBaseOffset()
 		pallocChunkBytes := p.rtConstants["pallocChunkBytes"]
 		pallocChunksL1Bits := p.rtConstants["pallocChunksL1Bits"]
 		pallocChunksL2Bits := p.rtConstants["pallocChunksL2Bits"]
@@ -447,8 +456,16 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 		ranges := inuse.Field("ranges")
 		for i := int64(0); i < ranges.SliceLen(); i++ {
 			r := ranges.SliceIndex(i)
-			base := core.Address(r.Field("base").Uintptr())
-			limit := core.Address(r.Field("limit").Uintptr())
+			baseField := r.Field("base")
+			if baseField.IsStruct() { // go 1.15+
+				baseField = baseField.Field("a")
+			}
+			base := core.Address(baseField.Uintptr())
+			limitField := r.Field("limit")
+			if limitField.IsStruct() { // go 1.15+
+				limitField = limitField.Field("a")
+			}
+			limit := core.Address(limitField.Uintptr())
 			chunkBase := (int64(base) + arenaBaseOffset) / pallocChunkBytes
 			chunkLimit := (int64(limit) + arenaBaseOffset) / pallocChunkBytes
 			for chunkIdx := chunkBase; chunkIdx < chunkLimit; chunkIdx++ {
