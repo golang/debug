@@ -1,5 +1,7 @@
 # Go Debug
 
+[![Go Reference](https://pkg.go.dev/badge/golang.org/x/debug.svg)](https://pkg.go.dev/golang.org/x/debug)
+
 This repository holds utilities and libraries for debugging Go programs.
 
 **WARNING!**
