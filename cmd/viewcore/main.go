@@ -5,6 +5,7 @@
 // Skip aix and plan9 for now: github.com/chzyer/readline doesn't support them.
 // (https://golang.org/issue/32839)
 //
+//go:build !aix && !plan9
 // +build !aix,!plan9
 
 // The viewcore tool is a command-line tool for exploring the state of a Go process
