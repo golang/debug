@@ -259,9 +259,9 @@ func (p *Process) readHeap() {
 				n := bitmap.ArrayLen()
 				for i := int64(0); i < n; i++ {
 					m := bitmap.ArrayIndex(i).Uint8()
-					for j := int64(0); j < 8; j++ {
+					for j := int64(0); j < 4; j++ {
 						if m>>uint(j)&1 != 0 {
-							p.setHeapPtr(min.Add((i*8 + j) * ptrSize))
+							p.setHeapPtr(min.Add((i*4 + j) * ptrSize))
 						}
 					}
 				}
