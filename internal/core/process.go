@@ -503,6 +503,11 @@ func (p *Process) openMappedFile(fname string, m *Mapping) (*os.File, error) {
 		return backing.f, backing.err
 	}
 
+	if m.perm&Exec == 0 {
+		// Ignore mapped files without executable regions
+		return nil, nil
+	}
+
 	backing := &file{}
 
 	isMainExe := m.perm&Exec != 0 && p.mainExecName == "" // first executable region
@@ -638,7 +643,7 @@ func (p *Process) readDebugInfo() error {
 		}
 		e, err := elf.NewFile(f.f)
 		if err != nil {
-			return err
+			return fmt.Errorf("can't open EFL file %s: %v", f.f.Name(), err)
 		}
 
 		syms, err := e.Symbols()
