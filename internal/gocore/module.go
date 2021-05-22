@@ -59,23 +59,23 @@ func (m *module) readFunc(r region, pcln region) *Func {
 	f := &Func{module: m, r: r}
 	f.entry = core.Address(r.Field("entry").Uintptr())
 	f.name = r.p.proc.ReadCString(pcln.SliceIndex(int64(r.Field("nameoff").Int32())).a)
-	f.frameSize.read(r.p.proc, pcln.SliceIndex(int64(r.Field("pcsp").Int32())).a)
+	f.frameSize.read(r.p.proc, pcln.SliceIndex(int64(r.Field("pcsp").Uint32())).a)
 
 	// Parse pcdata and funcdata, which are laid out beyond the end of the _func.
 	a := r.a.Add(int64(r.p.findType("runtime._func").Size))
-	n := r.Field("npcdata").Int32()
-	for i := int32(0); i < n; i++ {
+	n := r.Field("npcdata").Uint32()
+	for i := uint32(0); i < n; i++ {
 		f.pcdata = append(f.pcdata, r.p.proc.ReadInt32(a))
 		a = a.Add(4)
 	}
 	a = a.Align(r.p.proc.PtrSize())
 
 	if nfd := r.Field("nfuncdata"); nfd.typ.Size == 1 { // go 1.12 and beyond, this is a uint8
-		n = int32(nfd.Uint8())
+		n = uint32(nfd.Uint8())
 	} else { // go 1.11 and earlier, this is an int32
-		n = nfd.Int32()
+		n = uint32(nfd.Int32())
 	}
-	for i := int32(0); i < n; i++ {
+	for i := uint32(0); i < n; i++ {
 		f.funcdata = append(f.funcdata, r.p.proc.ReadPtr(a))
 		a = a.Add(r.p.proc.PtrSize())
 	}
