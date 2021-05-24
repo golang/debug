@@ -7,6 +7,7 @@ package gocore
 import (
 	"debug/dwarf"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -58,6 +59,23 @@ func (p *Process) readDWARFTypes() {
 			t.Kind = KindStruct
 			for _, f := range x.Field {
 				fType := p.dwarfMap[f.Type]
+				if fType == nil {
+					// Weird case: arrays of size 0 in structs, like
+					// Sysinfo_t.X_f. Synthesize a type so things later don't
+					// get sad.
+					if arr, ok := f.Type.(*dwarf.ArrayType); ok && arr.Count == 0 {
+						fType = &Type{
+							Name:  f.Type.String(),
+							Kind:  KindArray,
+							Count: arr.Count,
+							Elem:  p.dwarfMap[arr.Type],
+						}
+					} else {
+						panic(fmt.Sprintf(
+							"found a nil ftype for field %s.%s, type %s (%s) on ",
+							x.StructName, f.Name, f.Type, reflect.TypeOf(f.Type)))
+					}
+				}
 
 				// Work around issue 21094. There's no guarantee that the
 				// pointer type is in the DWARF, so just invent a Type.
