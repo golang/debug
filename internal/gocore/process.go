@@ -258,10 +258,16 @@ func (p *Process) readHeap() {
 				// Copy out ptr/nonptr bits
 				n := bitmap.ArrayLen()
 				for i := int64(0); i < n; i++ {
+					// The nth byte is composed of 4 object bits and 4 live/dead
+					// bits. We ignore the 4 live/dead bits, which are on the
+					// high order side of the byte.
+					//
+					// See mbitmap.go for more information on the format of
+					// the bitmap field of heapArena.
 					m := bitmap.ArrayIndex(i).Uint8()
-					for j := int64(0); j < 8; j++ {
+					for j := int64(0); j < 4; j++ {
 						if m>>uint(j)&1 != 0 {
-							p.setHeapPtr(min.Add((i*8 + j) * ptrSize))
+							p.setHeapPtr(min.Add((i*4 + j) * ptrSize))
 						}
 					}
 				}

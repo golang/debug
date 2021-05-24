@@ -285,13 +285,13 @@ func runRoot(cmd *cobra.Command, args []string) {
 		cmd.Usage()
 		return
 	}
+	// Interactive mode.
+	cfg.interactive = true
+
 	p, _, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
-
-	// Interactive mode.
-	cfg.interactive = true
 
 	// Create a dummy root to run in shell.
 	root := &cobra.Command{}
