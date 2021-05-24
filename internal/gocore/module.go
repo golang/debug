@@ -35,6 +35,8 @@ func (p *Process) readModule(r region) *module {
 
 	// Read the pc->function table
 	pcln := r.Field("pclntable")
+	pctab := r.Field("pctab")
+	funcnametab := r.Field("funcnametab")
 	ftab := r.Field("ftab")
 	n := ftab.SliceLen() - 1 // last slot is a dummy, just holds entry
 	for i := int64(0); i < n; i++ {
@@ -42,7 +44,7 @@ func (p *Process) readModule(r region) *module {
 		min := core.Address(ft.Field("entry").Uintptr())
 		max := core.Address(ftab.SliceIndex(i + 1).Field("entry").Uintptr())
 		fr := pcln.SliceIndex(int64(ft.Field("funcoff").Uintptr())).Cast("runtime._func")
-		f := m.readFunc(fr, pcln)
+		f := m.readFunc(fr, pctab, funcnametab)
 		if f.entry != min {
 			panic(fmt.Errorf("entry %x and min %x don't match for %s", f.entry, min, f.name))
 		}
@@ -55,22 +57,24 @@ func (p *Process) readModule(r region) *module {
 // readFunc parses a runtime._func and returns a *Func.
 // r must have type runtime._func.
 // pcln must have type []byte and represent the module's pcln table region.
-func (m *module) readFunc(r region, pcln region) *Func {
+func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	f := &Func{module: m, r: r}
 	f.entry = core.Address(r.Field("entry").Uintptr())
-	f.name = r.p.proc.ReadCString(pcln.SliceIndex(int64(r.Field("nameoff").Int32())).a)
-	f.frameSize.read(r.p.proc, pcln.SliceIndex(int64(r.Field("pcsp").Uint32())).a)
+	f.name = r.p.proc.ReadCString(funcnametab.SliceIndex(int64(r.Field("nameoff").Int32())).a)
+	f.frameSize.read(r.p.proc, pctab.SliceIndex(int64(r.Field("pcsp").Uint32())).a)
 
 	// Parse pcdata and funcdata, which are laid out beyond the end of the _func.
-	a := r.a.Add(int64(r.p.findType("runtime._func").Size))
 	n := r.Field("npcdata").Uint32()
+	nfd := r.Field("nfuncdata")
+	a := nfd.a.Add(nfd.typ.Size)
+
 	for i := uint32(0); i < n; i++ {
 		f.pcdata = append(f.pcdata, r.p.proc.ReadInt32(a))
 		a = a.Add(4)
 	}
 	a = a.Align(r.p.proc.PtrSize())
 
-	if nfd := r.Field("nfuncdata"); nfd.typ.Size == 1 { // go 1.12 and beyond, this is a uint8
+	if nfd.typ.Size == 1 { // go 1.12 and beyond, this is a uint8
 		n = uint32(nfd.Uint8())
 	} else { // go 1.11 and earlier, this is an int32
 		n = uint32(nfd.Int32())
@@ -82,7 +86,7 @@ func (m *module) readFunc(r region, pcln region) *Func {
 
 	// Read pcln tables we need.
 	if stackmap := int(r.p.rtConstants["_PCDATA_StackMapIndex"]); stackmap < len(f.pcdata) {
-		f.stackMap.read(r.p.proc, pcln.SliceIndex(int64(f.pcdata[stackmap])).a)
+		f.stackMap.read(r.p.proc, pctab.SliceIndex(int64(f.pcdata[stackmap])).a)
 	} else {
 		f.stackMap.setEmpty()
 	}
