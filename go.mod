@@ -5,7 +5,7 @@ go 1.17
 require (
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
 	github.com/spf13/cobra v0.0.3
-	golang.org/x/sys v0.0.0-20191113165036-4c7a9d0fe056
+	golang.org/x/sys v0.0.0-20211025201205-69cdffdb9359
 )
 
 require (
