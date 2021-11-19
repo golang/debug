@@ -333,7 +333,10 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			panic("weird mapping " + m.Perm().String())
 		}
 	}
-	if mheap.HasField("curArena") { // go1.13.3 and up
+	if p.minorVersion < 17 && mheap.HasField("curArena") {
+		// go1.13.3 and up has curArena.
+		// In Go 1.17, we ... don't need to do this any longer. See patch
+		// bd6aeca9686d5e672ffda1ea0cfeac7a3e7a20a4
 		// Subtract from the heap unallocated space
 		// in the current arena.
 		ca := mheap.Field("curArena")
