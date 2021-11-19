@@ -8,6 +8,7 @@ import (
 	"debug/dwarf"
 	"fmt"
 	"math/bits"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -54,6 +55,7 @@ type Process struct {
 	stats *Stats
 
 	buildVersion string
+	minorVersion int
 
 	globals []*Root
 
@@ -153,6 +155,15 @@ func Core(proc *core.Process) (p *Process, err error) {
 
 	// Read all the data that depend on runtime globals.
 	p.buildVersion = p.rtGlobals["buildVersion"].String()
+	versionComponents := strings.Split(p.buildVersion, ".")
+	if len(versionComponents) < 2 {
+		panic("malformed version " + p.buildVersion)
+	}
+	p.minorVersion, err = strconv.Atoi(versionComponents[1])
+	if err != nil {
+		panic("malformed version " + p.buildVersion)
+	}
+
 	p.readModules()
 	p.readHeap()
 	p.readGs()
