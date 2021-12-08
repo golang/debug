@@ -27,6 +27,7 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/debug/internal/core"
 	"golang.org/x/debug/internal/gocore"
 )
@@ -253,6 +254,17 @@ var coreCache = &struct {
 	err     error
 }{}
 
+func ResetSubCommandFlagValues(root *cobra.Command) {
+	for _, c := range root.Commands() {
+		c.Flags().VisitAll(func(f *pflag.Flag) {
+			if f.Changed {
+				f.Value.Set(f.DefValue)
+				f.Changed = false
+			}
+		})
+	}
+}
+
 // readCore reads corefile and returns core and gocore process states.
 func readCore() (*core.Process, *gocore.Process, error) {
 	cc := coreCache
@@ -345,7 +357,7 @@ func runRoot(cmd *cobra.Command, args []string) {
 		}
 
 		err = capturePanic(func() {
-			root.ResetFlags()
+			ResetSubCommandFlagValues(root)
 			root.SetArgs(strings.Fields(l))
 			root.Execute()
 		})
