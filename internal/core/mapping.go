@@ -216,7 +216,7 @@ func (s *splicedMemory) Add(min, max Address, perm Perm, f *os.File, off int64) 
 			entry.max = min
 			add(entry)
 		case min <= entry.min && max <= entry.max:
-			// new region overwrites the begining of the entry.
+			// new region overwrites the beginning of the entry.
 			if !inserted {
 				add(&Mapping{min: min, max: max, perm: perm, f: f, off: off})
 				inserted = true
