@@ -466,6 +466,11 @@ func (p *Process) typeHeap() {
 		for len(work) > 0 {
 			c := work[len(work)-1]
 			work = work[:len(work)-1]
+			switch c.t.Kind {
+			case KindBool, KindInt, KindUint, KindFloat, KindComplex:
+				// Don't do O(n) function calls for big primitive slices
+				continue
+			}
 			for i := int64(0); i < c.r; i++ {
 				p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
 			}

@@ -8,6 +8,7 @@ import (
 	"debug/dwarf"
 	"fmt"
 	"math/bits"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -54,6 +55,7 @@ type Process struct {
 	stats *Stats
 
 	buildVersion string
+	minorVersion int
 
 	globals []*Root
 
@@ -153,6 +155,15 @@ func Core(proc *core.Process) (p *Process, err error) {
 
 	// Read all the data that depend on runtime globals.
 	p.buildVersion = p.rtGlobals["buildVersion"].String()
+	versionComponents := strings.Split(p.buildVersion, ".")
+	if len(versionComponents) < 2 {
+		panic("malformed version " + p.buildVersion)
+	}
+	p.minorVersion, err = strconv.Atoi(versionComponents[1])
+	if err != nil {
+		panic("malformed version " + p.buildVersion)
+	}
+
 	p.readModules()
 	p.readHeap()
 	p.readGs()
@@ -258,10 +269,16 @@ func (p *Process) readHeap() {
 				// Copy out ptr/nonptr bits
 				n := bitmap.ArrayLen()
 				for i := int64(0); i < n; i++ {
+					// The nth byte is composed of 4 object bits and 4 live/dead
+					// bits. We ignore the 4 live/dead bits, which are on the
+					// high order side of the byte.
+					//
+					// See mbitmap.go for more information on the format of
+					// the bitmap field of heapArena.
 					m := bitmap.ArrayIndex(i).Uint8()
-					for j := int64(0); j < 8; j++ {
+					for j := int64(0); j < 4; j++ {
 						if m>>uint(j)&1 != 0 {
-							p.setHeapPtr(min.Add((i*8 + j) * ptrSize))
+							p.setHeapPtr(min.Add((i*4 + j) * ptrSize))
 						}
 					}
 				}
@@ -316,7 +333,10 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			panic("weird mapping " + m.Perm().String())
 		}
 	}
-	if mheap.HasField("curArena") { // go1.13.3 and up
+	if p.minorVersion < 17 && mheap.HasField("curArena") {
+		// go1.13.3 and up has curArena.
+		// In Go 1.17, we ... don't need to do this any longer. See patch
+		// bd6aeca9686d5e672ffda1ea0cfeac7a3e7a20a4
 		// Subtract from the heap unallocated space
 		// in the current arena.
 		ca := mheap.Field("curArena")
