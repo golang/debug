@@ -30,7 +30,6 @@ import (
 //         _ = *(*int)(nil)
 // }
 func loadExample(t *testing.T) *Process {
-	// return loadExampleVersion(t, "1.16.zip")
 	t.Helper()
 	if runtime.GOOS == "android" {
 		t.Skip("skipping test on android")
