@@ -80,9 +80,11 @@ func (p *Process) reverseEdges() {
 
 // ForEachReversePtr calls fn for all pointers it finds pointing to y.
 // It calls fn with:
-//   the object or root which points to y (exactly one will be non-nil)
-//   the offset i in that object or root where the pointer appears.
-//   the offset j in y where the pointer points.
+//
+//	the object or root which points to y (exactly one will be non-nil)
+//	the offset i in that object or root where the pointer appears.
+//	the offset j in y where the pointer points.
+//
 // If fn returns false, ForEachReversePtr returns immediately.
 func (p *Process) ForEachReversePtr(y Object, fn func(x Object, r *Root, i, j int64) bool) {
 	p.reverseEdges()

@@ -98,7 +98,6 @@ type opener interface {
 
 // elfOpener implements the opener interface for ELF
 // (https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) binaries
-//
 type elfOpener struct {
 }
 

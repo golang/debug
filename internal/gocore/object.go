@@ -247,9 +247,11 @@ func (p *Process) Type(x Object) (*Type, int64) {
 
 // ForEachPtr calls fn for all heap pointers it finds in x.
 // It calls fn with:
-//   the offset of the pointer slot in x
-//   the pointed-to object y
-//   the offset in y where the pointer points.
+//
+//	the offset of the pointer slot in x
+//	the pointed-to object y
+//	the offset in y where the pointer points.
+//
 // If fn returns false, ForEachPtr returns immediately.
 // For an edge from an object to its finalizer, the first argument
 // passed to fn will be -1. (TODO: implement)

@@ -252,9 +252,10 @@ func dwarfSize(dt dwarf.Type, ptrSize int64) int64 {
 // gocoreName generates the name this package uses to refer to a dwarf type.
 // This name differs from the dwarf name in that it stays closer to the Go name for the type.
 // For instance (dwarf name -> gocoreName)
-//   struct runtime.siginfo -> runtime.siginfo
-//   *void -> unsafe.Pointer
-//   struct struct { runtime.signalLock uint32; runtime.hz int32 } -> struct { signalLock uint32; hz int32 }
+//
+//	struct runtime.siginfo -> runtime.siginfo
+//	*void -> unsafe.Pointer
+//	struct struct { runtime.signalLock uint32; runtime.hz int32 } -> struct { signalLock uint32; hz int32 }
 func gocoreName(dt dwarf.Type) string {
 	switch x := dt.(type) {
 	case *dwarf.PtrType:

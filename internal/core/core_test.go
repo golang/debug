@@ -14,10 +14,12 @@ import (
 
 // loadExample loads a simple core file which resulted from running the
 // following program on linux/amd64 with go 1.9.0 (the earliest supported runtime):
-// package main
-// func main() {
-//         _ = *(*int)(nil)
-// }
+//
+//	package main
+//
+//	func main() {
+//		_ = *(*int)(nil)
+//	}
 func loadExample(t *testing.T, useExePath bool) *Process {
 	t.Helper()
 	var p *Process
