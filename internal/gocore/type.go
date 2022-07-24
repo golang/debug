@@ -99,7 +99,7 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 		if x == 0 {
 			return nil
 		}
-		return p.runtimeType2Type(x)
+		return p.runtimeType2Type(x, a.Add(p.proc.PtrSize()))
 	case KindIface:
 		x := p.proc.ReadPtr(a)
 		if x == 0 {
@@ -107,7 +107,7 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 		}
 		// Read type out of itab.
 		x = p.proc.ReadPtr(x.Add(p.proc.PtrSize()))
-		return p.runtimeType2Type(x)
+		return p.runtimeType2Type(x, a.Add(p.proc.PtrSize()))
 	}
 }
 
@@ -133,7 +133,7 @@ func readNameLen(p *Process, a core.Address) (int64, int64) {
 
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
-func (p *Process) runtimeType2Type(a core.Address) *Type {
+func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if t := p.runtimeMap[a]; t != nil {
 		return t
 	}
@@ -191,6 +191,22 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 	for _, t := range p.runtimeNameMap[name] {
 		if size == t.Size && equal(ptrs, t.ptrs()) {
 			candidates = append(candidates, t)
+		}
+	}
+	// There may be multiple candidates, when they are the pointers to the same struct name,
+	// in the same package name, but in the different package paths. eg. path-1/pkg.Foo and path-2/pkg.Foo.
+	// Match the object size may be a proper choice, just for try best, since we have no other choices.
+	if len(candidates) > 1 && nptrs == 1 && candidates[0].Size == ptrSize {
+		o := p.proc.ReadPtr(d)
+		sz := p.Size(Object(o))
+		var tmp []*Type
+		for _, t := range candidates {
+			if t.Elem != nil && t.Elem.Size == sz {
+				tmp = append(tmp, t)
+			}
+		}
+		if len(tmp) > 0 {
+			candidates = tmp
 		}
 	}
 	var t *Type
@@ -591,7 +607,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
-		typ := p.runtimeType2Type(typPtr)
+		typ := p.runtimeType2Type(typPtr, data)
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
 			// Indirect interface: the interface introduced a new
