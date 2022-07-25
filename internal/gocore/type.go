@@ -527,7 +527,7 @@ func (fr *frameReader) ReadInt(a core.Address) int64 {
 }
 
 // Match struct method. eg. main.(*Bar).func
-var methodRegexp = regexp.MustCompile(`([\w]+)\.\((\*[\w]+)\)\.[\w-]+$`)
+var methodRegexp = regexp.MustCompile(`([\w]+)\.\(\*([\w]+)\)\.[\w-]+$`)
 
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
@@ -622,7 +622,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// handle the special case for struct method.
 		// the closure argument must be the struct/pointer, when the closure function is a method of the struct.
 		if matches := methodRegexp.FindStringSubmatch(f.name); len(matches) == 3 {
-			typeName := matches[1] + "." + matches[2]
+			typeName := "*" + matches[1] + "." + matches[2]
 			s := p.runtimeNameMap[typeName]
 			if len(s) > 0 {
 				typ := s[0]
