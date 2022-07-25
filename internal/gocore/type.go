@@ -643,9 +643,13 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		for _, f := range t.Fields {
 			// sync.entry.p(in sync.map) is an unsafe.pointer to an empty interface.
 			if t.Name == "sync.entry" && f.Name == "p" && f.Type.Kind == KindPtr && f.Type.Elem == nil {
-				f.Type.Elem = &Type{
-					Name: "sync.entry<interface{}>",
-					Kind: KindEface,
+				ptr := r.ReadPtr(a.Add(f.Off))
+				if ptr != 0 {
+					typ := &Type{
+						Name: "sync.entry<interface{}>",
+						Kind: KindEface,
+					}
+					p.typeObject(ptr, typ, r, add)
 				}
 			}
 			p.typeObject(a.Add(f.Off), f.Type, r, add)
