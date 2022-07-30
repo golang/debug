@@ -649,7 +649,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 						Name: "sync.entry<interface{}>",
 						Kind: KindEface,
 					}
-					p.typeObject(ptr, typ, r, add)
+					add(ptr, typ, 1)
 				}
 			}
 			p.typeObject(a.Add(f.Off), f.Type, r, add)
