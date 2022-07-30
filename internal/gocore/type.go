@@ -110,6 +110,8 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 	}
 }
 
+// return the number of bytes of the variable int and its value,
+// which means the length of a name.
 func readNameLen(p *Process, a core.Address) (int64, int64) {
 	if p.minorVersion >= 17 {
 		v := 0
