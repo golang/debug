@@ -132,6 +132,7 @@ func readNameLen(p *Process, a core.Address) (int64, int64) {
 }
 
 // Convert the address of a runtime._type to a *Type.
+// The "d" is the address of the second field of an interface.
 // Guaranteed to return a non-nil *Type.
 func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if t := p.runtimeMap[a]; t != nil {
@@ -197,16 +198,27 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	// in the same package name, but in the different package paths. eg. path-1/pkg.Foo and path-2/pkg.Foo.
 	// Match the object size may be a proper choice, just for try best, since we have no other choices.
 	if len(candidates) > 1 && nptrs == 1 && candidates[0].Size == ptrSize {
-		o := p.proc.ReadPtr(d)
-		sz := p.Size(Object(o))
-		var tmp []*Type
-		for _, t := range candidates {
-			if t.Elem != nil && t.Elem.Size == sz {
-				tmp = append(tmp, t)
-			}
+		ptr := p.proc.ReadPtr(d)
+		if ifaceIndir(a, p) {
+			// Indirect interface: the interface introduced a new
+			// level of indirection, not reflected in the type.
+			// Read through it.
+			ptr = p.proc.ReadPtr(ptr)
 		}
-		if len(tmp) > 0 {
-			candidates = tmp
+		obj, off := p.FindObject(ptr)
+		// only usefull while it point to the head of an object,
+		// otherwise, the GC object size should bigger than t.Elem.Size.
+		if obj != 0 && off == 0 {
+			sz := p.Size(obj)
+			var tmp []*Type
+			for _, t := range candidates {
+				if t.Elem != nil && t.Elem.Size == sz {
+					tmp = append(tmp, t)
+				}
+			}
+			if len(tmp) > 0 {
+				candidates = tmp
+			}
 		}
 	}
 	var t *Type
@@ -585,6 +597,15 @@ func extractTypeFromFunctionName(method string, p *Process) *Type {
 	return nil
 }
 
+// ifaceIndir reports whether t is stored indirectly in an interface value.
+func ifaceIndir(t core.Address, p *Process) bool {
+	typr := region{p: p, a: t, typ: p.findType("runtime._type")}
+	if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
+		return true
+	}
+	return false
+}
+
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
 // and the type + repeat count of the thing that it points to.
@@ -608,8 +629,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
 		typ := p.runtimeType2Type(typPtr, data)
-		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
-		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
+		if ifaceIndir(typPtr, p) {
 			// Indirect interface: the interface introduced a new
 			// level of indirection, not reflected in the type.
 			// Read through it.
