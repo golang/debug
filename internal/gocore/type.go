@@ -110,6 +110,26 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 	}
 }
 
+// return the number of bytes of the variable int and its value,
+// which means the length of a name.
+func readNameLen(p *Process, a core.Address) (int64, int64) {
+	if p.minorVersion >= 17 {
+		v := 0
+		for i := 0; ; i++ {
+			x := p.proc.ReadUint8(a.Add(int64(i + 1)))
+			v += int(x&0x7f) << (7 * i)
+			if x&0x80 == 0 {
+				return int64(i + 1), int64(v)
+			}
+		}
+	} else {
+		n1 := p.proc.ReadUint8(a.Add(1))
+		n2 := p.proc.ReadUint8(a.Add(2))
+		n := uint16(n1)<<8 + uint16(n2)
+		return 2, int64(n)
+	}
+}
+
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
 func (p *Process) runtimeType2Type(a core.Address) *Type {
@@ -134,9 +154,9 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 	var name string
 	if m != nil {
 		x := m.types.Add(int64(r.Field("str").Int32()))
-		n := uint16(p.proc.ReadUint8(x.Add(1)))<<8 + uint16(p.proc.ReadUint8(x.Add(2)))
+		i, n := readNameLen(p, x)
 		b := make([]byte, n)
-		p.proc.ReadAt(b, x.Add(3))
+		p.proc.ReadAt(b, x.Add(i+1))
 		name = string(b)
 		if r.Field("tflag").Uint8()&uint8(p.rtConstants["tflagExtraStar"]) != 0 {
 			name = name[1:]
