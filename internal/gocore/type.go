@@ -132,7 +132,7 @@ func readNameLen(p *Process, a core.Address) (int64, int64) {
 }
 
 // Convert the address of a runtime._type to a *Type.
-// The "d" is the address of the second field of an interface.
+// The "d" is the address of the second field of an interface, used to help disambiguate types.
 // Guaranteed to return a non-nil *Type.
 func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if t := p.runtimeMap[a]; t != nil {
@@ -194,26 +194,30 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 			candidates = append(candidates, t)
 		}
 	}
-	// There may be multiple candidates, when they are the pointers to the same struct name,
+	// There may be multiple candidates, when they are the pointers to the same type name,
 	// in the same package name, but in the different package paths. eg. path-1/pkg.Foo and path-2/pkg.Foo.
 	// Match the object size may be a proper choice, just for try best, since we have no other choices.
-	if len(candidates) > 1 && nptrs == 1 && candidates[0].Size == ptrSize {
+	if len(candidates) > 1 {
 		ptr := p.proc.ReadPtr(d)
+		deref := true
 		if ifaceIndir(a, p) {
-			// Indirect interface: the interface introduced a new
-			// level of indirection, not reflected in the type.
-			// Read through it.
-			ptr = p.proc.ReadPtr(ptr)
+			deref = false
 		}
 		obj, off := p.FindObject(ptr)
 		// only usefull while it point to the head of an object,
-		// otherwise, the GC object size should bigger than t.Elem.Size.
+		// otherwise, the GC object size should bigger than the size of the type.
 		if obj != 0 && off == 0 {
 			sz := p.Size(obj)
 			var tmp []*Type
 			for _, t := range candidates {
-				if t.Elem != nil && t.Elem.Size == sz {
-					tmp = append(tmp, t)
+				if deref {
+					if t.Elem != nil && t.Elem.Size == sz {
+						tmp = append(tmp, t)
+					}
+				} else {
+					if t.Size == sz {
+						tmp = append(tmp, t)
+					}
 				}
 			}
 			if len(tmp) > 0 {
