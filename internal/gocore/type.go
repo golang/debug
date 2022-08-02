@@ -6,6 +6,7 @@ package gocore
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"golang.org/x/debug/internal/core"
@@ -545,6 +546,29 @@ func (fr *frameReader) ReadInt(a core.Address) int64 {
 	return fr.p.proc.ReadInt(a)
 }
 
+// Match wrapper function name for method value.
+// eg. main.(*Bar).func-fm, or main.Bar.func-fm.
+var methodRegexp = regexp.MustCompile(`(\w+)\.(\(\*)?(\w+)(\))?\.\w+\-fm$`)
+
+// Extract the type of the method value from its wrapper function name,
+// return the type named *main.Bar or main.Bar, in the previous cases.
+func extractTypeFromFunctionName(method string, p *Process) *Type {
+	if matches := methodRegexp.FindStringSubmatch(method); len(matches) == 5 {
+		var typeName string
+		if matches[2] == "(*" && matches[4] == ")" {
+			typeName = "*" + matches[1] + "." + matches[3]
+		} else {
+			typeName = matches[1] + "." + matches[3]
+		}
+		s := p.runtimeNameMap[typeName]
+		if len(s) > 0 {
+			// TODO: filter with the object size when there are multiple candidates.
+			return s[0]
+		}
+	}
+	return nil
+}
+
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
 // and the type + repeat count of the thing that it points to.
@@ -635,6 +659,12 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			f.closure = ft
 		}
 		p.typeObject(closure, ft, r, add)
+		// handle the special case for method value.
+		// It's a single-entry closure laid out like {pc uintptr, x T}.
+		if typ := extractTypeFromFunctionName(f.name, p); typ != nil {
+			ptr := closure.Add(p.proc.PtrSize())
+			p.typeObject(ptr, typ, r, add)
+		}
 	case KindArray:
 		n := t.Elem.Size
 		for i := int64(0); i < t.Count; i++ {
