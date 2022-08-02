@@ -197,12 +197,9 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	// There may be multiple candidates, when they are the pointers to the same type name,
 	// in the same package name, but in the different package paths. eg. path-1/pkg.Foo and path-2/pkg.Foo.
 	// Match the object size may be a proper choice, just for try best, since we have no other choices.
-	if len(candidates) > 1 {
+	// If the interface is of type T, for direct interfaces, that pointer points to a T.Elem.
+	if len(candidates) > 1 && !ifaceIndir(a, p) {
 		ptr := p.proc.ReadPtr(d)
-		deref := true
-		if ifaceIndir(a, p) {
-			deref = false
-		}
 		obj, off := p.FindObject(ptr)
 		// only usefull while it point to the head of an object,
 		// otherwise, the GC object size should bigger than the size of the type.
@@ -210,14 +207,8 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 			sz := p.Size(obj)
 			var tmp []*Type
 			for _, t := range candidates {
-				if deref {
-					if t.Elem != nil && t.Elem.Size == sz {
-						tmp = append(tmp, t)
-					}
-				} else {
-					if t.Size == sz {
-						tmp = append(tmp, t)
-					}
+				if t.Elem != nil && t.Elem.Size == sz {
+					tmp = append(tmp, t)
 				}
 			}
 			if len(tmp) > 0 {
