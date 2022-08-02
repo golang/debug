@@ -277,3 +277,81 @@ func TestVersions(t *testing.T) {
 	loadExampleVersion(t, "1.16.zip")
 	loadExampleVersion(t, "1.17.zip")
 }
+
+func loadZipCore(t *testing.T, name string) *Process {
+	t.Helper()
+	if runtime.GOOS == "android" {
+		t.Skip("skipping test on android")
+	}
+	// Make temporary directory.
+	dir, err := ioutil.TempDir("", name+"_")
+	if err != nil {
+		t.Fatalf("can't make temp directory: %s", err)
+	}
+	// defer os.RemoveAll(dir)
+
+	// Unpack bin file into directory.
+	unzip(t, filepath.Join("testdata", name+".zip"), dir)
+
+	// Unpack core file into directory.
+	unzip(t, filepath.Join("testdata", name+".core.zip"), dir)
+
+	exe := filepath.Join(dir, name)
+	file := filepath.Join(dir, name+".core")
+	c, err := core.Core(file, dir, exe)
+	if err != nil {
+		t.Fatalf("can't load test core file: %s", err)
+	}
+	p, err := Core(c)
+	if err != nil {
+		t.Fatalf("can't parse Go core: %s", err)
+	}
+	return p
+}
+
+func TestRuntimeTypes(t *testing.T) {
+	p := loadZipCore(t, "runtimetype")
+	// Check the type of a few objects.
+	for _, s := range [...]struct {
+		addr   core.Address
+		size   int64
+		kind   Kind
+		name   string
+		repeat int64
+	}{
+		{0xc0000160b0, 16, KindStruct, "example.com/m/path-a/pkg.T1", 1},
+		{0xc0000160c0, 16, KindStruct, "example.com/m/path-a/pkg.T2", 1},
+		{0xc000014160, 32, KindStruct, "example.com/m/path-b/pkg.T1", 1},
+		{0xc000014180, 32, KindStruct, "example.com/m/path-b/pkg.T2", 1},
+	} {
+		x, i := p.FindObject(s.addr)
+		if x == 0 {
+			t.Errorf("can't find object at %x", s.addr)
+			continue
+		}
+		if i != 0 {
+			t.Errorf("offset(%x)=%d, want 0", s.addr, i)
+		}
+		if p.Size(x) != s.size {
+			t.Errorf("size(%x)=%d, want %d", s.addr, p.Size(x), s.size)
+		}
+		typ, repeat := p.Type(x)
+		if typ.Kind != s.kind {
+			t.Errorf("kind(%x)=%s, want %s", s.addr, typ.Kind, s.kind)
+		}
+		if typ.Name != s.name {
+			t.Errorf("name(%x)=%s, want %s", s.addr, typ.Name, s.name)
+		}
+		if repeat != s.repeat {
+			t.Errorf("repeat(%x)=%d, want %d", s.addr, repeat, s.repeat)
+		}
+
+		y, i := p.FindObject(s.addr + 1)
+		if y != x {
+			t.Errorf("can't find object at %x", s.addr+1)
+		}
+		if i != 1 {
+			t.Errorf("offset(%x)=%d, want i", s.addr, i)
+		}
+	}
+}
