@@ -288,16 +288,13 @@ func loadZipCore(t *testing.T, name string) *Process {
 	if err != nil {
 		t.Fatalf("can't make temp directory: %s", err)
 	}
-	// defer os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
 
-	// Unpack bin file into directory.
+	// Unpack bin file and core file into directory.
 	unzip(t, filepath.Join("testdata", name+".zip"), dir)
 
-	// Unpack core file into directory.
-	unzip(t, filepath.Join("testdata", name+".core.zip"), dir)
-
 	exe := filepath.Join(dir, name)
-	file := filepath.Join(dir, name+".core")
+	file := filepath.Join(dir, "core")
 	c, err := core.Core(file, dir, exe)
 	if err != nil {
 		t.Fatalf("can't load test core file: %s", err)
@@ -319,10 +316,10 @@ func TestRuntimeTypes(t *testing.T) {
 		name   string
 		repeat int64
 	}{
-		{0xc0000160b0, 16, KindStruct, "example.com/m/path-a/pkg.T1", 1},
-		{0xc0000160c0, 16, KindStruct, "example.com/m/path-a/pkg.T2", 1},
-		{0xc000014160, 32, KindStruct, "example.com/m/path-b/pkg.T1", 1},
-		{0xc000014180, 32, KindStruct, "example.com/m/path-b/pkg.T2", 1},
+		{0xc00018e000, 16, KindStruct, "example.com/m/path-a/pkg.T1", 1},
+		{0xc00018e010, 16, KindStruct, "example.com/m/path-a/pkg.T2", 1},
+		{0xc000190000, 32, KindStruct, "example.com/m/path-b/pkg.T1", 1},
+		{0xc000190020, 32, KindStruct, "example.com/m/path-b/pkg.T2", 1},
 	} {
 		x, i := p.FindObject(s.addr)
 		if x == 0 {
