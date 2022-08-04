@@ -5,14 +5,10 @@ import (
 	pkgb "example.com/m/path-b/pkg"
 )
 
-var values []interface{}
-
-var (
-	g []interface{}
-)
+var global []interface{}
 
 func main() {
-	g = append(g, pkga.NewIfaceDirect(), pkga.NewIfaceInDirect(), pkgb.NewIfaceDirect(), pkgb.NewIfaceInDirect())
+	global = append(global, pkga.NewIfaceDirect(), pkga.NewIfaceInDirect(), pkgb.NewIfaceDirect(), pkgb.NewIfaceInDirect())
 
 	_ = *(*int)(nil)
 }
