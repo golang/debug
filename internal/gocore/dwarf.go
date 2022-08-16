@@ -348,7 +348,7 @@ func runtimeName(dt dwarf.Type) string {
 	}
 }
 
-var pathRegexp = regexp.MustCompile(`([\w.]+/)+\w+`)
+var pathRegexp = regexp.MustCompile(`([\w.-]+/)+\w+`)
 
 func stripPackagePath(name string) string {
 	// The runtime uses just package names. DWARF uses whole package paths.

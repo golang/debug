@@ -30,3 +30,16 @@ zip 1.12.zip /tmp/coretest/core /tmp/coretest/test  // use your version number
 
 Then move the 1.12.zip to this directory.
 Add a new test to TestVersions in ../gocore_test.go.
+
+## runtimetype
+
+This directory also contains the source code to generate the runtimetype core,
+which is used to test getting runtime type for a interface.
+
+steps for generate runtimetype core:
+
+cd testdata/runtimetype
+go build -o runtimetype .
+ulimit -c unlimited
+GOTRACEBACK=crash ./runtimetype
+zip runtimetype.zip runtimetype core
