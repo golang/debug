@@ -46,9 +46,21 @@ func (p *Process) readModule(r region) *module {
 	n := ftab.SliceLen() - 1 // last slot is a dummy, just holds entry
 	for i := int64(0); i < n; i++ {
 		ft := ftab.SliceIndex(i)
-		min := core.Address(ft.Field("entry").Uintptr())
-		max := core.Address(ftab.SliceIndex(i + 1).Field("entry").Uintptr())
-		fr := pcln.SliceIndex(int64(ft.Field("funcoff").Uintptr())).Cast("runtime._func")
+		var min, max core.Address
+		var funcoff int64
+		if p.minorVersion >= 18 {
+			min = m.textAddr(ft.Field("entryoff").Uint32())
+			max = m.textAddr(ftab.SliceIndex(i + 1).Field("entryoff").Uint32())
+			funcoff = int64(ft.Field("funcoff").Uint32())
+		} else {
+			// Prior to 1.18, functab.entry directly referenced the
+			// entries.
+			min = core.Address(ft.Field("entry").Uintptr())
+			max = core.Address(ftab.SliceIndex(i + 1).Field("entry").Uintptr())
+			// funcoff changed type, but had the same meaning.
+			funcoff = int64(ft.Field("funcoff").Uintptr())
+		}
+		fr := pcln.SliceIndex(funcoff).Cast("runtime._func")
 		var f *Func
 		if p.minorVersion >= 16 {
 			f = m.readFunc(fr, pctab, funcnametab)
@@ -69,7 +81,12 @@ func (p *Process) readModule(r region) *module {
 // pcln must have type []byte and represent the module's pcln table region.
 func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	f := &Func{module: m, r: r}
-	f.entry = core.Address(r.Field("entry").Uintptr())
+	if m.p.minorVersion >= 18 {
+		f.entry = m.textAddr(r.Field("entryoff").Uint32())
+	} else {
+		// Prior to 1.18, _func.entry directly referenced the entries.
+		f.entry = core.Address(r.Field("entry").Uintptr())
+	}
 	f.name = r.p.proc.ReadCString(funcnametab.SliceIndex(int64(r.Field("nameoff").Int32())).a)
 	pcsp := r.Field("pcsp")
 	var pcspIdx int64
@@ -106,8 +123,22 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 		n = uint32(nfd.Int32())
 	}
 	for i := uint32(0); i < n; i++ {
-		f.funcdata = append(f.funcdata, r.p.proc.ReadPtr(a))
-		a = a.Add(r.p.proc.PtrSize())
+		if m.p.minorVersion >= 18 {
+			// Since 1.18, funcdata contains offsets from go.func.*.
+			off := r.p.proc.ReadUint32(a)
+			if off == ^uint32(0) {
+				// No entry.
+				f.funcdata = append(f.funcdata, 0)
+			} else {
+				f.funcdata = append(f.funcdata, core.Address(m.r.Field("gofunc").Uintptr() + uint64(off)))
+			}
+			a = a.Add(4)
+		} else {
+			// Prior to 1.18, funcdata contains pointers directly
+			// to the data.
+			f.funcdata = append(f.funcdata, r.p.proc.ReadPtr(a))
+			a = a.Add(r.p.proc.PtrSize())
+		}
 	}
 
 	// Read pcln tables we need.
@@ -118,6 +149,32 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	}
 
 	return f
+}
+
+// textAddr returns the address of a text offset.
+//
+// Equivalent to runtime.moduledata.textAddr.
+func (m *module) textAddr(off32 uint32) core.Address {
+	off := uint64(off32)
+	res := m.r.Field("text").Uintptr() + off
+
+	textsectmap := m.r.Field("textsectmap")
+	length := textsectmap.SliceLen()
+	if length > 1 {
+		for i := int64(0); i < length; i++ {
+			sect := textsectmap.SliceIndex(i)
+
+			vaddr := sect.Field("vaddr").Uintptr()
+			end := sect.Field("end").Uintptr()
+			baseaddr := sect.Field("baseaddr").Uintptr()
+
+			if off >= vaddr && off < end || (i == length-1 && off == end) {
+				res = baseaddr + off - vaddr
+			}
+		}
+	}
+
+	return core.Address(res)
 }
 
 type funcTabEntry struct {

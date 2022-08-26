@@ -276,6 +276,7 @@ func TestVersions(t *testing.T) {
 	loadExampleVersion(t, "1.14.zip")
 	loadExampleVersion(t, "1.16.zip")
 	loadExampleVersion(t, "1.17.zip")
+	loadExampleVersion(t, "1.18.zip")
 }
 
 func loadZipCore(t *testing.T, name string) *Process {
