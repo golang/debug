@@ -9,10 +9,12 @@ package gocore
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -21,6 +23,7 @@ import (
 	"testing"
 
 	"golang.org/x/debug/internal/core"
+	"golang.org/x/debug/internal/testenv"
 )
 
 // loadTest loads a simple core file which resulted from running the
@@ -83,6 +86,139 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 		t.Fatalf("can't parse Go core: %s", err)
 	}
 	return p
+}
+
+// loadExampleGenerated generates a core from a binary built with
+// runtime.GOROOT().
+func loadExampleGenerated(t *testing.T) *Process {
+	t.Helper()
+	testenv.MustHaveGoBuild(t)
+	switch runtime.GOOS {
+	case "js", "plan9", "windows":
+		t.Skipf("skipping: no core files on %s", runtime.GOOS)
+	}
+	if runtime.GOARCH != "amd64" {
+		t.Skipf("skipping: only parsing of amd64 cores is supported")
+	}
+
+	cleanup := setupCorePattern(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	file, output, err := generateCore(dir)
+	t.Logf("crasher output: %s", output)
+	if err != nil {
+		t.Fatalf("generateCore() got err %v want nil", err)
+	}
+	c, err := core.Core(file, "", "")
+	if err != nil {
+		t.Fatalf("can't load test core file: %s", err)
+	}
+	p, err := Core(c)
+	if err != nil {
+		t.Fatalf("can't parse Go core: %s", err)
+	}
+	return p
+}
+
+func setupCorePattern(t *testing.T) func() {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping: core file pattern check implemented only for Linux")
+	}
+
+	const (
+		corePatternPath = "/proc/sys/kernel/core_pattern"
+		newPattern      = "core"
+	)
+
+	b, err := os.ReadFile(corePatternPath)
+	if err != nil {
+		t.Fatalf("unable to read core pattern: %v", err)
+	}
+	pattern := string(b)
+	t.Logf("original core pattern: %s", pattern)
+
+	// We want a core file in the working directory containing "core" in
+	// the name. If the pattern already matches this, there is nothing to
+	// do. What we don't want:
+	//  - Pipe to another process
+	//  - Path components
+	if !strings.HasPrefix(pattern, "|") && !strings.Contains(pattern, "/") && strings.Contains(pattern, "core") {
+		// Pattern is fine as-is, nothing to do.
+		return func() {}
+	}
+
+	if os.Getenv("GO_BUILDER_NAME") == "" {
+		// Don't change the core pattern on arbitrary machines, as it
+		// has global effect.
+		t.Skipf("skipping: unable to generate core file due to incompatible core pattern %q; set %s to %q", pattern, corePatternPath, newPattern)
+	}
+
+	t.Logf("updating core pattern to %q", newPattern)
+
+	err = os.WriteFile(corePatternPath, []byte(newPattern), 0)
+	if err != nil {
+		t.Skipf("skipping: unable to write core pattern: %v", err)
+	}
+
+	return func() {
+		t.Logf("resetting core pattern to %q", pattern)
+		err := os.WriteFile(corePatternPath, []byte(pattern), 0)
+		if err != nil {
+			t.Errorf("unable to write core pattern back to original value: %v", err)
+		}
+	}
+}
+
+func generateCore(dir string) (string, []byte, error) {
+	goTool, err := testenv.GoTool()
+	if err != nil {
+		return "", nil, fmt.Errorf("cannot find go tool: %w", err)
+	}
+
+	const source = "./testdata/coretest/test.go"
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", nil, fmt.Errorf("erroring getting cwd: %w", err)
+	}
+
+	srcPath := filepath.Join(cwd, source)
+	cmd := exec.Command(goTool, "build", "-o", "test.exe", srcPath)
+	cmd.Dir = dir
+
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", nil, fmt.Errorf("error building crasher: %w\n%s", err, string(b))
+	}
+
+	cmd = exec.Command("./test.exe")
+	cmd.Env = append(os.Environ(), "GOTRACEBACK=crash")
+	cmd.Dir = dir
+
+	b, err = cmd.CombinedOutput()
+	// We expect a crash.
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return "", b, fmt.Errorf("crasher did not crash, got err %T %w", err, err)
+	}
+
+	// Look for any file with "core" in the name.
+	dd, err := os.ReadDir(dir)
+	if err != nil {
+		return "", b, fmt.Errorf("error reading output directory: %w", err)
+	}
+
+	for _, d := range dd {
+		if strings.Contains(d.Name(), "core") {
+			return filepath.Join(dir, d.Name()), b, nil
+		}
+	}
+
+	names := make([]string, 0, len(dd))
+	for _, d := range dd {
+		names = append(names, d.Name())
+	}
+	return "", b, fmt.Errorf("did not find core file in %+v", names)
 }
 
 // unzip unpacks the zip file name into the directory dir.
@@ -268,16 +404,27 @@ func TestDynamicType(t *testing.T) {
 }
 
 func TestVersions(t *testing.T) {
-	loadExampleVersion(t, "1.10")
-	loadExampleVersion(t, "1.11")
-	loadExampleVersion(t, "1.12.zip")
-	loadExampleVersion(t, "1.13.zip")
-	loadExampleVersion(t, "1.13.3.zip")
-	loadExampleVersion(t, "1.14.zip")
-	loadExampleVersion(t, "1.16.zip")
-	loadExampleVersion(t, "1.17.zip")
-	loadExampleVersion(t, "1.18.zip")
-	loadExampleVersion(t, "1.19.zip")
+	versions := []string{
+		"1.10",
+		"1.11",
+		"1.12.zip",
+		"1.13.zip",
+		"1.13.3.zip",
+		"1.14.zip",
+		"1.16.zip",
+		"1.17.zip",
+		"1.18.zip",
+		"1.19.zip",
+	}
+	for _, ver := range versions {
+		t.Run(ver, func(t *testing.T) {
+			loadExampleVersion(t, ver)
+		})
+	}
+
+	t.Run("goroot", func(t *testing.T) {
+		loadExampleGenerated(t)
+	})
 }
 
 func loadZipCore(t *testing.T, name string) *Process {

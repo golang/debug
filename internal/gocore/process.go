@@ -118,7 +118,7 @@ func (p *Process) findType(name string) *Type {
 func Core(proc *core.Process) (p *Process, err error) {
 	// Make sure we have DWARF info.
 	if _, err := proc.DWARF(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error reading dwarf: %w", err)
 	}
 
 	// Guard against failures of proc.Read* routines.
@@ -259,6 +259,7 @@ func (p *Process) readHeap() {
 				min := core.Address(arenaSize*(level2+level1*level2size) - arenaBaseOffset)
 				max := min.Add(arenaSize)
 				bitmap := a.Field("bitmap")
+				oneBitBitmap := a.HasField("noMorePtrs") // Starting in 1.20.
 				spans := a.Field("spans")
 
 				arenas = append(arenas, arena{
@@ -273,16 +274,28 @@ func (p *Process) readHeap() {
 				// Copy out ptr/nonptr bits
 				n := bitmap.ArrayLen()
 				for i := int64(0); i < n; i++ {
-					// The nth byte is composed of 4 object bits and 4 live/dead
-					// bits. We ignore the 4 live/dead bits, which are on the
-					// high order side of the byte.
-					//
-					// See mbitmap.go for more information on the format of
-					// the bitmap field of heapArena.
-					m := bitmap.ArrayIndex(i).Uint8()
-					for j := int64(0); j < 4; j++ {
-						if m>>uint(j)&1 != 0 {
-							p.setHeapPtr(min.Add((i*4 + j) * ptrSize))
+					if oneBitBitmap {
+						// The array uses 1 bit per word of heap. See mbitmap.go for
+						// more information.
+						m := bitmap.ArrayIndex(i).Uintptr()
+						bits := 8 * ptrSize
+						for j := int64(0); j < bits; j++ {
+							if m>>uint(j)&1 != 0 {
+								p.setHeapPtr(min.Add((i*bits + j) * ptrSize))
+							}
+						}
+					} else {
+						// The nth byte is composed of 4 object bits and 4 live/dead
+						// bits. We ignore the 4 live/dead bits, which are on the
+						// high order side of the byte.
+						//
+						// See mbitmap.go for more information on the format of
+						// the bitmap field of heapArena.
+						m := bitmap.ArrayIndex(i).Uint8()
+						for j := int64(0); j < 4; j++ {
+							if m>>uint(j)&1 != 0 {
+								p.setHeapPtr(min.Add((i*4 + j) * ptrSize))
+							}
 						}
 					}
 				}
@@ -391,6 +404,9 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 		st := s.Field("state")
 		if st.IsStruct() && st.HasField("s") { // go1.14+
 			st = st.Field("s")
+		}
+		if st.IsStruct() && st.HasField("value") { // go1.20+
+			st = st.Field("value")
 		}
 		switch st.Uint8() {
 		case spanInUse:
@@ -596,7 +612,11 @@ func (p *Process) readG(r region) *Goroutine {
 			}
 		}
 	}
-	status := r.Field("atomicstatus").Uint32()
+	st := r.Field("atomicstatus")
+	if st.IsStruct() && st.HasField("value") { // go1.20+
+		st = st.Field("value")
+	}
+	status := st.Uint32()
 	status &^= uint32(p.rtConstants["_Gscan"])
 	var sp, pc core.Address
 	switch status {

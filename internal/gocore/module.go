@@ -82,13 +82,22 @@ func (p *Process) readModule(r region) *module {
 // pcln must have type []byte and represent the module's pcln table region.
 func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	f := &Func{module: m, r: r}
-	if r.HasField("entryoff") {
+	var nameOff int32
+	switch {
+	case r.HasField("entryOff"):
+		f.entry = m.textAddr(r.Field("entryOff").Uint32())
+		nameOff = r.Field("nameOff").Int32()
+	case r.HasField("entryoff"):
+		// Prior to 1.20, entryOff and nameOff were named entryoff and
+		// nameoff, respectively.
 		f.entry = m.textAddr(r.Field("entryoff").Uint32())
-	} else {
+		nameOff = r.Field("nameoff").Int32()
+	default:
 		// Prior to 1.18, _func.entry directly referenced the entries.
 		f.entry = core.Address(r.Field("entry").Uintptr())
+		nameOff = r.Field("nameoff").Int32()
 	}
-	f.name = r.p.proc.ReadCString(funcnametab.SliceIndex(int64(r.Field("nameoff").Int32())).a)
+	f.name = r.p.proc.ReadCString(funcnametab.SliceIndex(int64(nameOff)).a)
 	pcsp := r.Field("pcsp")
 	var pcspIdx int64
 	if pcsp.typ.Kind == KindUint {

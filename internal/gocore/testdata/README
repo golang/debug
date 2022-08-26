@@ -20,11 +20,10 @@ core1.11 is produced in the same way, except using go1.11.0.
 steps for subsequent versions:
 
 mkdir /tmp/coretest
+rm -fr /tmp/coretest/*   # in case there's old junk there
+cp coretest/test.go /tmp/coretest
 cd /tmp/coretest
-rm -fr *   // in case there's old junk there
-cat the above program into test.go
 go build test.go
-ulimit -c unlimited
 GOTRACEBACK=crash ./test
 zip 1.12.zip /tmp/coretest/core /tmp/coretest/test  // use your version number
 
