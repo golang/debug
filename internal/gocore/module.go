@@ -130,7 +130,7 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 				// No entry.
 				f.funcdata = append(f.funcdata, 0)
 			} else {
-				f.funcdata = append(f.funcdata, core.Address(m.r.Field("gofunc").Uintptr() + uint64(off)))
+				f.funcdata = append(f.funcdata, core.Address(m.r.Field("gofunc").Uintptr()+uint64(off)))
 			}
 			a = a.Add(4)
 		} else {
