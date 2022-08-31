@@ -37,7 +37,8 @@ func (p *Process) readModule(r region) *module {
 	// Read the pc->function table
 	pcln := r.Field("pclntable")
 	var pctab, funcnametab region
-	if p.minorVersion >= 16 {
+	havePCtab := r.HasField("pctab")
+	if havePCtab {
 		// In 1.16, pclntable was split up into pctab and funcnametab.
 		pctab = r.Field("pctab")
 		funcnametab = r.Field("funcnametab")
@@ -48,7 +49,7 @@ func (p *Process) readModule(r region) *module {
 		ft := ftab.SliceIndex(i)
 		var min, max core.Address
 		var funcoff int64
-		if p.minorVersion >= 18 {
+		if ft.HasField("entryoff") {
 			min = m.textAddr(ft.Field("entryoff").Uint32())
 			max = m.textAddr(ftab.SliceIndex(i + 1).Field("entryoff").Uint32())
 			funcoff = int64(ft.Field("funcoff").Uint32())
@@ -62,7 +63,7 @@ func (p *Process) readModule(r region) *module {
 		}
 		fr := pcln.SliceIndex(funcoff).Cast("runtime._func")
 		var f *Func
-		if p.minorVersion >= 16 {
+		if havePCtab {
 			f = m.readFunc(fr, pctab, funcnametab)
 		} else {
 			f = m.readFunc(fr, pcln, pcln)
@@ -81,7 +82,7 @@ func (p *Process) readModule(r region) *module {
 // pcln must have type []byte and represent the module's pcln table region.
 func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	f := &Func{module: m, r: r}
-	if m.p.minorVersion >= 18 {
+	if r.HasField("entryoff") {
 		f.entry = m.textAddr(r.Field("entryoff").Uint32())
 	} else {
 		// Prior to 1.18, _func.entry directly referenced the entries.
@@ -90,7 +91,7 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	f.name = r.p.proc.ReadCString(funcnametab.SliceIndex(int64(r.Field("nameoff").Int32())).a)
 	pcsp := r.Field("pcsp")
 	var pcspIdx int64
-	if m.p.minorVersion >= 16 {
+	if pcsp.typ.Kind == KindUint {
 		// In 1.16, pcsp changed to be a uint32 from an int32.
 		pcspIdx = int64(pcsp.Uint32())
 	} else {
@@ -102,7 +103,7 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	// In 1.16, npcdata changed to be a uint32 from an int32.
 	npcdata := r.Field("npcdata")
 	var n uint32
-	if m.p.minorVersion >= 16 {
+	if npcdata.typ.Kind == KindUint {
 		// In 1.16, pcsp changed to be a uint32 from an int32.
 		n = uint32(npcdata.Uint32())
 	} else {
@@ -123,7 +124,7 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 		n = uint32(nfd.Int32())
 	}
 	for i := uint32(0); i < n; i++ {
-		if m.p.minorVersion >= 18 {
+		if m.r.HasField("gofunc") {
 			// Since 1.18, funcdata contains offsets from go.func.*.
 			off := r.p.proc.ReadUint32(a)
 			if off == ^uint32(0) {

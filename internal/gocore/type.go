@@ -88,6 +88,10 @@ func (t *Type) field(name string) *Field {
 	return nil
 }
 
+func (t *Type) HasField(name string) bool {
+	return t.field(name) != nil
+}
+
 // DynamicType returns the concrete type stored in the interface type t at address a.
 // If the interface is nil, returns nil.
 func (p *Process) DynamicType(t *Type, a core.Address) *Type {
@@ -114,7 +118,7 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 // return the number of bytes of the variable int and its value,
 // which means the length of a name.
 func readNameLen(p *Process, a core.Address) (int64, int64) {
-	if p.minorVersion >= 17 {
+	if p.is117OrGreater {
 		v := 0
 		for i := 0; ; i++ {
 			x := p.proc.ReadUint8(a.Add(int64(i + 1)))

@@ -8,7 +8,6 @@ import (
 	"debug/dwarf"
 	"fmt"
 	"math/bits"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -55,7 +54,11 @@ type Process struct {
 	stats *Stats
 
 	buildVersion string
-	minorVersion int
+
+	// This is a Go 1.17 process, or higher. This field is used for
+	// differences in behavior that otherwise can't be detected via the
+	// type system.
+	is117OrGreater bool
 
 	globals []*Root
 
@@ -155,14 +158,15 @@ func Core(proc *core.Process) (p *Process, err error) {
 
 	// Read all the data that depend on runtime globals.
 	p.buildVersion = p.rtGlobals["buildVersion"].String()
-	versionComponents := strings.Split(p.buildVersion, ".")
-	if len(versionComponents) < 2 {
-		panic("malformed version " + p.buildVersion)
-	}
-	p.minorVersion, err = strconv.Atoi(versionComponents[1])
-	if err != nil {
-		panic("malformed version " + p.buildVersion)
-	}
+
+	// runtime._type varint name length encoding, and mheap curArena
+	// counting changed behavior in 1.17 without explicitly related type
+	// changes, making the difference difficult to detect. As a workaround,
+	// we check on the version explicitly.
+	//
+	// Go 1.17 added runtime._func.flag, so use that as a sentinal for this
+	// version.
+	p.is117OrGreater = p.findType("runtime._func").HasField("flag")
 
 	p.readModules()
 	p.readHeap()
@@ -333,12 +337,12 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			panic("weird mapping " + m.Perm().String())
 		}
 	}
-	if p.minorVersion < 17 && mheap.HasField("curArena") {
-		// go1.13.3 and up has curArena.
-		// In Go 1.17, we ... don't need to do this any longer. See patch
-		// bd6aeca9686d5e672ffda1ea0cfeac7a3e7a20a4
-		// Subtract from the heap unallocated space
-		// in the current arena.
+	if !p.is117OrGreater && mheap.HasField("curArena") {
+		// 1.13.3 and up have curArena. Subtract unallocated space in
+		// the current arena from the heap.
+		//
+		// As of 1.17, the runtime does this automatically
+		// (https://go.dev/cl/270537).
 		ca := mheap.Field("curArena")
 		unused := int64(ca.Field("end").Uintptr() - ca.Field("base").Uintptr())
 		heap -= unused
