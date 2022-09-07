@@ -480,14 +480,14 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 
 			if m.f == nil {
 				m.f = f
-				m.off = int64(off) + m.min.Sub(min)
+				m.off = off + m.min.Sub(min)
 			} else {
 				// Data is both in the core file and in a mapped file.
 				// The mapped file may be stale (even if it is readonly now,
 				// it may have been writeable at some point).
 				// Keep the file+offset just for printing.
 				m.origF = f
-				m.origOff = int64(off) + m.min.Sub(min)
+				m.origOff = off + m.min.Sub(min)
 			}
 		}
 	}
