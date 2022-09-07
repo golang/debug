@@ -105,7 +105,7 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 	var n uint32
 	if npcdata.typ.Kind == KindUint {
 		// In 1.16, pcsp changed to be a uint32 from an int32.
-		n = uint32(npcdata.Uint32())
+		n = npcdata.Uint32()
 	} else {
 		n = uint32(npcdata.Int32())
 	}
