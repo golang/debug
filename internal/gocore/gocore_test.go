@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
@@ -62,7 +61,7 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 	var base string
 	if strings.HasSuffix(version, ".zip") {
 		// Make temporary directory.
-		dir, err := ioutil.TempDir("", strings.TrimSuffix(version, ".zip")+"_")
+		dir, err := os.MkdirTemp("", strings.TrimSuffix(version, ".zip")+"_")
 		if err != nil {
 			t.Fatalf("can't make temp directory: %s", err)
 		}
@@ -433,7 +432,7 @@ func loadZipCore(t *testing.T, name string) *Process {
 		t.Skip("skipping test on android")
 	}
 	// Make temporary directory.
-	dir, err := ioutil.TempDir("", name+"_")
+	dir, err := os.MkdirTemp("", name+"_")
 	if err != nil {
 		t.Fatalf("can't make temp directory: %s", err)
 	}
