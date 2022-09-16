@@ -28,7 +28,6 @@ package dwtest_test
 
 import (
 	"bytes"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,12 +52,12 @@ func copyFilesForHarness(t *testing.T) string {
 	}
 	cp := func(from, to string) {
 		var payload []byte
-		payload, err := ioutil.ReadFile(from)
+		payload, err := os.ReadFile(from)
 		if err != nil {
-			t.Fatalf("ioutil.ReadFile failed: %v", err)
+			t.Fatalf("os.ReadFile failed: %v", err)
 		}
-		if err = ioutil.WriteFile(to, payload, 0644); err != nil {
-			t.Fatalf("ioutil.WriteFile failed: %v", err)
+		if err = os.WriteFile(to, payload, 0644); err != nil {
+			t.Fatalf("os.WriteFile failed: %v", err)
 		}
 	}
 	join := filepath.Join
@@ -109,7 +108,7 @@ func runHarness(t *testing.T, harnessPath string, exePath string, fcn string) st
 // Return value is binary path.
 func gobuild(t *testing.T, sourceCode string, pname string) string {
 	spath := filepath.Join(t.TempDir(), pname+".go")
-	if err := ioutil.WriteFile(spath, []byte(sourceCode), 0644); err != nil {
+	if err := os.WriteFile(spath, []byte(sourceCode), 0644); err != nil {
 		t.Fatalf("write to %s failed: %s", spath, err)
 	}
 	epath := filepath.Join(t.TempDir(), pname+".exe")
