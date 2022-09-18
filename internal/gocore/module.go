@@ -6,6 +6,7 @@ package gocore
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"golang.org/x/debug/internal/core"
@@ -266,7 +267,7 @@ func (t *pcTab) read(core *core.Process, data core.Address) {
 }
 
 func (t *pcTab) setEmpty() {
-	t.entries = []pcTabEntry{{bytes: 1<<63 - 1, val: -1}}
+	t.entries = []pcTabEntry{{bytes: math.MaxInt64, val: -1}}
 }
 
 func (t *pcTab) find(off int64) (int64, error) {
