@@ -6,7 +6,7 @@ require (
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
 	github.com/spf13/cobra v0.0.3
 	github.com/spf13/pflag v1.0.3
-	golang.org/x/sys v0.0.0-20211025201205-69cdffdb9359
+	golang.org/x/sys v0.1.0
 )
 
 require (
