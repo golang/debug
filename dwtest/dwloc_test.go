@@ -28,6 +28,8 @@ package dwtest_test
 
 import (
 	"bytes"
+	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,13 +40,15 @@ import (
 	"golang.org/x/debug/internal/testenv"
 )
 
+var preserveTemp = flag.Bool("keep", false, "keep tmpdir files for debugging")
+
 // copyFilesForHarness copies various files into the build dir for the
 // harness, including the main package, go.mod, and a copy of the
 // dwtest package (the latter is why we are doing an explicit copy as
 // opposed to just building directly from sources in testdata).
 // Return value is the path to a build directory for the harness
 // build.
-func copyFilesForHarness(t *testing.T) string {
+func copyFilesForHarness(t *testing.T, dir string) string {
 	mkdir := func(d string) {
 		if err := os.Mkdir(d, 0777); err != nil {
 			t.Fatalf("mkdir failed: %v", err)
@@ -61,7 +65,7 @@ func copyFilesForHarness(t *testing.T) string {
 		}
 	}
 	join := filepath.Join
-	bd := join(t.TempDir(), "build")
+	bd := join(dir, "build")
 	bdt := join(bd, "dwtest")
 	mkdir(bd)
 	mkdir(bdt)
@@ -73,13 +77,13 @@ func copyFilesForHarness(t *testing.T) string {
 }
 
 // buildHarness builds the helper program "dwdumploc.exe".
-func buildHarness(t *testing.T) string {
+func buildHarness(t *testing.T, dir string) string {
 
 	// Copy source files into build dir.
-	bd := copyFilesForHarness(t)
+	bd := copyFilesForHarness(t, dir)
 
 	// Run build.
-	harnessPath := filepath.Join(t.TempDir(), "dumpdwloc.exe")
+	harnessPath := filepath.Join(dir, "dumpdwloc.exe")
 	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", harnessPath)
 	cmd.Dir = bd
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -106,12 +110,12 @@ func runHarness(t *testing.T, harnessPath string, exePath string, fcn string) st
 // gobuild is a helper to bulid a Go program from source code,
 // so that we can inspect selected bits of DWARF in the resulting binary.
 // Return value is binary path.
-func gobuild(t *testing.T, sourceCode string, pname string) string {
-	spath := filepath.Join(t.TempDir(), pname+".go")
+func gobuild(t *testing.T, sourceCode string, pname string, dir string) string {
+	spath := filepath.Join(dir, pname+".go")
 	if err := os.WriteFile(spath, []byte(sourceCode), 0644); err != nil {
 		t.Fatalf("write to %s failed: %s", spath, err)
 	}
-	epath := filepath.Join(t.TempDir(), pname+".exe")
+	epath := filepath.Join(dir, pname+".exe")
 
 	// A note on this build: Delve currently has problems digesting
 	// PIE binaries on Windows; until this can be straightened out,
@@ -242,13 +246,23 @@ func TestDwarfVariableLocations(t *testing.T) {
 		t.Skipf("unsupported OS/ARCH pair %s (this tests supports only OS values supported by Delve", pair)
 	}
 
+	tdir := t.TempDir()
+	if *preserveTemp {
+		if td, err := os.MkdirTemp("", "dwloctest"); err != nil {
+			t.Fatal(err)
+		} else {
+			tdir = td
+			fmt.Fprintf(os.Stderr, "** preserving tmpdir %s\n", td)
+		}
+	}
+
 	// Build test harness.
-	harnessPath := buildHarness(t)
+	harnessPath := buildHarness(t, tdir)
 
 	// Build program to inspect. NB: we're building at default (with
 	// optimization); it might also be worth doing a "-l -N" build
 	// to verify the location expressions in that case.
-	ppath := gobuild(t, programSourceCode, "prog")
+	ppath := gobuild(t, programSourceCode, "prog", tdir)
 
 	// Sub-tests for each function we want to inspect.
 	t.Run("Issue47354", func(t *testing.T) {
