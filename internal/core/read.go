@@ -15,7 +15,7 @@ import (
 // and stores them in b.
 func (p *Process) ReadAt(b []byte, a Address) {
 	for {
-		m := p.findMapping(a)
+		m := p.pageTable.findMapping(a)
 		if m == nil {
 			panic(fmt.Errorf("address %x is not mapped in the core file", a))
 		}
@@ -31,7 +31,7 @@ func (p *Process) ReadAt(b []byte, a Address) {
 
 // ReadUint8 returns a uint8 read from address a of the inferior.
 func (p *Process) ReadUint8(a Address) uint8 {
-	m := p.findMapping(a)
+	m := p.pageTable.findMapping(a)
 	if m == nil {
 		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
@@ -40,7 +40,7 @@ func (p *Process) ReadUint8(a Address) uint8 {
 
 // ReadUint16 returns a uint16 read from address a of the inferior.
 func (p *Process) ReadUint16(a Address) uint16 {
-	m := p.findMapping(a)
+	m := p.pageTable.findMapping(a)
 	if m == nil {
 		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
@@ -50,7 +50,7 @@ func (p *Process) ReadUint16(a Address) uint16 {
 		b = buf[:]
 		p.ReadAt(b, a)
 	}
-	if p.littleEndian {
+	if p.meta.littleEndian {
 		return binary.LittleEndian.Uint16(b)
 	}
 	return binary.BigEndian.Uint16(b)
@@ -58,7 +58,7 @@ func (p *Process) ReadUint16(a Address) uint16 {
 
 // ReadUint32 returns a uint32 read from address a of the inferior.
 func (p *Process) ReadUint32(a Address) uint32 {
-	m := p.findMapping(a)
+	m := p.pageTable.findMapping(a)
 	if m == nil {
 		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
@@ -68,7 +68,7 @@ func (p *Process) ReadUint32(a Address) uint32 {
 		b = buf[:]
 		p.ReadAt(b, a)
 	}
-	if p.littleEndian {
+	if p.meta.littleEndian {
 		return binary.LittleEndian.Uint32(b)
 	}
 	return binary.BigEndian.Uint32(b)
@@ -76,7 +76,7 @@ func (p *Process) ReadUint32(a Address) uint32 {
 
 // ReadUint64 returns a uint64 read from address a of the inferior.
 func (p *Process) ReadUint64(a Address) uint64 {
-	m := p.findMapping(a)
+	m := p.pageTable.findMapping(a)
 	if m == nil {
 		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
@@ -86,7 +86,7 @@ func (p *Process) ReadUint64(a Address) uint64 {
 		b = buf[:]
 		p.ReadAt(b, a)
 	}
-	if p.littleEndian {
+	if p.meta.littleEndian {
 		return binary.LittleEndian.Uint64(b)
 	}
 	return binary.BigEndian.Uint64(b)
@@ -114,7 +114,7 @@ func (p *Process) ReadInt64(a Address) int64 {
 
 // ReadUintptr returns a uint of pointer size read from address a of the inferior.
 func (p *Process) ReadUintptr(a Address) uint64 {
-	if p.ptrSize == 4 {
+	if p.meta.ptrSize == 4 {
 		return uint64(p.ReadUint32(a))
 	}
 	return p.ReadUint64(a)
@@ -122,7 +122,7 @@ func (p *Process) ReadUintptr(a Address) uint64 {
 
 // ReadInt returns an int (of pointer size) read from address a of the inferior.
 func (p *Process) ReadInt(a Address) int64 {
-	if p.ptrSize == 4 {
+	if p.meta.ptrSize == 4 {
 		return int64(p.ReadInt32(a))
 	}
 	return p.ReadInt64(a)

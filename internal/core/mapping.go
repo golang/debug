@@ -29,6 +29,16 @@ type Mapping struct {
 	contents []byte
 }
 
+// namedMapping is equivalent to Mapping, just using the filename rather than
+// opened file.
+type namedMapping struct {
+	min Address
+	max Address
+
+	f   string // filename backing this region
+	off int64  // offset of start of this mapping in f
+}
+
 // Min returns the lowest virtual address of the mapping.
 func (m *Mapping) Min() Address {
 	return m.min
@@ -112,8 +122,8 @@ type pageTable4 [1 << 12]*pageTable3
 const pageSize Address = 1 << 12
 
 // findMapping is simple enough that it inlines.
-func (p *Process) findMapping(a Address) *Mapping {
-	t3 := p.pageTable[a>>52]
+func (p *pageTable4) findMapping(a Address) *Mapping {
+	t3 := p[a>>52]
 	if t3 == nil {
 		return nil
 	}
@@ -132,7 +142,7 @@ func (p *Process) findMapping(a Address) *Mapping {
 	return t0[a>>12%(1<<10)]
 }
 
-func (p *Process) addMapping(m *Mapping) error {
+func (p *pageTable4) addMapping(m *Mapping) error {
 	if m.min%(pageSize) != 0 {
 		return fmt.Errorf("mapping start %x isn't a multiple of 4096", m.min)
 	}
@@ -141,10 +151,10 @@ func (p *Process) addMapping(m *Mapping) error {
 	}
 	for a := m.min; a < m.max; a += 1 << 12 {
 		i3 := a >> 52
-		t3 := p.pageTable[i3]
+		t3 := p[i3]
 		if t3 == nil {
 			t3 = new(pageTable3)
-			p.pageTable[i3] = t3
+			p[i3] = t3
 		}
 		i2 := a >> 42 % (1 << 10)
 		t2 := t3[i2]
@@ -243,4 +253,30 @@ func (s *splicedMemory) Add(min, max Address, perm Perm, f *os.File, off int64) 
 		add(&Mapping{min: min, max: max, perm: perm, f: f, off: off})
 	}
 	s.mappings = newMappings
+}
+
+// splitMappingsAt ensures that a is not in the middle of any mapping.
+// Splits mappings as necessary.
+func (s *splicedMemory) splitMappingsAt(a Address) {
+	for _, m := range s.mappings {
+		if a < m.min || a > m.max {
+			continue
+		}
+		if a == m.min || a == m.max {
+			return
+		}
+		// Split this mapping at a.
+		m2 := new(Mapping)
+		*m2 = *m
+		m.max = a
+		m2.min = a
+		if m2.f != nil {
+			m2.off += m.Size()
+		}
+		if m2.origF != nil {
+			m2.origOff += m.Size()
+		}
+		s.mappings = append(s.mappings, m2)
+		return
+	}
 }

@@ -45,7 +45,7 @@ func TestMappings(t *testing.T) {
 		}
 
 		a := s["main.main"]
-		m := p.findMapping(a)
+		m := p.pageTable.findMapping(a)
 		if m == nil {
 			t.Errorf("text mapping missing")
 		}
@@ -61,7 +61,7 @@ func TestMappings(t *testing.T) {
 		}
 
 		a = s["runtime.class_to_size"]
-		m = p.findMapping(a)
+		m = p.pageTable.findMapping(a)
 		if m == nil {
 			t.Errorf("data mapping missing")
 		}
