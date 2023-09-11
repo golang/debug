@@ -76,20 +76,29 @@ func copyFilesForHarness(t *testing.T, dir string) string {
 	return bd
 }
 
-// buildHarness builds the helper program "dwdumploc.exe".
-func buildHarness(t *testing.T, dir string) string {
+// buildHarness builds the helper program "dwdumploc.exe"
+// and a companion executable "dwdumploc.noopt.exe", built
+// with "-gcflags=all=-l -N".
+func buildHarness(t *testing.T, dir string) (string, string) {
 
 	// Copy source files into build dir.
 	bd := copyFilesForHarness(t, dir)
 
-	// Run build.
+	// Run builds.
 	harnessPath := filepath.Join(dir, "dumpdwloc.exe")
 	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", harnessPath)
 	cmd.Dir = bd
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build failed (%v): %s", err, b)
 	}
-	return harnessPath
+
+	nooptHarnessPath := filepath.Join(dir, "dumpdwloc.exe")
+	cmd = exec.Command(testenv.GoToolPath(t), "build", "-gcflags=all=-l -N", "-o", nooptHarnessPath)
+	cmd.Dir = bd
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build failed (%v): %s", err, b)
+	}
+	return harnessPath, nooptHarnessPath
 }
 
 // runHarness runs our previously built harness exec on a Go binary
@@ -107,7 +116,7 @@ func runHarness(t *testing.T, harnessPath string, exePath string, fcn string) st
 	return strings.TrimSpace(string(b.Bytes()))
 }
 
-// gobuild is a helper to bulid a Go program from source code,
+// gobuild is a helper to build a Go program from source code,
 // so that we can inspect selected bits of DWARF in the resulting binary.
 // Return value is binary path.
 func gobuild(t *testing.T, sourceCode string, pname string, dir string) string {
@@ -227,6 +236,28 @@ func testIssue46845(t *testing.T, harnessPath string, ppath string) {
 	}
 }
 
+// testRuntimeThrow verifies that we have well-formed DWARF for the
+// single input parameter of 'runtime.throw'. This function is
+// particularly important to handle correctly, since it is
+// special-cased by Delve. The code below checks that things are ok
+// both for the regular optimized case and the "-gcflags=all=-l -N"
+// case, which Delve users are often selecting.
+func testRuntimeThrow(t *testing.T, harnessPath, nooptHarnessPath, ppath string) {
+	expected := map[string]string{
+		"amd64": "1: in-param \"s\" loc=\"{ [0: S=8 RAX] [1: S=8 RBX] }\"",
+		"arm64": "1: in-param \"s\" loc=\"{ [0: S=8 R0] [1: S=8 R1] }\"",
+	}
+	fname := "runtime.throw"
+	harnesses := []string{harnessPath, nooptHarnessPath}
+	for _, harness := range harnesses {
+		got := runHarness(t, harness, ppath, fname)
+		want := expected[runtime.GOARCH]
+		if got != want {
+			t.Errorf("failed RuntimeThrow arch %s, harness %s:\ngot: %q\nwant: %q", runtime.GOARCH, harness, got, want)
+		}
+	}
+}
+
 func TestDwarfVariableLocations(t *testing.T) {
 	testenv.NeedsGo1Point(t, 18)
 	testenv.MustHaveGoBuild(t)
@@ -257,7 +288,7 @@ func TestDwarfVariableLocations(t *testing.T) {
 	}
 
 	// Build test harness.
-	harnessPath := buildHarness(t, tdir)
+	harnessPath, nooptHarnessPath := buildHarness(t, tdir)
 
 	// Build program to inspect. NB: we're building at default (with
 	// optimization); it might also be worth doing a "-l -N" build
@@ -272,5 +303,9 @@ func TestDwarfVariableLocations(t *testing.T) {
 	t.Run("Issue46845", func(t *testing.T) {
 		t.Parallel()
 		testIssue46845(t, harnessPath, ppath)
+	})
+	t.Run("RuntimeThrow", func(t *testing.T) {
+		t.Parallel()
+		testRuntimeThrow(t, harnessPath, nooptHarnessPath, ppath)
 	})
 }
