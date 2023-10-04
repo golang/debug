@@ -411,7 +411,13 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 		switch st.Uint8() {
 		case spanInUse:
 			inUseSpanSize += spanSize
-			n := int64(s.Field("nelems").Uintptr())
+			nelems := s.Field("nelems")
+			var n int64
+			if nelems.IsUint16() { // go1.22+
+				n = int64(nelems.Uint16())
+			} else {
+				n = int64(nelems.Uintptr())
+			}
 			// An object is allocated if it is marked as
 			// allocated or it is below freeindex.
 			x := s.Field("allocBits").Address()
@@ -419,7 +425,13 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			for i := int64(0); i < n; i++ {
 				alloc[i] = p.proc.ReadUint8(x.Add(i/8))>>uint(i%8)&1 != 0
 			}
-			k := int64(s.Field("freeindex").Uintptr())
+			freeindex := s.Field("freeindex")
+			var k int64
+			if freeindex.IsUint16() { // go1.22+
+				k = int64(freeindex.Uint16())
+			} else {
+				k = int64(freeindex.Uintptr())
+			}
 			for i := int64(0); i < k; i++ {
 				alloc[i] = true
 			}

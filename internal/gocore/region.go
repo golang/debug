@@ -192,3 +192,7 @@ func (r region) ArrayIndex(i int64) region {
 func (r region) IsStruct() bool {
 	return r.typ.Kind == KindStruct
 }
+
+func (r region) IsUint16() bool {
+	return r.typ.Kind == KindUint && r.typ.Size == 2
+}
