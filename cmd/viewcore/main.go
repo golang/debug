@@ -6,7 +6,6 @@
 // (See go.dev/issue/32839.)
 //
 //go:build !aix && !plan9 && !wasm
-// +build !aix,!plan9,!wasm
 
 // The viewcore tool is a command-line tool for exploring the state of a Go process
 // that has dumped core.
