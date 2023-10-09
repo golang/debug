@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Skip aix and plan9 for now: github.com/chzyer/readline doesn't support them.
-// (https://golang.org/issue/32839)
+// Skip some ports that github.com/chzyer/readline doesn't support.
+// (See go.dev/issue/32839.)
 //
-//go:build !aix && !plan9
-// +build !aix,!plan9
+//go:build !aix && !plan9 && !wasm
+// +build !aix,!plan9,!wasm
 
 // The viewcore tool is a command-line tool for exploring the state of a Go process
 // that has dumped core.
