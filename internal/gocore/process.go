@@ -258,8 +258,15 @@ func (p *Process) readHeap() {
 
 				min := core.Address(arenaSize*(level2+level1*level2size) - arenaBaseOffset)
 				max := min.Add(arenaSize)
-				bitmap := a.Field("bitmap")
-				oneBitBitmap := a.HasField("noMorePtrs") // Starting in 1.20.
+				var bitmap region
+				var oneBitBitmap bool
+				if a.HasField("heapArenaPtrScalar") { // go 1.22
+					bitmap = a.Field("heapArenaPtrScalar").Field("bitmap")
+					oneBitBitmap = true
+				} else {
+					bitmap = a.Field("bitmap")
+					oneBitBitmap = a.HasField("noMorePtrs") // Starting in 1.20.
+				}
 				spans := a.Field("spans")
 
 				arenas = append(arenas, arena{
