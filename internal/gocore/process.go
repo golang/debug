@@ -177,10 +177,12 @@ func Core(proc *core.Process) (p *Process, err error) {
 	return p, nil
 }
 
+// arena is a summary of the size of components of a heapArena.
 type arena struct {
 	heapMin core.Address
 	heapMax core.Address
 
+	// Optional.
 	bitmapMin core.Address
 	bitmapMax core.Address
 
@@ -199,37 +201,13 @@ func (p *Process) getArenaBaseOffset() int64 {
 
 func (p *Process) readHeap() {
 	ptrSize := p.proc.PtrSize()
-	logPtrSize := p.proc.LogPtrSize()
 	p.pageTable = map[core.Address]*pageTableEntry{}
 	mheap := p.rtGlobals["mheap_"]
 	var arenas []arena
 
 	if mheap.HasField("spans") {
 		// go 1.9 or 1.10. There is a single arena.
-		arenaStart := core.Address(mheap.Field("arena_start").Uintptr())
-		arenaUsed := core.Address(mheap.Field("arena_used").Uintptr())
-		arenaEnd := core.Address(mheap.Field("arena_end").Uintptr())
-		bitmapEnd := core.Address(mheap.Field("bitmap").Uintptr())
-		bitmapStart := bitmapEnd.Add(-int64(mheap.Field("bitmap_mapped").Uintptr()))
-		spanTableStart := mheap.Field("spans").SlicePtr().Address()
-		spanTableEnd := spanTableStart.Add(mheap.Field("spans").SliceCap() * ptrSize)
-		arenas = append(arenas, arena{
-			heapMin:      arenaStart,
-			heapMax:      arenaEnd,
-			bitmapMin:    bitmapStart,
-			bitmapMax:    bitmapEnd,
-			spanTableMin: spanTableStart,
-			spanTableMax: spanTableEnd,
-		})
-
-		// Copy pointer bits to heap info.
-		// Note that the pointer bits are stored backwards.
-		for a := arenaStart; a < arenaUsed; a = a.Add(ptrSize) {
-			off := a.Sub(arenaStart) >> logPtrSize
-			if p.proc.ReadUint8(bitmapEnd.Add(-(off>>2)-1))>>uint(off&3)&1 != 0 {
-				p.setHeapPtr(a)
-			}
-		}
+		arenas = append(arenas, p.readArena19(mheap))
 	} else {
 		// go 1.11+. Has multiple arenas.
 		arenaSize := p.rtConstants["heapArenaBytes"]
@@ -240,6 +218,7 @@ func (p *Process) readHeap() {
 		if ptrSize == 4 && arenaBaseOffset != 0 {
 			panic("arenaBaseOffset must be 0 for 32-bit inferior")
 		}
+
 		level1Table := mheap.Field("arenas")
 		level1size := level1Table.ArrayLen()
 		for level1 := int64(0); level1 < level1size; level1++ {
@@ -258,59 +237,119 @@ func (p *Process) readHeap() {
 
 				min := core.Address(arenaSize*(level2+level1*level2size) - arenaBaseOffset)
 				max := min.Add(arenaSize)
-				var bitmap region
-				var oneBitBitmap bool
-				if a.HasField("heapArenaPtrScalar") { // go 1.22
-					bitmap = a.Field("heapArenaPtrScalar").Field("bitmap")
-					oneBitBitmap = true
-				} else {
-					bitmap = a.Field("bitmap")
-					oneBitBitmap = a.HasField("noMorePtrs") // Starting in 1.20.
-				}
-				spans := a.Field("spans")
 
-				arenas = append(arenas, arena{
-					heapMin:      min,
-					heapMax:      max,
-					bitmapMin:    bitmap.a,
-					bitmapMax:    bitmap.a.Add(bitmap.ArrayLen()),
-					spanTableMin: spans.a,
-					spanTableMax: spans.a.Add(spans.ArrayLen() * ptrSize),
-				})
-
-				// Copy out ptr/nonptr bits
-				n := bitmap.ArrayLen()
-				for i := int64(0); i < n; i++ {
-					if oneBitBitmap {
-						// The array uses 1 bit per word of heap. See mbitmap.go for
-						// more information.
-						m := bitmap.ArrayIndex(i).Uintptr()
-						bits := 8 * ptrSize
-						for j := int64(0); j < bits; j++ {
-							if m>>uint(j)&1 != 0 {
-								p.setHeapPtr(min.Add((i*bits + j) * ptrSize))
-							}
-						}
-					} else {
-						// The nth byte is composed of 4 object bits and 4 live/dead
-						// bits. We ignore the 4 live/dead bits, which are on the
-						// high order side of the byte.
-						//
-						// See mbitmap.go for more information on the format of
-						// the bitmap field of heapArena.
-						m := bitmap.ArrayIndex(i).Uint8()
-						for j := int64(0); j < 4; j++ {
-							if m>>uint(j)&1 != 0 {
-								p.setHeapPtr(min.Add((i*4 + j) * ptrSize))
-							}
-						}
-					}
-				}
+				arenas = append(arenas, p.readArena(a, min, max))
 			}
 		}
 	}
 
 	p.readSpans(mheap, arenas)
+}
+
+// Read the global arena. Go 1.9 or 1.10 only, which has a single arena. Record
+// heap pointers and return the arena size summary.
+func (p *Process) readArena19(mheap region) arena {
+	ptrSize := p.proc.PtrSize()
+	logPtrSize := p.proc.LogPtrSize()
+
+	arenaStart := core.Address(mheap.Field("arena_start").Uintptr())
+	arenaUsed := core.Address(mheap.Field("arena_used").Uintptr())
+	arenaEnd := core.Address(mheap.Field("arena_end").Uintptr())
+	bitmapEnd := core.Address(mheap.Field("bitmap").Uintptr())
+	bitmapStart := bitmapEnd.Add(-int64(mheap.Field("bitmap_mapped").Uintptr()))
+	spanTableStart := mheap.Field("spans").SlicePtr().Address()
+	spanTableEnd := spanTableStart.Add(mheap.Field("spans").SliceCap() * ptrSize)
+
+	// Copy pointer bits to heap info.
+	// Note that the pointer bits are stored backwards.
+	for a := arenaStart; a < arenaUsed; a = a.Add(ptrSize) {
+		off := a.Sub(arenaStart) >> logPtrSize
+		if p.proc.ReadUint8(bitmapEnd.Add(-(off>>2)-1))>>uint(off&3)&1 != 0 {
+			p.setHeapPtr(a)
+		}
+	}
+
+	return arena{
+		heapMin:      arenaStart,
+		heapMax:      arenaEnd,
+		bitmapMin:    bitmapStart,
+		bitmapMax:    bitmapEnd,
+		spanTableMin: spanTableStart,
+		spanTableMax: spanTableEnd,
+	}
+}
+
+// Read a single heapArena. Go 1.11+, which has multiple areans. Record heap
+// pointers and return the arena size summary.
+func (p *Process) readArena(a region, min, max core.Address) arena {
+	ptrSize := p.proc.PtrSize()
+
+	var bitmap region
+	if a.HasField("bitmap") { // Before go 1.22
+		bitmap = a.Field("bitmap")
+		if oneBitBitmap := a.HasField("noMorePtrs"); oneBitBitmap { // Starting in go 1.20
+			p.readOneBitBitmap(bitmap, min)
+		} else {
+			p.readMultiBitBitmap(bitmap, min)
+		}
+	} else if a.HasField("heapArenaPtrScalar") && a.Field("heapArenaPtrScalar").HasField("bitmap") { // go 1.22 without allocation headers
+		// TODO: This configuration only existed between CL 537978 and CL
+		// 538217 and was never released. Prune support.
+		bitmap = a.Field("heapArenaPtrScalar").Field("bitmap")
+		p.readOneBitBitmap(bitmap, min)
+	} else { // go 1.22 with allocation headers
+		panic("unimplemented")
+	}
+
+	spans := a.Field("spans")
+	arena := arena{
+		heapMin:      min,
+		heapMax:      max,
+		spanTableMin: spans.a,
+		spanTableMax: spans.a.Add(spans.ArrayLen() * ptrSize),
+	}
+	if bitmap.a != 0 {
+		arena.bitmapMin = bitmap.a
+		arena.bitmapMax = bitmap.a.Add(bitmap.ArrayLen())
+	}
+	return arena
+}
+
+// Read a one-bit bitmap (Go 1.20+), recording the heap pointers.
+func (p *Process) readOneBitBitmap(bitmap region, min core.Address) {
+	ptrSize := p.proc.PtrSize()
+	n := bitmap.ArrayLen()
+	for i := int64(0); i < n; i++ {
+		// The array uses 1 bit per word of heap. See mbitmap.go for
+		// more information.
+		m := bitmap.ArrayIndex(i).Uintptr()
+		bits := 8 * ptrSize
+		for j := int64(0); j < bits; j++ {
+			if m>>uint(j)&1 != 0 {
+				p.setHeapPtr(min.Add((i*bits + j) * ptrSize))
+			}
+		}
+	}
+}
+
+// Read a multi-bit bitmap (Go 1.11-1.20), recording the heap pointers.
+func (p *Process) readMultiBitBitmap(bitmap region, min core.Address) {
+	ptrSize := p.proc.PtrSize()
+	n := bitmap.ArrayLen()
+	for i := int64(0); i < n; i++ {
+		// The nth byte is composed of 4 object bits and 4 live/dead
+		// bits. We ignore the 4 live/dead bits, which are on the
+		// high order side of the byte.
+		//
+		// See mbitmap.go for more information on the format of
+		// the bitmap field of heapArena.
+		m := bitmap.ArrayIndex(i).Uint8()
+		for j := int64(0); j < 4; j++ {
+			if m>>uint(j)&1 != 0 {
+				p.setHeapPtr(min.Add((i*4 + j) * ptrSize))
+			}
+		}
+	}
 }
 
 func (p *Process) readSpans(mheap region, arenas []arena) {
