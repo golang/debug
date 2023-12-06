@@ -137,6 +137,7 @@ func readNameLen(p *Process, a core.Address) (int64, int64) {
 
 // Convert the address of a runtime._type to a *Type.
 // The "d" is the address of the second field of an interface, used to help disambiguate types.
+// If "d" is 0, just return *Type and not to do the interface disambiguation.
 // Guaranteed to return a non-nil *Type.
 func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if t := p.runtimeMap[a]; t != nil {
@@ -202,7 +203,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	// in the same package name, but in the different package paths. eg. path-1/pkg.Foo and path-2/pkg.Foo.
 	// Match the object size may be a proper choice, just for try best, since we have no other choices.
 	// If the interface is of type T, for direct interfaces, that pointer points to a T.Elem.
-	if len(candidates) > 1 && !ifaceIndir(a, p) {
+	if d != 0 && len(candidates) > 1 && !ifaceIndir(a, p) {
 		ptr := p.proc.ReadPtr(d)
 		obj, off := p.FindObject(ptr)
 		// only usefull while it point to the head of an object,
@@ -724,7 +725,6 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			add(bPtr, bTyp, n)
 			// TODO: also oldbuckets
 		}
-		// TODO: also special case for channels?
 		for _, f := range t.Fields {
 			// sync.entry.p(in sync.map) is an unsafe.pointer to an empty interface.
 			if t.Name == "sync.entry" && f.Name == "p" && f.Type.Kind == KindPtr && f.Type.Elem == nil {
@@ -736,6 +736,14 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 					}
 					add(ptr, typ, 1)
 				}
+			}
+			// hchan.buf(in chan) is an unsafe.pointer to an [dataqsiz]elemtype.
+			if strings.HasPrefix(t.Name, "hchan<") && f.Name == "buf" && f.Type.Kind == KindPtr {
+				elemType := p.proc.ReadPtr(a.Add(t.field("elemtype").Off))
+				bufPtr := r.ReadPtr(a.Add(t.field("buf").Off))
+				rTyp := p.runtimeType2Type(elemType, 0)
+				dataqsiz := p.proc.ReadUintptr(a.Add(t.field("dataqsiz").Off))
+				add(bufPtr, rTyp, int64(dataqsiz))
 			}
 			p.typeObject(a.Add(f.Off), f.Type, r, add)
 		}
