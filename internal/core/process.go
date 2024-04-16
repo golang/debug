@@ -415,7 +415,7 @@ func addProgMappings(mem *splicedMemory, prog *elf.Prog, f *os.File) {
 // appear in the ELF.
 type noteMap map[elf.NType][][]byte
 
-// readNotes returns contents of all CORE ELF notes from the core file.
+// readCoreNotes returns contents of all CORE ELF notes from the core file.
 func readCoreNotes(coreFile *os.File, coreElf *elf.File) (noteMap, error) {
 	notes := make(noteMap)
 
@@ -538,7 +538,7 @@ func findExe(mappings []namedMapping, entryPoint Address) string {
 	return ""
 }
 
-// updateMappingsFiles adds os.File references to mappings in mem of files in
+// updateMappingFiles adds os.File references to mappings in mem of files in
 // fileMappings.
 //
 // base is the base directory from which files in fileMappings can be found.

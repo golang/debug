@@ -24,7 +24,7 @@ import (
 	"golang.org/x/debug/internal/testenv"
 )
 
-// loadTest loads a simple core file which resulted from running the
+// loadExample loads a simple core file which resulted from running the
 // following program on linux/amd64 with go 1.9.0 (the earliest supported runtime):
 //
 //	package main
