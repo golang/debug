@@ -164,7 +164,7 @@ func Core(proc *core.Process) (p *Process, err error) {
 	// changes, making the difference difficult to detect. As a workaround,
 	// we check on the version explicitly.
 	//
-	// Go 1.17 added runtime._func.flag, so use that as a sentinal for this
+	// Go 1.17 added runtime._func.flag, so use that as a sentinel for this
 	// version.
 	p.is117OrGreater = p.findType("runtime._func").HasField("flag")
 

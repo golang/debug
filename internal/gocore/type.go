@@ -206,7 +206,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if d != 0 && len(candidates) > 1 && !ifaceIndir(a, p) {
 		ptr := p.proc.ReadPtr(d)
 		obj, off := p.FindObject(ptr)
-		// only usefull while it point to the head of an object,
+		// only useful while it point to the head of an object,
 		// otherwise, the GC object size should bigger than the size of the type.
 		if obj != 0 && off == 0 {
 			sz := p.Size(obj)
