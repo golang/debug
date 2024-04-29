@@ -126,7 +126,12 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 		f.pcdata = append(f.pcdata, r.p.proc.ReadInt32(a))
 		a = a.Add(4)
 	}
-	a = a.Align(r.p.proc.PtrSize())
+
+	is118OrGreater := m.r.HasField("gofunc")
+	if !is118OrGreater {
+		// Since 1.18, funcdata no longer needs to be aligned.
+		a = a.Align(r.p.proc.PtrSize())
+	}
 
 	if nfd.typ.Size == 1 { // go 1.12 and beyond, this is a uint8
 		n = uint32(nfd.Uint8())
@@ -134,7 +139,7 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 		n = uint32(nfd.Int32())
 	}
 	for i := uint32(0); i < n; i++ {
-		if m.r.HasField("gofunc") {
+		if is118OrGreater {
 			// Since 1.18, funcdata contains offsets from go.func.*.
 			off := r.p.proc.ReadUint32(a)
 			if off == ^uint32(0) {
