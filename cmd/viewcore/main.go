@@ -616,18 +616,18 @@ func runObjects(cmd *cobra.Command, args []string) {
 }
 
 func runReachable(cmd *cobra.Command, args []string) {
+	n, err := strconv.ParseInt(args[0], 16, 64)
+	if err != nil {
+		exitf("can't parse %q as an object address\n", args[0])
+	}
 	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
-	n, err := strconv.ParseInt(args[0], 16, 64)
-	if err != nil {
-		exitf("can't parse %q as an object address\n", args[1])
-	}
 	a := core.Address(n)
 	obj, _ := c.FindObject(a)
 	if obj == 0 {
-		exitf("can't find object at address %s\n", args[1])
+		exitf("can't find object at address %s\n", args[0])
 	}
 
 	// Breadth-first search backwards until we reach a root.
@@ -728,13 +728,13 @@ func runHTML(cmd *cobra.Command, args []string) {
 }
 
 func runRead(cmd *cobra.Command, args []string) {
+	n, err := strconv.ParseInt(args[0], 16, 64)
+	if err != nil {
+		exitf("can't parse %q as an object address\n", args[0])
+	}
 	p, _, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
-	}
-	n, err := strconv.ParseInt(args[0], 16, 64)
-	if err != nil {
-		exitf("can't parse %q as an object address\n", args[1])
 	}
 	a := core.Address(n)
 	if len(args) < 2 {
@@ -742,7 +742,7 @@ func runRead(cmd *cobra.Command, args []string) {
 	} else {
 		n, err = strconv.ParseInt(args[1], 10, 64)
 		if err != nil {
-			exitf("can't parse %q as a byte count\n", args[2])
+			exitf("can't parse %q as a byte count\n", args[1])
 		}
 	}
 	if !p.ReadableN(a, n) {
