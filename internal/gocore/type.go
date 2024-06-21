@@ -6,6 +6,7 @@ package gocore
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -18,7 +19,11 @@ import (
 type Type struct {
 	Name string
 	Size int64
-	Kind Kind
+	Kind Kind // common dwarf types.
+	// go-specific types obtained from AttrGoKind, such as string and slice.
+	// Kind and gokind are not correspond one to one, both need to be preserved now.
+	// For example, slices are described in dwarf by a 3-field struct, so its Kind is Struct and its goKind is Slice.
+	goKind reflect.Kind
 
 	// Fields only valid for a subset of kinds.
 	Count  int64   // for kind == KindArray

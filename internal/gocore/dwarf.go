@@ -15,6 +15,10 @@ import (
 	"golang.org/x/debug/internal/core"
 )
 
+const (
+	AttrGoKind dwarf.Attr = 0x2900
+)
+
 // read DWARF types from core dump.
 func (p *Process) readDWARFTypes() {
 	d, _ := p.proc.DWARF()
@@ -34,6 +38,9 @@ func (p *Process) readDWARFTypes() {
 				continue
 			}
 			t := &Type{Name: gocoreName(dt), Size: dwarfSize(dt, p.proc.PtrSize())}
+			if goKind, ok := e.Val(AttrGoKind).(int64); ok {
+				t.goKind = reflect.Kind(goKind)
+			}
 			p.dwarfMap[dt] = t
 			types = append(types, t)
 		}
@@ -112,13 +119,12 @@ func (p *Process) readDWARFTypes() {
 		if t.Kind != KindStruct {
 			continue
 		}
-		if t.Name == "string" { // TODO: also "struct runtime.stringStructDWARF" ?
+		switch t.goKind {
+		case reflect.String:
 			t.Kind = KindString
 			t.Elem = t.Fields[0].Type.Elem // TODO: check that it is always uint8.
 			t.Fields = nil
-		}
-		if len(t.Name) >= 9 && t.Name[:9] == "struct []" ||
-			len(t.Name) >= 2 && t.Name[:2] == "[]" {
+		case reflect.Slice:
 			t.Kind = KindSlice
 			t.Elem = t.Fields[0].Type.Elem
 			t.Fields = nil
