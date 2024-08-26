@@ -107,9 +107,17 @@ func (p *Process) FindFunc(pc core.Address) *Func {
 }
 
 func (p *Process) findType(name string) *Type {
+	typ := p.tryFindType(name)
+	if typ == nil {
+		panic("can't find type " + name)
+	}
+	return typ
+}
+
+func (p *Process) tryFindType(name string) *Type {
 	s := p.runtimeNameMap[name]
 	if len(s) == 0 {
-		panic("can't find type " + name)
+		return nil
 	}
 	return s[0]
 }
@@ -284,21 +292,18 @@ func (p *Process) readArena19(mheap region) arena {
 func (p *Process) readArena(a region, min, max core.Address) arena {
 	ptrSize := p.proc.PtrSize()
 
+	// Bitmap reading handled in readSpans.
+	// Read in all the pointer locations from the arenas, where they lived before Go 1.22.
+	// After Go 1.22, the pointer locations are scattered among more locations; they're
+	// processed during readSpans instead.
 	var bitmap region
-	if a.HasField("bitmap") { // Before go 1.22
+	if a.HasField("bitmap") {
 		bitmap = a.Field("bitmap")
 		if oneBitBitmap := a.HasField("noMorePtrs"); oneBitBitmap { // Starting in go 1.20
 			p.readOneBitBitmap(bitmap, min)
 		} else {
 			p.readMultiBitBitmap(bitmap, min)
 		}
-	} else if a.HasField("heapArenaPtrScalar") && a.Field("heapArenaPtrScalar").HasField("bitmap") { // go 1.22 without allocation headers
-		// TODO: This configuration only existed between CL 537978 and CL
-		// 538217 and was never released. Prune support.
-		bitmap = a.Field("heapArenaPtrScalar").Field("bitmap")
-		p.readOneBitBitmap(bitmap, min)
-	} else { // go 1.22 with allocation headers
-		panic("unimplemented")
 	}
 
 	spans := a.Field("spans")
@@ -353,6 +358,7 @@ func (p *Process) readMultiBitBitmap(bitmap region, min core.Address) {
 }
 
 func (p *Process) readSpans(mheap region, arenas []arena) {
+	ptrSize := p.proc.PtrSize()
 	var all int64
 	var text int64
 	var readOnly int64
@@ -414,6 +420,13 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 	spanManual := uint8(p.rtConstants["_MSpanManual"])
 	spanDead := uint8(p.rtConstants["_MSpanDead"])
 	spanFree := uint8(p.rtConstants["_MSpanFree"])
+
+	// Malloc header constants (go 1.22+)
+	minSizeForMallocHeader := int64(p.rtConstants["minSizeForMallocHeader"])
+	mallocHeaderSize := int64(p.rtConstants["mallocHeaderSize"])
+	maxSmallSize := int64(p.rtConstants["maxSmallSize"])
+
+	abiType := p.tryFindType("abi.Type") // Non-nil expected for Go 1.22+.
 
 	// Process spans.
 	if pageSize%heapInfoSize != 0 {
@@ -517,6 +530,77 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 				// But we have no way of adding edges from an object to
 				// the corresponding finalizer data, so we punt on that thorny
 				// issue for now.
+			}
+			// Check if we're in Go 1.22+. If not, then we're done. Otherwise,
+			// we need to discover all the heap pointers in the span here.
+			if !s.HasField("largeType") || !s.HasField("spanclass") {
+				continue
+			}
+			if noscan := s.Field("spanclass").Uint8()&1 != 0; noscan {
+				// No pointers.
+				continue
+			}
+			if elemSize <= minSizeForMallocHeader {
+				// Heap bits in span.
+				bitmapSize := spanSize / ptrSize / 8
+				bitmapAddr := min.Add(spanSize - bitmapSize)
+				for i := int64(0); i < bitmapSize; i++ {
+					bits := p.proc.ReadUint8(bitmapAddr.Add(int64(i)))
+					for j := int64(0); j < 8; j++ {
+						if bits&(uint8(1)<<j) != 0 {
+							p.setHeapPtr(min.Add(ptrSize * (i*8 + j)))
+						}
+					}
+				}
+			} else if elemSize <= maxSmallSize-mallocHeaderSize {
+				// Allocation headers.
+				//
+				// These will always point to real abi.Type values that, once allocated,
+				// are never freed, so it's safe to observe them even if the object is
+				// dead. We may note down pointers that are invalid if the object is not
+				// allocated (or live) but that's no different from reading stale bits
+				// out of the bitmap in older Go versions.
+				for e, off := 0, int64(0); int64(e) < n; e, off = e+1, off+elemSize {
+					// We need to be careful to only check space that's actually marked
+					// allocated, otherwise it can contain junk, including an invalid
+					// header.
+					if !alloc[e] {
+						continue
+					}
+					typeAddr := p.proc.ReadPtr(min.Add(off))
+					if typeAddr == 0 {
+						continue
+					}
+					typ := region{p: p, a: typeAddr, typ: abiType}
+					nptrs := int64(typ.Field("PtrBytes").Uintptr()) / ptrSize
+					if typ.Field("Kind_").Uint8()&uint8(p.rtConstants["kindGCProg"]) != 0 {
+						panic("unexpected GC prog on small allocation")
+					}
+					gcdata := typ.Field("GCData").Address()
+					for i := int64(0); i < nptrs; i++ {
+						if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
+							p.setHeapPtr(min.Add(off + mallocHeaderSize + i*ptrSize))
+						}
+					}
+				}
+			} else {
+				// Large object (header in span).
+				//
+				// These will either point to a real type or a "dummy" type whose storage
+				// is not valid if the object is dead. However, because large objects are
+				// 1:1 with spans, we can be certain largeType is valid as long as the span
+				// is in use.
+				typ := s.Field("largeType")
+				nptrs := int64(typ.Field("PtrBytes").Uintptr()) / ptrSize
+				if typ.Field("Kind_").Uint8()&uint8(p.rtConstants["kindGCProg"]) != 0 {
+					panic("large object's GCProg was not unrolled")
+				}
+				gcdata := typ.Field("GCData").Address()
+				for i := int64(0); i < nptrs; i++ {
+					if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
+						p.setHeapPtr(min.Add(i * ptrSize))
+					}
+				}
 			}
 		case spanFree:
 			freeSpanSize += spanSize

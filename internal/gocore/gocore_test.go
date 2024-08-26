@@ -421,7 +421,6 @@ func TestVersions(t *testing.T) {
 	}
 
 	t.Run("goroot", func(t *testing.T) {
-		t.Skip("doesn't work with Go 1.22 allocation headers yet")
 		loadExampleGenerated(t)
 	})
 }

@@ -54,6 +54,12 @@ func (p *Process) markObjects() {
 	// Instead we use exactly what the runtime uses.
 
 	// Goroutine roots
+	//
+	// BUG: If the process dumps core with a thread in mallocgc at the point
+	// where an object is reachable from the stack but it hasn't been zeroed
+	// yet, it's possible for us to observe stale pointers here and follow them.
+	// Not a huge deal given that we'll just ignore outright bad pointers, but
+	// we may accidentally mark some objects as live erroneously.
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
 			for a := range f.Live {
