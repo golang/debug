@@ -24,6 +24,19 @@ import (
 	"golang.org/x/debug/internal/testenv"
 )
 
+func loadCore(t *testing.T, corePath, base, exePath string) *Process {
+	t.Helper()
+	c, err := core.Core(corePath, base, exePath)
+	if err != nil {
+		t.Fatalf("can't load test core file: %s", err)
+	}
+	p, err := Core(c)
+	if err != nil {
+		t.Fatalf("can't parse Go core: %s", err)
+	}
+	return p
+}
+
 // loadExample loads a simple core file which resulted from running the
 // following program on linux/amd64 with go 1.9.0 (the earliest supported runtime):
 //
@@ -37,15 +50,7 @@ func loadExample(t *testing.T) *Process {
 	if runtime.GOOS == "android" {
 		t.Skip("skipping test on android")
 	}
-	c, err := core.Core("testdata/core", "testdata", "")
-	if err != nil {
-		t.Fatalf("can't load test core file: %s", err)
-	}
-	p, err := Core(c)
-	if err != nil {
-		t.Fatalf("can't parse Go core: %s", err)
-	}
-	return p
+	return loadCore(t, "testdata/core", "testdata", "")
 }
 
 func loadExampleVersion(t *testing.T, version string) *Process {
@@ -75,15 +80,7 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 		file = fmt.Sprintf("testdata/core%s", version)
 		base = "testdata"
 	}
-	c, err := core.Core(file, base, "")
-	if err != nil {
-		t.Fatalf("can't load test core file: %s", err)
-	}
-	p, err := Core(c)
-	if err != nil {
-		t.Fatalf("can't parse Go core: %s", err)
-	}
-	return p
+	return loadCore(t, file, base, "")
 }
 
 // loadExampleGenerated generates a core from a binary built with
@@ -108,15 +105,7 @@ func loadExampleGenerated(t *testing.T) *Process {
 	if err != nil {
 		t.Fatalf("generateCore() got err %v want nil", err)
 	}
-	c, err := core.Core(file, "", "")
-	if err != nil {
-		t.Fatalf("can't load test core file: %s", err)
-	}
-	p, err := Core(c)
-	if err != nil {
-		t.Fatalf("can't parse Go core: %s", err)
-	}
-	return p
+	return loadCore(t, file, "", "")
 }
 
 func setupCorePattern(t *testing.T) func() {
@@ -442,15 +431,7 @@ func loadZipCore(t *testing.T, name string) *Process {
 
 	exe := filepath.Join(dir, name)
 	file := filepath.Join(dir, "core")
-	c, err := core.Core(file, dir, exe)
-	if err != nil {
-		t.Fatalf("can't load test core file: %s", err)
-	}
-	p, err := Core(c)
-	if err != nil {
-		t.Fatalf("can't parse Go core: %s", err)
-	}
-	return p
+	return loadCore(t, file, dir, exe)
 }
 
 func TestRuntimeTypes(t *testing.T) {
