@@ -390,6 +390,33 @@ func TestDynamicType(t *testing.T) {
 	}
 }
 
+// getStat returns the first (depth first) stat in the hierarchy which matches
+// name, nil otherwise.
+func getStat(stat *Stats, name string) *Stats {
+	if stat.Name == name {
+		return stat
+	}
+	for _, child := range stat.Children {
+		if found := getStat(child, name); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func checkProcess(t *testing.T, p *Process) {
+	t.Helper()
+	if gs := p.Goroutines(); len(gs) == 0 {
+		t.Error("len(p.Goroutines()) == 0, want >0")
+	}
+
+	const heapName = "heap"
+	heapStat := getStat(p.Stats(), heapName)
+	if heapStat == nil || heapStat.Size == 0 {
+		t.Errorf("stat[%q].Size == 0, want >0", heapName)
+	}
+}
+
 func TestVersions(t *testing.T) {
 	versions := []string{
 		"1.10",
@@ -405,12 +432,27 @@ func TestVersions(t *testing.T) {
 	}
 	for _, ver := range versions {
 		t.Run(ver, func(t *testing.T) {
-			loadExampleVersion(t, ver)
+			p := loadExampleVersion(t, ver)
+			checkProcess(t, p)
+
+			lt := runLT(p)
+			if !checkDominator(t, lt) {
+				t.Errorf("sanityCheckDominator(...) = false, want true")
+			}
 		})
 	}
 
 	t.Run("goroot", func(t *testing.T) {
-		loadExampleGenerated(t)
+		p := loadExampleGenerated(t)
+		checkProcess(t, p)
+
+		// TODO(aktau): Move sanityCheckDominator into sanityCheckProcess once this
+		//              passes for loadExampleGenerated.
+		t.Skip(`skipping dominator check due to "panic: can't find type runtime.itab"`)
+		lt := runLT(p)
+		if !checkDominator(t, lt) {
+			t.Errorf("sanityCheckDominator(...) = false, want true")
+		}
 	})
 }
 

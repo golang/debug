@@ -15,7 +15,7 @@ import (
 func TestLT(t *testing.T) {
 	p := loadExample(t)
 	lt := runLT(p)
-	sanityCheck(t, lt)
+	checkDominator(t, lt)
 	if false {
 		lt.dot(os.Stdout)
 	}
@@ -29,7 +29,7 @@ func TestDominators(t *testing.T) {
 	}
 }
 
-func sanityCheck(t *testing.T, d ltDom) bool {
+func checkDominator(t *testing.T, d ltDom) bool {
 	t.Helper()
 	// Build pointer-y graph.
 	pRoot := sanityVertex{}
