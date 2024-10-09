@@ -7,7 +7,6 @@ package core
 import (
 	"fmt"
 	"os"
-	"strings"
 )
 
 // A Mapping represents a contiguous subset of the inferior's address space.
@@ -29,6 +28,18 @@ type Mapping struct {
 	contents []byte
 }
 
+func (m Mapping) String() string {
+	name := "anon"
+	if m.f != nil {
+		name = m.f.Name()
+	}
+	var orig string
+	if m.origF != nil {
+		orig = fmt.Sprintf(" (orig: %s+0x%x)", m.origF.Name(), m.origOff)
+	}
+	return fmt.Sprintf("0x%x-0x%x %s %8d %s+0x%x%s", m.min, m.max, m.perm, m.max-m.min, name, m.off, orig)
+}
+
 // namedMapping is equivalent to Mapping, just using the filename rather than
 // opened file.
 type namedMapping struct {
@@ -37,6 +48,10 @@ type namedMapping struct {
 
 	f   string // filename backing this region
 	off int64  // offset of start of this mapping in f
+}
+
+func (m *namedMapping) String() string {
+	return fmt.Sprintf("0x%x-0x%x ---- %8d %s+0x%x", m.min, m.max, m.max-m.min, m.f, m.off)
 }
 
 // Min returns the lowest virtual address of the mapping.
@@ -93,21 +108,19 @@ const (
 )
 
 func (p Perm) String() string {
-	var a [3]string
-	b := a[:0]
+	// Print a permissions string in the same format as Linux (/proc/self/maps).
+	// E.g.: rwxp, r--p, ...
+	b := [4]byte{'-', '-', '-', 'p'} // TODO(aktau): Allow non-shared mappings?
 	if p&Read != 0 {
-		b = append(b, "Read")
+		b[0] = 'r'
 	}
 	if p&Write != 0 {
-		b = append(b, "Write")
+		b[1] = 'w'
 	}
 	if p&Exec != 0 {
-		b = append(b, "Exec")
+		b[2] = 'x'
 	}
-	if len(b) == 0 {
-		b = append(b, "None")
-	}
-	return strings.Join(b, "|")
+	return string(b[:])
 }
 
 // We assume that OS pages are at least 4K in size. So every mapping
