@@ -455,6 +455,7 @@ func (p *Process) readGlobals() {
 		} else {
 			a = core.Address(p.proc.ByteOrder().Uint32(loc[1:]))
 		}
+		a = a.Add(int64(p.proc.StaticBase()))
 		if !p.proc.Writeable(a) {
 			// Read-only globals can't have heap pointers.
 			// TODO: keep roots around anyway?

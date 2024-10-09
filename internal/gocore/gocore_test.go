@@ -85,7 +85,7 @@ func loadExampleVersion(t *testing.T, version string) *Process {
 
 // loadExampleGenerated generates a core from a binary built with
 // runtime.GOROOT().
-func loadExampleGenerated(t *testing.T) *Process {
+func loadExampleGenerated(t *testing.T, buildFlags ...string) *Process {
 	t.Helper()
 	testenv.MustHaveGoBuild(t)
 	switch runtime.GOOS {
@@ -100,7 +100,7 @@ func loadExampleGenerated(t *testing.T) *Process {
 	defer cleanup()
 
 	dir := t.TempDir()
-	file, output, err := generateCore(dir)
+	file, output, err := generateCore(dir, buildFlags...)
 	t.Logf("crasher output: %s", output)
 	if err != nil {
 		t.Fatalf("generateCore() got err %v want nil", err)
@@ -157,7 +157,7 @@ func setupCorePattern(t *testing.T) func() {
 	}
 }
 
-func generateCore(dir string) (string, []byte, error) {
+func generateCore(dir string, buildFlags ...string) (string, []byte, error) {
 	goTool, err := testenv.GoTool()
 	if err != nil {
 		return "", nil, fmt.Errorf("cannot find go tool: %w", err)
@@ -170,7 +170,10 @@ func generateCore(dir string) (string, []byte, error) {
 	}
 
 	srcPath := filepath.Join(cwd, source)
-	cmd := exec.Command(goTool, "build", "-o", "test.exe", srcPath)
+	argv := []string{"build"}
+	argv = append(argv, buildFlags...)
+	argv = append(argv, "-o", "test.exe", srcPath)
+	cmd := exec.Command(goTool, argv...)
 	cmd.Dir = dir
 
 	b, err := cmd.CombinedOutput()
@@ -443,15 +446,22 @@ func TestVersions(t *testing.T) {
 	}
 
 	t.Run("goroot", func(t *testing.T) {
-		p := loadExampleGenerated(t)
-		checkProcess(t, p)
+		for _, buildFlags := range [][]string{
+			nil,
+			{"-buildmode=pie"},
+		} {
+			t.Run(strings.Join(buildFlags, ","), func(t *testing.T) {
+				p := loadExampleGenerated(t, buildFlags...)
+				checkProcess(t, p)
 
-		// TODO(aktau): Move sanityCheckDominator into sanityCheckProcess once this
-		//              passes for loadExampleGenerated.
-		t.Skip(`skipping dominator check due to "panic: can't find type runtime.itab"`)
-		lt := runLT(p)
-		if !checkDominator(t, lt) {
-			t.Errorf("sanityCheckDominator(...) = false, want true")
+				// TODO(aktau): Move checkDominator into checkProcess once this passes
+				// for loadExampleGenerated.
+				t.Skip(`skipping dominator check due to "panic: can't find type runtime.itab"`)
+				lt := runLT(p)
+				if !checkDominator(t, lt) {
+					t.Errorf("checkDominator(...) = false, want true")
+				}
+			})
 		}
 	})
 }

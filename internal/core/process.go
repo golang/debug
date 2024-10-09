@@ -40,6 +40,7 @@ type Process struct {
 	meta metadata // basic metadata about the core
 
 	entryPoint Address
+	staticBase uint64    // Offset at which the executable was loaded in memory. 0 when binary is not-PIE.
 	args       string    // first part of args retrieved from NT_PRPSINFO
 	threads    []*Thread // os threads (TODO: map from pid?)
 
@@ -183,6 +184,12 @@ func (p *Process) Symbols() (map[string]Address, error) {
 	return p.syms, p.symErr
 }
 
+// StaticBase returns the offset at which the main executable was loaded in
+// memory. For example, it should be used when dereferencing DWARF locations.
+func (p *Process) StaticBase() uint64 {
+	return p.staticBase
+}
+
 var mapFile = func(fd int, offset int64, length int) (data []byte, err error) {
 	return nil, fmt.Errorf("file mapping is not implemented yet")
 }
@@ -241,11 +248,16 @@ func Core(corePath, base, exePath string) (*Process, error) {
 		return nil, fmt.Errorf("failed to parse executable: %v", err)
 	}
 
+	staticBase := uint64(entryPoint) - exeElf.Entry // If not PIE, this is 0.
+	if exeElf.Entry > uint64(entryPoint) {
+		return nil, fmt.Errorf("malformed binary or core, core entry point (%d) - executable entry point (%d) is < 0", entryPoint, exeElf.Entry)
+	}
+
 	// The base memory layout is defined by the binary itself. Additional
 	// mappings from the core layer on top. This ordering is important to
 	// ensure that dirty data/bss pages from the core take priority over
 	// the initial state from the binary.
-	mem := readExecMappings(exeFile, exeElf)
+	mem := readExecMappings(exeFile, exeElf, staticBase)
 	addCoreMappings(&mem, coreFile, coreElf)
 	// Add os.File references to mappings of files.
 	warnings := updateMappingFiles(&mem, fileMappings, base, exeFile, origExePath)
@@ -342,6 +354,7 @@ func Core(corePath, base, exePath string) (*Process, error) {
 	p := &Process{
 		meta:       meta,
 		entryPoint: entryPoint,
+		staticBase: staticBase,
 		args:       args,
 		threads:    threads,
 		memory:     mem,
@@ -357,13 +370,14 @@ func Core(corePath, base, exePath string) (*Process, error) {
 }
 
 // readExecMappings returns the memory mappings defined by the executable
-// itself.
-func readExecMappings(exeFile *os.File, exeElf *elf.File) splicedMemory {
+// itself. staticBase should be the offset at which the executable was loaded in
+// memory.
+func readExecMappings(exeFile *os.File, exeElf *elf.File, staticBase uint64) splicedMemory {
 	// Load virtual memory mappings.
 	var mem splicedMemory
 	for _, prog := range exeElf.Progs {
 		if prog.Type == elf.PT_LOAD {
-			addProgMappings(&mem, prog, exeFile)
+			addProgMappings(&mem, prog, exeFile, staticBase)
 		}
 	}
 	return mem
@@ -373,14 +387,18 @@ func readExecMappings(exeFile *os.File, exeElf *elf.File) splicedMemory {
 func addCoreMappings(mem *splicedMemory, coreFile *os.File, coreElf *elf.File) {
 	for _, prog := range coreElf.Progs {
 		if prog.Type == elf.PT_LOAD {
-			addProgMappings(mem, prog, coreFile)
+			addProgMappings(mem, prog, coreFile, 0)
 		}
 	}
 }
 
 // addProgMappings adds memory mappings for prog (from file f) to mem.
-func addProgMappings(mem *splicedMemory, prog *elf.Prog, f *os.File) {
+// staticBase is added to the p_vaddr [1].
+//
+// [1]: https://man7.org/linux/man-pages/man5/elf.5.html
+func addProgMappings(mem *splicedMemory, prog *elf.Prog, f *os.File, staticBase uint64) {
 	min := Address(prog.Vaddr)
+	min = min.Add(int64(staticBase))
 	max := min.Add(int64(prog.Memsz))
 	var perm Perm
 	if prog.Flags&elf.PF_R != 0 {
