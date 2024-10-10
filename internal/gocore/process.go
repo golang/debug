@@ -398,6 +398,8 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 			// Any other anonymous mapping is bss.
 			// TODO: how to distinguish original bss from anonymous mmap?
 			bss += size
+		case core.Exec: // Ignore --xp mappings, like Linux's vsyscall=xonly.
+			all -= size // Make the total match again.
 		default:
 			panic("weird mapping " + m.Perm().String())
 		}
