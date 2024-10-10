@@ -8,6 +8,7 @@ package gocore
 
 import (
 	"archive/zip"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 
 	"golang.org/x/debug/internal/core"
 	"golang.org/x/debug/internal/testenv"
+	"golang.org/x/sys/unix"
 )
 
 func loadCore(t *testing.T, corePath, base, exePath string) *Process {
@@ -99,6 +101,10 @@ func loadExampleGenerated(t *testing.T, buildFlags ...string) *Process {
 	cleanup := setupCorePattern(t)
 	defer cleanup()
 
+	if err := adjustCoreRlimit(t); err != nil {
+		t.Fatalf("unable to adjust core limit, can't test generated core dump: %v", err)
+	}
+
 	dir := t.TempDir()
 	file, output, err := generateCore(dir, buildFlags...)
 	t.Logf("crasher output: %s", output)
@@ -157,6 +163,56 @@ func setupCorePattern(t *testing.T) func() {
 	}
 }
 
+func adjustCoreRlimit(t *testing.T) error {
+	var limit unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_CORE, &limit); err != nil {
+		return fmt.Errorf("getrlimit(RLIMIT_CORE) error: %v", err)
+	}
+
+	if limit.Max == 0 {
+		return fmt.Errorf("RLIMIT_CORE maximum is 0, core dumping is not possible")
+	}
+
+	// Increase the core limit to the maximum (hard limit), if the current soft
+	// limit is lower.
+	if limit.Cur < limit.Max {
+		oldLimit := limit
+		limit.Cur = limit.Max
+		if err := unix.Setrlimit(unix.RLIMIT_CORE, &limit); err != nil {
+			return fmt.Errorf("setrlimit(RLIMIT_CORE, %+v) error: %v", limit, err)
+		}
+		t.Logf("adjusted RLIMIT_CORE from %+v to %+v", oldLimit, limit)
+	}
+
+	return nil
+}
+
+// run spawns the supplied exe with wd as working directory.
+//
+//   - The parent environment is amended with GOTRACEBACK=crash to provoke a
+//     core dump on (e.g.) segfaults.
+//   - Thread/process state (like resource limits) are propagated.
+//
+// If the binary fails to crash, an error is returned.
+func run(exe, wd string) (pid int, output []byte, err error) {
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), "GOTRACEBACK=crash")
+	cmd.Dir = wd
+	var b bytes.Buffer
+	cmd.Stdout = &b
+	cmd.Stderr = &b
+	runtime.LockOSThread() // Propagate parent state, see [exec.Cmd.Run].
+	err = cmd.Run()
+	runtime.UnlockOSThread()
+
+	// We expect a crash.
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return cmd.Process.Pid, b.Bytes(), fmt.Errorf("crasher did not crash, got err %T %w", err, err)
+	}
+	return cmd.Process.Pid, b.Bytes(), nil
+}
+
 func generateCore(dir string, buildFlags ...string) (string, []byte, error) {
 	goTool, err := testenv.GoTool()
 	if err != nil {
@@ -181,15 +237,9 @@ func generateCore(dir string, buildFlags ...string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("error building crasher: %w\n%s", err, string(b))
 	}
 
-	cmd = exec.Command("./test.exe")
-	cmd.Env = append(os.Environ(), "GOTRACEBACK=crash")
-	cmd.Dir = dir
-
-	b, err = cmd.CombinedOutput()
-	// We expect a crash.
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		return "", b, fmt.Errorf("crasher did not crash, got err %T %w", err, err)
+	_, b, err = run("./test.exe", dir)
+	if err != nil {
+		return "", b, err
 	}
 
 	// Look for any file with "core" in the name.
