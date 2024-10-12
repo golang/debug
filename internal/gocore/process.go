@@ -592,7 +592,7 @@ func (p *Process) readSpans(mheap region, arenas []arena) {
 				// is not valid if the object is dead. However, because large objects are
 				// 1:1 with spans, we can be certain largeType is valid as long as the span
 				// is in use.
-				typ := s.Field("largeType")
+				typ := s.Field("largeType").Deref()
 				nptrs := int64(typ.Field("PtrBytes").Uintptr()) / ptrSize
 				if typ.Field("Kind_").Uint8()&uint8(p.rtConstants["kindGCProg"]) != 0 {
 					panic("large object's GCProg was not unrolled")
