@@ -187,20 +187,23 @@ func adjustCoreRlimit(t *testing.T) error {
 	return nil
 }
 
-// run spawns the supplied exe with wd as working directory.
-//
-//   - The parent environment is amended with GOTRACEBACK=crash to provoke a
-//     core dump on (e.g.) segfaults.
-//   - Thread/process state (like resource limits) are propagated.
-//
-// If the binary fails to crash, an error is returned.
-func run(exe, wd string) (pid int, output []byte, err error) {
+// runCrasher spawns exe via [doRunCrasher] with wd as working directory.
+// GOTRACEBACK=crash is set.
+func runCrasher(exe, wd string) (pid int, output []byte, err error) {
 	cmd := exec.Command(exe)
-	cmd.Env = append(os.Environ(), "GOTRACEBACK=crash")
+	cmd.Env = append(os.Environ(), "GOMAXPROCS=2", "GOTRACEBACK=crash")
 	cmd.Dir = wd
+	return doRunCrasher(cmd)
+}
+
+// doRunCrasher spawns the supplied cmd, propagating parent state (see
+// [exec.Cmd.Run]), and returns an error if the process failed to start or did
+// *NOT* crash.
+func doRunCrasher(cmd *exec.Cmd) (pid int, output []byte, err error) {
 	var b bytes.Buffer
 	cmd.Stdout = &b
 	cmd.Stderr = &b
+
 	runtime.LockOSThread() // Propagate parent state, see [exec.Cmd.Run].
 	err = cmd.Run()
 	runtime.UnlockOSThread()
@@ -237,7 +240,7 @@ func generateCore(dir string, buildFlags ...string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("error building crasher: %w\n%s", err, string(b))
 	}
 
-	_, b, err = run("./test.exe", dir)
+	_, b, err = runCrasher("./test.exe", dir)
 	if err != nil {
 		return "", b, err
 	}
