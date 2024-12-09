@@ -140,6 +140,102 @@ func readNameLen(p *Process, a core.Address) (int64, int64) {
 	}
 }
 
+// runtimeType is a thin wrapper around a runtime._type (AKA abi.Type) region
+// that abstracts over the name changes seen in Go 1.21.
+type runtimeType struct {
+	reg        region
+	hasAbiType bool // True if Go 1.21+
+}
+
+// findRuntimeType finds either abi.Type (Go 1.21+) or runtime._type.
+func (p *Process) findRuntimeType(a core.Address) runtimeType {
+	typ := runtimeType{
+		reg:        region{p: p, a: a, typ: p.tryFindType("abi.Type")},
+		hasAbiType: true,
+	}
+	if typ.reg.typ == nil {
+		typ.reg.typ = p.findType("runtime._type")
+		typ.hasAbiType = false
+	}
+	return typ
+}
+
+// Size_ is either abi.Type.Size_ or runtime._type.Size_.
+func (r runtimeType) Size_() int64 {
+	if !r.hasAbiType {
+		return int64(r.reg.Field("size").Uintptr())
+	}
+	return int64(r.reg.Field("Size_").Uintptr())
+}
+
+// TFlag is either abi.Type.TFlag or runtime._type.TFlag.
+func (r runtimeType) TFlag() uint8 {
+	if !r.hasAbiType {
+		return r.reg.Field("tflag").Uint8()
+	}
+	return r.reg.Field("TFlag").Uint8()
+}
+
+// Str is either abi.Type.Str or runtime._type.Str.
+func (r runtimeType) Str() int64 {
+	if !r.hasAbiType {
+		return int64(r.reg.Field("str").Int32())
+	}
+	return int64(r.reg.Field("Str").Int32())
+}
+
+// PtrBytes is either abi.Type.PtrBytes or runtime._type.PtrBytes.
+func (r runtimeType) PtrBytes() int64 {
+	if !r.hasAbiType {
+		return int64(r.reg.Field("ptrdata").Uintptr())
+	}
+	return int64(r.reg.Field("PtrBytes").Uintptr())
+}
+
+// Kind_ is either abi.Type.Kind_ or runtime._type.Kind_.
+func (r runtimeType) Kind_() uint8 {
+	if !r.hasAbiType {
+		return r.reg.Field("kind").Uint8()
+	}
+	return r.reg.Field("Kind_").Uint8()
+}
+
+// GCData is either abi.Type.GCData or runtime._type.GCData.
+func (r runtimeType) GCData() core.Address {
+	if !r.hasAbiType {
+		return r.reg.Field("gcdata").Address()
+	}
+	return r.reg.Field("GCData").Address()
+}
+
+// runtimeItab is a thin wrapper around a abi.ITab (used to be runtime.itab). It
+// abstracts over name/package changes in Go 1.21.
+type runtimeItab struct {
+	typ        *Type
+	hasAbiITab bool // True if Go 1.21+
+}
+
+// findItab finds either abi.ITab (Go 1.21+) or runtime.itab.
+func (p *Process) findItab() runtimeItab {
+	typ := runtimeItab{
+		typ:        p.tryFindType("abi.ITab"),
+		hasAbiITab: true,
+	}
+	if typ.typ == nil {
+		typ.typ = p.findType("runtime.itab")
+		typ.hasAbiITab = false
+	}
+	return typ
+}
+
+// Type is the field representing either abi.ITab.Type or runtime.itab._type.
+func (r runtimeItab) Type() *Field {
+	if !r.hasAbiITab {
+		return r.typ.field("_type")
+	}
+	return r.typ.field("Type")
+}
+
 // Convert the address of a runtime._type to a *Type.
 // The "d" is the address of the second field of an interface, used to help disambiguate types.
 // If "d" is 0, just return *Type and not to do the interface disambiguation.
@@ -150,8 +246,8 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	}
 
 	// Read runtime._type.size
-	r := region{p: p, a: a, typ: p.findType("runtime._type")}
-	size := int64(r.Field("size").Uintptr())
+	r := p.findRuntimeType(a)
+	size := r.Size_()
 
 	// Find module this type is in.
 	var m *module
@@ -165,12 +261,12 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	// Read information out of the runtime._type.
 	var name string
 	if m != nil {
-		x := m.types.Add(int64(r.Field("str").Int32()))
+		x := m.types.Add(r.Str())
 		i, n := readNameLen(p, x)
 		b := make([]byte, n)
 		p.proc.ReadAt(b, x.Add(i+1))
 		name = string(b)
-		if r.Field("tflag").Uint8()&uint8(p.rtConstants["tflagExtraStar"]) != 0 {
+		if r.TFlag()&uint8(p.rtConstants["tflagExtraStar"]) != 0 {
 			name = name[1:]
 		}
 	} else {
@@ -182,10 +278,10 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 
 	// Read ptr/nonptr bits
 	ptrSize := p.proc.PtrSize()
-	nptrs := int64(r.Field("ptrdata").Uintptr()) / ptrSize
+	nptrs := int64(r.PtrBytes()) / ptrSize
 	var ptrs []int64
-	if r.Field("kind").Uint8()&uint8(p.rtConstants["kindGCProg"]) == 0 {
-		gcdata := r.Field("gcdata").Address()
+	if r.Kind_()&uint8(p.rtConstants["kindGCProg"]) == 0 {
+		gcdata := r.GCData()
 		for i := int64(0); i < nptrs; i++ {
 			if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
 				ptrs = append(ptrs, i*ptrSize)
@@ -604,11 +700,8 @@ func extractTypeFromFunctionName(method string, p *Process) *Type {
 
 // ifaceIndir reports whether t is stored indirectly in an interface value.
 func ifaceIndir(t core.Address, p *Process) bool {
-	typr := region{p: p, a: t, typ: p.findType("runtime._type")}
-	if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
-		return true
-	}
-	return false
+	typr := p.findRuntimeType(t)
+	return typr.Kind_()&uint8(p.rtConstants["kindDirectIface"]) == 0
 }
 
 // typeObject takes an address and a type for the data at that address.
@@ -629,7 +722,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		data := a.Add(ptrSize)
 		if t.Kind == KindIface {
-			typPtr = p.proc.ReadPtr(typPtr.Add(p.findType("runtime.itab").field("_type").Off))
+			typPtr = p.proc.ReadPtr(typPtr.Add(p.findItab().Type().Off))
 		}
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.

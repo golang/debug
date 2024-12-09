@@ -471,6 +471,11 @@ func checkProcess(t *testing.T, p *Process) {
 	if heapStat == nil || heapStat.Size == 0 {
 		t.Errorf("stat[%q].Size == 0, want >0", heapName)
 	}
+
+	lt := runLT(p)
+	if !checkDominator(t, lt) {
+		t.Errorf("sanityCheckDominator(...) = false, want true")
+	}
 }
 
 func TestVersions(t *testing.T) {
@@ -490,11 +495,6 @@ func TestVersions(t *testing.T) {
 		t.Run(ver, func(t *testing.T) {
 			p := loadExampleVersion(t, ver)
 			checkProcess(t, p)
-
-			lt := runLT(p)
-			if !checkDominator(t, lt) {
-				t.Errorf("sanityCheckDominator(...) = false, want true")
-			}
 		})
 	}
 
@@ -506,14 +506,6 @@ func TestVersions(t *testing.T) {
 			t.Run(strings.Join(buildFlags, ","), func(t *testing.T) {
 				p := loadExampleGenerated(t, buildFlags...)
 				checkProcess(t, p)
-
-				// TODO(aktau): Move checkDominator into checkProcess once this passes
-				// for loadExampleGenerated.
-				t.Skip(`skipping dominator check due to "panic: can't find type runtime.itab"`)
-				lt := runLT(p)
-				if !checkDominator(t, lt) {
-					t.Errorf("checkDominator(...) = false, want true")
-				}
 			})
 		}
 	})
