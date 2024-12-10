@@ -5,6 +5,7 @@
 package gocore
 
 import (
+	"iter"
 	"math/bits"
 	"strings"
 
@@ -29,7 +30,7 @@ func (p *Process) markObjects() {
 
 	// Function to call when we find a new pointer.
 	add := func(x core.Address) {
-		h := p.findHeapInfo(x)
+		h := p.heap.get(x)
 		if h == nil { // not in heap or not in a valid span
 			// Invalid spans can happen with intra-stack pointers.
 			return
@@ -37,7 +38,7 @@ func (p *Process) markObjects() {
 		// Round down to object start.
 		x = h.base.Add(x.Sub(h.base) / h.size * h.size)
 		// Object start may map to a different info. Reload heap info.
-		h = p.findHeapInfo(x)
+		h = p.heap.get(x)
 		// Find mark bit
 		b := uint64(x) % heapInfoSize / 8
 		if h.mark&(uint64(1)<<b) != 0 { // already found
@@ -61,6 +62,9 @@ func (p *Process) markObjects() {
 	// Not a huge deal given that we'll just ignore outright bad pointers, but
 	// we may accidentally mark some objects as live erroneously.
 	for _, g := range p.goroutines {
+		for _, r := range g.regRoots {
+			add(core.Address(r.RegValue))
+		}
 		for _, f := range g.frames {
 			for a := range f.Live {
 				add(p.proc.ReadPtr(a))
@@ -115,7 +119,7 @@ func (p *Process) markObjects() {
 	// Initialize firstIdx fields in the heapInfo, for fast object index lookups.
 	n = 0
 	p.ForEachObject(func(x Object) bool {
-		h := p.findHeapInfo(p.Addr(x))
+		h := p.heap.get(p.Addr(x))
 		if h.firstIdx == -1 {
 			h.firstIdx = n
 		}
@@ -127,24 +131,26 @@ func (p *Process) markObjects() {
 	}
 
 	// Update stats to include the live/garbage distinction.
-	alloc := p.Stats().Child("heap").Child("in use spans").Child("alloc")
-	alloc.Children = []*Stats{
-		&Stats{"live", live, nil},
-		&Stats{"garbage", alloc.Size - live, nil},
-	}
+	allocSize := p.Stats().Sub("heap", "in use spans", "alloc").Value
+	p.Stats().Sub("heap", "in use spans").setChild(
+		groupStat("alloc",
+			leafStat("live", live),
+			leafStat("garbage", allocSize-live),
+		),
+	)
 }
 
 // isPtrFromHeap reports whether the inferior at address a contains a pointer.
 // a must be somewhere in the heap.
 func (p *Process) isPtrFromHeap(a core.Address) bool {
-	return p.findHeapInfo(a).IsPtr(a, p.proc.PtrSize())
+	return p.heap.get(a).isPtr(a, p.proc.PtrSize())
 }
 
 // IsPtr reports whether the inferior at address a contains a pointer.
 func (p *Process) IsPtr(a core.Address) bool {
-	h := p.findHeapInfo(a)
+	h := p.heap.get(a)
 	if h != nil {
-		return h.IsPtr(a, p.proc.PtrSize())
+		return h.isPtr(a, p.proc.PtrSize())
 	}
 	for _, m := range p.modules {
 		for _, s := range [2]string{"data", "bss"} {
@@ -169,7 +175,7 @@ func (p *Process) IsPtr(a core.Address) bool {
 // Returns 0,0 if a doesn't point to a live heap object.
 func (p *Process) FindObject(a core.Address) (Object, int64) {
 	// Round down to the start of an object.
-	h := p.findHeapInfo(a)
+	h := p.heap.get(a)
 	if h == nil {
 		// Not in Go heap, or in a span
 		// that doesn't hold Go objects (freed, stacks, ...)
@@ -177,7 +183,7 @@ func (p *Process) FindObject(a core.Address) (Object, int64) {
 	}
 	x := h.base.Add(a.Sub(h.base) / h.size * h.size)
 	// Check if object is marked.
-	h = p.findHeapInfo(x)
+	h = p.heap.get(x)
 	if h.mark>>(uint64(x)%heapInfoSize/8)&1 == 0 { // free or garbage
 		return 0, 0
 	}
@@ -189,25 +195,21 @@ func (p *Process) findObjectIndex(a core.Address) (int, int64) {
 	if x == 0 {
 		return -1, 0
 	}
-	h := p.findHeapInfo(core.Address(x))
+	h := p.heap.get(core.Address(x))
 	return h.firstIdx + bits.OnesCount64(h.mark&(uint64(1)<<(uint64(x)%heapInfoSize/8)-1)), off
 }
 
 // ForEachObject calls fn with each object in the Go heap.
 // If fn returns false, ForEachObject returns immediately.
 func (p *Process) ForEachObject(fn func(x Object) bool) {
-	for _, k := range p.pages {
-		pt := p.pageTable[k]
-		for i := range pt {
-			h := &pt[i]
-			m := h.mark
-			for m != 0 {
-				j := bits.TrailingZeros64(m)
-				m &= m - 1
-				x := Object(k)*pageTableSize*heapInfoSize + Object(i)*heapInfoSize + Object(j)*8
-				if !fn(x) {
-					return
-				}
+	for a, h := range p.heap.all() {
+		m := h.mark
+		for m != 0 {
+			j := bits.TrailingZeros64(m)
+			m &= m - 1
+			x := Object(a + core.Address(j*8))
+			if !fn(x) {
+				return
 			}
 		}
 	}
@@ -222,6 +224,11 @@ func (p *Process) ForEachRoot(fn func(r *Root) bool) {
 		}
 	}
 	for _, g := range p.goroutines {
+		for _, r := range g.regRoots {
+			if !fn(r) {
+				return
+			}
+		}
 		for _, f := range g.frames {
 			for _, r := range f.roots {
 				if !fn(r) {
@@ -239,7 +246,7 @@ func (p *Process) Addr(x Object) core.Address {
 
 // Size returns the size of x in bytes.
 func (p *Process) Size(x Object) int64 {
-	return p.findHeapInfo(core.Address(x)).size
+	return p.heap.get(core.Address(x)).size
 }
 
 // Type returns the type and repeat count for the object x.
@@ -306,6 +313,15 @@ func edges1(p *Process, r *Root, off int64, t *Type, fn func(int64, Object, int6
 		off += p.proc.PtrSize()
 		fallthrough
 	case KindPtr, KindString, KindSlice, KindFunc:
+		if t.Kind == KindPtr && r.Addr == 0 {
+			dst, off2 := p.FindObject(core.Address(r.RegValue))
+			if dst != 0 {
+				if !fn(off, dst, off2) {
+					return false
+				}
+			}
+			break
+		}
 		a := r.Addr.Add(off)
 		if r.Frame == nil || r.Frame.Live[a] {
 			dst, off2 := p.FindObject(p.proc.ReadPtr(a))
@@ -346,7 +362,7 @@ type heapInfo struct {
 	ptr [2]uint64
 }
 
-func (h *heapInfo) IsPtr(a core.Address, ptrSize int64) bool {
+func (h *heapInfo) isPtr(a core.Address, ptrSize int64) bool {
 	if ptrSize == 8 {
 		i := uint(a%heapInfoSize) / 8
 		return h.ptr[0]>>i&1 != 0
@@ -355,30 +371,45 @@ func (h *heapInfo) IsPtr(a core.Address, ptrSize int64) bool {
 	return h.ptr[i/64]>>(i%64)&1 != 0
 }
 
-// setHeapPtr records that the memory at heap address a contains a pointer.
-func (p *Process) setHeapPtr(a core.Address) {
-	h := p.allocHeapInfo(a)
-	if p.proc.PtrSize() == 8 {
-		i := uint(a%heapInfoSize) / 8
-		h.ptr[0] |= uint64(1) << i
-		return
-	}
-	i := a % heapInfoSize / 4
-	h.ptr[i/64] |= uint64(1) << (i % 64)
+type heapTableID uint64
+
+func (id heapTableID) addr() core.Address {
+	return core.Address(id * heapInfoSize * heapTableSize)
+}
+
+type heapTable struct {
+	table   map[heapTableID]*heapTableEntry
+	entries []heapTableID
+	ptrSize uint64
+}
+
+func heapTableIndex(a core.Address) (heapTableID, uint64) {
+	return heapTableID(a / heapInfoSize / heapTableSize), uint64(a / heapInfoSize % heapTableSize)
 }
 
 // Heap info structures cover 9 bits of address.
 // A page table entry covers 20 bits of address (1MB).
-const pageTableSize = 1 << 11
+const heapTableSize = 1 << 11
 
-type pageTableEntry [pageTableSize]heapInfo
+type heapTableEntry [heapTableSize]heapInfo
 
-// findHeapInfo finds the heapInfo structure for a.
-// Returns nil if a is not a heap address.
-func (p *Process) findHeapInfo(a core.Address) *heapInfo {
-	k := a / heapInfoSize / pageTableSize
-	i := a / heapInfoSize % pageTableSize
-	t := p.pageTable[k]
+func (ht *heapTable) setIsPointer(a core.Address) {
+	h := ht.getOrCreate(a)
+	ptrSize := ht.ptrSize
+	if ptrSize == 8 {
+		i := uint64(a%heapInfoSize) / 8
+		h.ptr[0] |= uint64(1) << i
+		return
+	}
+	i := uint64(a%heapInfoSize) / 4
+	h.ptr[i/64] |= uint64(1) << (i % 64)
+}
+
+// get returns the heap info for an address. Returns nil
+// if a is not a heap address.
+func (ht *heapTable) get(a core.Address) *heapInfo {
+	k, i := heapTableIndex(a)
+	t := ht.table[k]
 	if t == nil {
 		return nil
 	}
@@ -389,19 +420,33 @@ func (p *Process) findHeapInfo(a core.Address) *heapInfo {
 	return h
 }
 
-// Same as findHeapInfo, but allocates the heapInfo if it
-// hasn't been allocated yet.
-func (p *Process) allocHeapInfo(a core.Address) *heapInfo {
-	k := a / heapInfoSize / pageTableSize
-	i := a / heapInfoSize % pageTableSize
-	t := p.pageTable[k]
+// getOrCreate returns the heap info for an address, or if nil,
+// creates it, marking it as a heap address.
+func (ht *heapTable) getOrCreate(a core.Address) *heapInfo {
+	k, i := heapTableIndex(a)
+	t := ht.table[k]
 	if t == nil {
-		t = new(pageTableEntry)
-		for j := 0; j < pageTableSize; j++ {
+		t = new(heapTableEntry)
+		for j := 0; j < heapTableSize; j++ {
 			t[j].firstIdx = -1
 		}
-		p.pageTable[k] = t
-		p.pages = append(p.pages, k)
+		ht.table[k] = t
+		ht.entries = append(ht.entries, k)
 	}
 	return &t[i]
+}
+
+func (ht *heapTable) all() iter.Seq2[core.Address, *heapInfo] {
+	return func(yield func(core.Address, *heapInfo) bool) {
+		for _, k := range ht.entries {
+			e := ht.table[k]
+			for i := range e {
+				h := &e[i]
+				a := k.addr() + core.Address(uint64(i)*heapInfoSize)
+				if !yield(a, h) {
+					return
+				}
+			}
+		}
+	}
 }

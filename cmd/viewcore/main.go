@@ -512,9 +512,9 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 		exitf("%v\n", err)
 	}
 	t := tabwriter.NewWriter(os.Stdout, 0, 8, 1, ' ', tabwriter.AlignRight)
-	all := c.Stats().Size
-	var printStat func(*gocore.Stats, string)
-	printStat = func(s *gocore.Stats, indent string) {
+	all := c.Stats().Value
+	var printStat func(*gocore.Statistic, string)
+	printStat = func(s *gocore.Statistic, indent string) {
 		comment := ""
 		switch s.Name {
 		case "bss":
@@ -526,8 +526,8 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 		case "released":
 			comment = "(given back to the OS)"
 		}
-		fmt.Fprintf(t, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Size, float64(s.Size)*100/float64(all), comment)
-		for _, c := range s.Children {
+		fmt.Fprintf(t, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Value, float64(s.Value)*100/float64(all), comment)
+		for c := range s.Children() {
 			printStat(c, indent+"  ")
 		}
 	}

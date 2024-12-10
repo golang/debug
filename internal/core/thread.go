@@ -6,10 +6,15 @@ package core
 
 // A Thread represents an operating system thread.
 type Thread struct {
-	pid  uint64   // thread/process ID
-	regs []uint64 // set depends on arch
-	pc   Address  // program counter
-	sp   Address  // stack pointer
+	pid  uint64     // thread/process ID
+	regs []Register // set depends on arch
+	pc   Address    // program counter
+	sp   Address    // stack pointer
+}
+
+type Register struct {
+	Name  string
+	Value uint64
 }
 
 func (t *Thread) Pid() uint64 {
@@ -18,9 +23,7 @@ func (t *Thread) Pid() uint64 {
 
 // Regs returns the set of register values for the thread.
 // What registers go where is architecture-dependent.
-// TODO: document for each architecture.
-// TODO: do this in some arch-independent way?
-func (t *Thread) Regs() []uint64 {
+func (t *Thread) Regs() []Register {
 	return t.regs
 }
 

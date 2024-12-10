@@ -8,26 +8,8 @@ package gocore
 
 import (
 	"fmt"
-	"os"
 	"testing"
 )
-
-func TestLT(t *testing.T) {
-	p := loadExample(t)
-	lt := runLT(p)
-	checkDominator(t, lt)
-	if false {
-		lt.dot(os.Stdout)
-	}
-}
-
-func TestDominators(t *testing.T) {
-	p := loadExample(t)
-	d := p.calculateDominators()
-	if size := d.size[pseudoRoot]; size < 100<<10 {
-		t.Errorf("total size of objects is only %v bytes, should be >100KiB", size)
-	}
-}
 
 func checkDominator(t *testing.T, d ltDom) bool {
 	t.Helper()

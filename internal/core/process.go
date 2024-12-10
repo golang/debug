@@ -51,6 +51,7 @@ type Process struct {
 	symErr   error              // an error encountered while reading symbols
 	dwarf    *dwarf.Data        // debugging info (could be nil)
 	dwarfErr error              // an error encountered while reading DWARF
+	dwarfLoc []byte             // .debug_loc section
 
 	warnings []string // warnings generated during loading
 }
@@ -176,6 +177,10 @@ func (p *Process) DWARF() (*dwarf.Data, error) {
 	return p.dwarf, p.dwarfErr
 }
 
+func (p *Process) DWARFLoc() ([]byte, error) {
+	return p.dwarfLoc, p.dwarfErr
+}
+
 // Symbols returns a mapping from name to inferior address, along with
 // any error encountered during reading the symbol information.
 // (There may be both an error and some returned symbols.)
@@ -274,6 +279,14 @@ func Core(corePath, base, exePath string) (*Process, error) {
 	if dwarfErr != nil {
 		dwarfErr = fmt.Errorf("error reading DWARF info from %s: %v", exeFile.Name(), dwarfErr)
 	}
+	var dwarfLoc []byte
+	if locSection := exeElf.Section(".debug_loc"); locSection != nil {
+		var err error
+		dwarfLoc, err = locSection.Data()
+		if err != nil && dwarfErr == nil {
+			dwarfErr = fmt.Errorf("error reading DWARF location list section from %s: %v", exeFile.Name(), err)
+		}
+	}
 
 	// Sort then merge mappings, just to clean up a bit.
 	mappings := mem.mappings
@@ -363,6 +376,7 @@ func Core(corePath, base, exePath string) (*Process, error) {
 		symErr:     symErr,
 		dwarf:      dwarf,
 		dwarfErr:   dwarfErr,
+		dwarfLoc:   dwarfLoc,
 		warnings:   warnings,
 	}
 
@@ -673,39 +687,40 @@ func readThreads(meta metadata, notes noteMap) []*Thread {
 			t.pid = uint64(meta.byteOrder.Uint32(desc[32 : 32+4]))
 			// 112 = offsetof(prstatus_t, pr_reg), 216 = sizeof(elf_gregset_t)
 			reg := desc[112 : 112+216]
-			for i := 0; i < len(reg); i += 8 {
-				t.regs = append(t.regs, meta.byteOrder.Uint64(reg[i:]))
+			i := 0
+			readReg := func(name string) uint64 {
+				value := meta.byteOrder.Uint64(reg[i:])
+				t.regs = append(t.regs, Register{Name: name, Value: value})
+				i += 8
+				return value
 			}
-			// Registers are:
-			//  0: r15
-			//  1: r14
-			//  2: r13
-			//  3: r12
-			//  4: rbp
-			//  5: rbx
-			//  6: r11
-			//  7: r10
-			//  8: r9
-			//  9: r8
-			// 10: rax
-			// 11: rcx
-			// 12: rdx
-			// 13: rsi
-			// 14: rdi
-			// 15: orig_rax
-			// 16: rip
-			// 17: cs
-			// 18: eflags
-			// 19: rsp
-			// 20: ss
-			// 21: fs_base
-			// 22: gs_base
-			// 23: ds
-			// 24: es
-			// 25: fs
-			// 26: gs
-			t.pc = Address(t.regs[16])
-			t.sp = Address(t.regs[19])
+			readReg("r15")
+			readReg("r14")
+			readReg("r13")
+			readReg("r12")
+			readReg("rbp")
+			readReg("rbx")
+			readReg("r11")
+			readReg("r10")
+			readReg("r9")
+			readReg("r8")
+			readReg("rax")
+			readReg("rcx")
+			readReg("rdx")
+			readReg("rsi")
+			readReg("rdi")
+			readReg("orig_rax")
+			t.pc = Address(readReg("rip"))
+			readReg("cs")
+			readReg("eflags")
+			t.sp = Address(readReg("rsp"))
+			readReg("ss")
+			readReg("fs_base")
+			readReg("gs_base")
+			readReg("ds")
+			readReg("es")
+			readReg("fs")
+			readReg("gs")
 
 			// TODO: NT_FPREGSET for floating-point registers.
 			//

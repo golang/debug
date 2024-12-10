@@ -123,116 +123,74 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 // return the number of bytes of the variable int and its value,
 // which means the length of a name.
 func readNameLen(p *Process, a core.Address) (int64, int64) {
-	if p.is117OrGreater {
-		v := 0
-		for i := 0; ; i++ {
-			x := p.proc.ReadUint8(a.Add(int64(i + 1)))
-			v += int(x&0x7f) << (7 * i)
-			if x&0x80 == 0 {
-				return int64(i + 1), int64(v)
-			}
+	v := 0
+	for i := 0; ; i++ {
+		x := p.proc.ReadUint8(a.Add(int64(i + 1)))
+		v += int(x&0x7f) << (7 * i)
+		if x&0x80 == 0 {
+			return int64(i + 1), int64(v)
 		}
-	} else {
-		n1 := p.proc.ReadUint8(a.Add(1))
-		n2 := p.proc.ReadUint8(a.Add(2))
-		n := uint16(n1)<<8 + uint16(n2)
-		return 2, int64(n)
 	}
 }
 
 // runtimeType is a thin wrapper around a runtime._type (AKA abi.Type) region
 // that abstracts over the name changes seen in Go 1.21.
 type runtimeType struct {
-	reg        region
-	hasAbiType bool // True if Go 1.21+
+	reg region
 }
 
 // findRuntimeType finds either abi.Type (Go 1.21+) or runtime._type.
 func (p *Process) findRuntimeType(a core.Address) runtimeType {
-	typ := runtimeType{
-		reg:        region{p: p, a: a, typ: p.tryFindType("abi.Type")},
-		hasAbiType: true,
+	return runtimeType{
+		reg: region{p: p.proc, a: a, typ: p.tryFindType("internal/abi.Type")},
 	}
-	if typ.reg.typ == nil {
-		typ.reg.typ = p.findType("runtime._type")
-		typ.hasAbiType = false
-	}
-	return typ
 }
 
 // Size_ is either abi.Type.Size_ or runtime._type.Size_.
 func (r runtimeType) Size_() int64 {
-	if !r.hasAbiType {
-		return int64(r.reg.Field("size").Uintptr())
-	}
 	return int64(r.reg.Field("Size_").Uintptr())
 }
 
 // TFlag is either abi.Type.TFlag or runtime._type.TFlag.
 func (r runtimeType) TFlag() uint8 {
-	if !r.hasAbiType {
-		return r.reg.Field("tflag").Uint8()
-	}
 	return r.reg.Field("TFlag").Uint8()
 }
 
 // Str is either abi.Type.Str or runtime._type.Str.
 func (r runtimeType) Str() int64 {
-	if !r.hasAbiType {
-		return int64(r.reg.Field("str").Int32())
-	}
 	return int64(r.reg.Field("Str").Int32())
 }
 
 // PtrBytes is either abi.Type.PtrBytes or runtime._type.PtrBytes.
 func (r runtimeType) PtrBytes() int64 {
-	if !r.hasAbiType {
-		return int64(r.reg.Field("ptrdata").Uintptr())
-	}
 	return int64(r.reg.Field("PtrBytes").Uintptr())
 }
 
 // Kind_ is either abi.Type.Kind_ or runtime._type.Kind_.
 func (r runtimeType) Kind_() uint8 {
-	if !r.hasAbiType {
-		return r.reg.Field("kind").Uint8()
-	}
 	return r.reg.Field("Kind_").Uint8()
 }
 
 // GCData is either abi.Type.GCData or runtime._type.GCData.
 func (r runtimeType) GCData() core.Address {
-	if !r.hasAbiType {
-		return r.reg.Field("gcdata").Address()
-	}
 	return r.reg.Field("GCData").Address()
 }
 
 // runtimeItab is a thin wrapper around a abi.ITab (used to be runtime.itab). It
 // abstracts over name/package changes in Go 1.21.
 type runtimeItab struct {
-	typ        *Type
-	hasAbiITab bool // True if Go 1.21+
+	typ *Type
 }
 
 // findItab finds either abi.ITab (Go 1.21+) or runtime.itab.
 func (p *Process) findItab() runtimeItab {
-	typ := runtimeItab{
-		typ:        p.tryFindType("abi.ITab"),
-		hasAbiITab: true,
+	return runtimeItab{
+		typ: p.tryFindType("internal/abi.ITab"),
 	}
-	if typ.typ == nil {
-		typ.typ = p.findType("runtime.itab")
-		typ.hasAbiITab = false
-	}
-	return typ
 }
 
 // Type is the field representing either abi.ITab.Type or runtime.itab._type.
 func (r runtimeItab) Type() *Field {
-	if !r.hasAbiITab {
-		return r.typ.field("_type")
-	}
 	return r.typ.field("Type")
 }
 
@@ -241,7 +199,7 @@ func (r runtimeItab) Type() *Field {
 // If "d" is 0, just return *Type and not to do the interface disambiguation.
 // Guaranteed to return a non-nil *Type.
 func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
-	if t := p.runtimeMap[a]; t != nil {
+	if t := p.rtTypeMap[a]; t != nil {
 		return t
 	}
 
@@ -266,7 +224,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 		b := make([]byte, n)
 		p.proc.ReadAt(b, x.Add(i+1))
 		name = string(b)
-		if r.TFlag()&uint8(p.rtConstants["tflagExtraStar"]) != 0 {
+		if r.TFlag()&uint8(p.rtConsts["tflagExtraStar"]) != 0 {
 			name = name[1:]
 		}
 	} else {
@@ -280,7 +238,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	ptrSize := p.proc.PtrSize()
 	nptrs := int64(r.PtrBytes()) / ptrSize
 	var ptrs []int64
-	if r.Kind_()&uint8(p.rtConstants["kindGCProg"]) == 0 {
+	if r.Kind_()&uint8(p.rtConsts["kindGCProg"]) == 0 {
 		gcdata := r.GCData()
 		for i := int64(0); i < nptrs; i++ {
 			if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
@@ -294,43 +252,11 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	// Find a Type that matches this type.
 	// (The matched type will be one constructed from DWARF info.)
 	// It must match name, size, and pointer bits.
-	var candidates []*Type
-	for _, t := range p.runtimeNameMap[name] {
-		if size == t.Size && equal(ptrs, t.ptrs()) {
-			candidates = append(candidates, t)
-		}
+	t := p.rtTypeByName[name]
+	if t != nil && (size != t.Size || !equal(ptrs, t.ptrs())) {
+		t = nil
 	}
-	// There may be multiple candidates, when they are the pointers to the same type name,
-	// in the same package name, but in the different package paths. eg. path-1/pkg.Foo and path-2/pkg.Foo.
-	// Match the object size may be a proper choice, just for try best, since we have no other choices.
-	// If the interface is of type T, for direct interfaces, that pointer points to a T.Elem.
-	if d != 0 && len(candidates) > 1 && !ifaceIndir(a, p) {
-		ptr := p.proc.ReadPtr(d)
-		obj, off := p.FindObject(ptr)
-		// only useful while it point to the head of an object,
-		// otherwise, the GC object size should bigger than the size of the type.
-		if obj != 0 && off == 0 {
-			sz := p.Size(obj)
-			var tmp []*Type
-			for _, t := range candidates {
-				if t.Elem != nil && t.Elem.Size == sz {
-					tmp = append(tmp, t)
-				}
-			}
-			if len(tmp) > 0 {
-				candidates = tmp
-			}
-		}
-	}
-	var t *Type
-	if len(candidates) > 0 {
-		// If a runtime type matches more than one DWARF type,
-		// pick one arbitrarily.
-		// This looks mostly harmless. DWARF has some redundant entries.
-		// For example, [32]uint8 appears twice.
-		// TODO: investigate the reason for this duplication.
-		t = candidates[0]
-	} else {
+	if t == nil {
 		// There's no corresponding DWARF type.  Make our own.
 		t = &Type{Name: name, Size: size, Kind: KindStruct}
 		n := t.Size / ptrSize
@@ -360,9 +286,12 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 			// TODO: tail of <ptrSize data.
 		}
 	}
-	// Memoize.
-	p.runtimeMap[a] = t
 
+	// Memoize.
+	if p.rtTypeMap == nil {
+		p.rtTypeMap = make(map[core.Address]*Type)
+	}
+	p.rtTypeMap[a] = t
 	return t
 }
 
@@ -476,181 +405,186 @@ func (c typeChunk) String() string {
 
 // typeHeap tries to label all the heap objects with types.
 func (p *Process) typeHeap() {
-	p.initTypeHeap.Do(func() {
-		// Type info for the start of each object. a.k.a. "0 offset" typings.
-		p.types = make([]typeInfo, p.nObj)
+	p.initTypeHeap.Do(p.doTypeHeap)
+}
 
-		// Type info for the interior of objects, a.k.a. ">0 offset" typings.
-		// Type information is arranged in chunks. Chunks are stored in an
-		// arbitrary order, and are guaranteed to not overlap. If types are
-		// equal, chunks are also guaranteed not to abut.
-		// Interior typings are kept separate because they hopefully are rare.
-		// TODO: They aren't really that rare. On some large heaps I tried
-		// ~50% of objects have an interior pointer into them.
-		// Keyed by object index.
-		interior := map[int][]typeChunk{}
+func (p *Process) doTypeHeap() {
+	// Type info for the start of each object. a.k.a. "0 offset" typings.
+	p.types = make([]typeInfo, p.nObj)
 
-		// Typings we know about but haven't scanned yet.
-		type workRecord struct {
-			a core.Address
-			t *Type
-			r int64
+	// Type info for the interior of objects, a.k.a. ">0 offset" typings.
+	// Type information is arranged in chunks. Chunks are stored in an
+	// arbitrary order, and are guaranteed to not overlap. If types are
+	// equal, chunks are also guaranteed not to abut.
+	// Interior typings are kept separate because they hopefully are rare.
+	// TODO: They aren't really that rare. On some large heaps I tried
+	// ~50% of objects have an interior pointer into them.
+	// Keyed by object index.
+	interior := map[int][]typeChunk{}
+
+	// Typings we know about but haven't scanned yet.
+	type workRecord struct {
+		a core.Address
+		t *Type
+		r int64
+	}
+	var work []workRecord
+
+	// add records the fact that we know the object at address a has
+	// r copies of type t.
+	add := func(a core.Address, t *Type, r int64) {
+		if a == 0 { // nil pointer
+			return
 		}
-		var work []workRecord
-
-		// add records the fact that we know the object at address a has
-		// r copies of type t.
-		add := func(a core.Address, t *Type, r int64) {
-			if a == 0 { // nil pointer
-				return
+		i, off := p.findObjectIndex(a)
+		if i < 0 { // pointer doesn't point to an object in the Go heap
+			return
+		}
+		if off == 0 {
+			// We have a 0-offset typing. Replace existing 0-offset typing
+			// if the new one is larger.
+			ot := p.types[i].t
+			or := p.types[i].r
+			if ot == nil || r*t.Size > or*ot.Size {
+				if t == ot {
+					// Scan just the new section.
+					work = append(work, workRecord{
+						a: a.Add(or * ot.Size),
+						t: t,
+						r: r - or,
+					})
+				} else {
+					// Rescan the whole typing using the updated type.
+					work = append(work, workRecord{
+						a: a,
+						t: t,
+						r: r,
+					})
+				}
+				p.types[i].t = t
+				p.types[i].r = r
 			}
-			i, off := p.findObjectIndex(a)
-			if i < 0 { // pointer doesn't point to an object in the Go heap
-				return
-			}
-			if off == 0 {
-				// We have a 0-offset typing. Replace existing 0-offset typing
-				// if the new one is larger.
-				ot := p.types[i].t
-				or := p.types[i].r
-				if ot == nil || r*t.Size > or*ot.Size {
-					if t == ot {
-						// Scan just the new section.
-						work = append(work, workRecord{
-							a: a.Add(or * ot.Size),
-							t: t,
-							r: r - or,
-						})
-					} else {
-						// Rescan the whole typing using the updated type.
-						work = append(work, workRecord{
-							a: a,
-							t: t,
-							r: r,
-						})
-					}
-					p.types[i].t = t
-					p.types[i].r = r
-				}
-				return
-			}
+			return
+		}
 
-			// Add an interior typing to object #i.
-			c := typeChunk{off: off, t: t, r: r}
+		// Add an interior typing to object #i.
+		c := typeChunk{off: off, t: t, r: r}
 
-			// Merge the given typing into the chunks we already know.
-			// TODO: this could be O(n) per insert if there are lots of internal pointers.
-			chunks := interior[i]
-			newchunks := chunks[:0]
-			addWork := true
-			for _, d := range chunks {
-				if c.max() <= d.min() || c.min() >= d.max() {
-					// c does not overlap with d.
-					if c.t == d.t && (c.max() == d.min() || c.min() == d.max()) {
-						// c and d abut and share the same base type. Merge them.
-						c = c.merge(d)
-						continue
-					}
-					// Keep existing chunk d.
-					// Overwrites chunks slice, but we're only merging chunks so it
-					// can't overwrite to-be-processed elements.
-					newchunks = append(newchunks, d)
-					continue
-				}
-				// There is some overlap. There are a few possibilities:
-				// 1) One is completely contained in the other.
-				// 2) Both are slices of a larger underlying array.
-				// 3) Some unsafe trickery has happened. Non-containing overlap
-				//    can only happen in safe Go via case 2.
-				if c.min() >= d.min() && c.max() <= d.max() {
-					// 1a: c is contained within the existing chunk d.
-					// Note that there can be a type mismatch between c and d,
-					// but we don't care. We use the larger chunk regardless.
-					c = d
-					addWork = false // We've already scanned all of c.
-					continue
-				}
-				if d.min() >= c.min() && d.max() <= c.max() {
-					// 1b: existing chunk d is completely covered by c.
-					continue
-				}
-				if c.t == d.t && c.matchingAlignment(d) {
-					// Union two regions of the same base type. Case 2 above.
+		// Merge the given typing into the chunks we already know.
+		// TODO: this could be O(n) per insert if there are lots of internal pointers.
+		chunks := interior[i]
+		newchunks := chunks[:0]
+		addWork := true
+		for _, d := range chunks {
+			if c.max() <= d.min() || c.min() >= d.max() {
+				// c does not overlap with d.
+				if c.t == d.t && (c.max() == d.min() || c.min() == d.max()) {
+					// c and d abut and share the same base type. Merge them.
 					c = c.merge(d)
 					continue
 				}
-				if c.size() < d.size() {
-					// Keep the larger of the two chunks.
-					c = d
-					addWork = false
-				}
-			}
-			// Add new chunk to list of chunks for object.
-			newchunks = append(newchunks, c)
-			interior[i] = newchunks
-			// Also arrange to scan the new chunk. Note that if we merged
-			// with an existing chunk (or chunks), those will get rescanned.
-			// Duplicate work, but that's ok. TODO: but could be expensive.
-			if addWork {
-				work = append(work, workRecord{
-					a: a.Add(c.off - off),
-					t: c.t,
-					r: c.r,
-				})
-			}
-		}
-
-		// Get typings starting at roots.
-		fr := &frameReader{p: p}
-		p.ForEachRoot(func(r *Root) bool {
-			if r.Frame != nil {
-				fr.live = r.Frame.Live
-				p.typeObject(r.Addr, r.Type, fr, add)
-			} else {
-				p.typeObject(r.Addr, r.Type, p.proc, add)
-			}
-			return true
-		})
-
-		// Propagate typings through the heap.
-		for len(work) > 0 {
-			c := work[len(work)-1]
-			work = work[:len(work)-1]
-			switch c.t.Kind {
-			case KindBool, KindInt, KindUint, KindFloat, KindComplex:
-				// Don't do O(n) function calls for big primitive slices
+				// Keep existing chunk d.
+				// Overwrites chunks slice, but we're only merging chunks so it
+				// can't overwrite to-be-processed elements.
+				newchunks = append(newchunks, d)
 				continue
 			}
-			for i := int64(0); i < c.r; i++ {
-				p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
+			// There is some overlap. There are a few possibilities:
+			// 1) One is completely contained in the other.
+			// 2) Both are slices of a larger underlying array.
+			// 3) Some unsafe trickery has happened. Non-containing overlap
+			//    can only happen in safe Go via case 2.
+			if c.min() >= d.min() && c.max() <= d.max() {
+				// 1a: c is contained within the existing chunk d.
+				// Note that there can be a type mismatch between c and d,
+				// but we don't care. We use the larger chunk regardless.
+				c = d
+				addWork = false // We've already scanned all of c.
+				continue
+			}
+			if d.min() >= c.min() && d.max() <= c.max() {
+				// 1b: existing chunk d is completely covered by c.
+				continue
+			}
+			if c.t == d.t && c.matchingAlignment(d) {
+				// Union two regions of the same base type. Case 2 above.
+				c = c.merge(d)
+				continue
+			}
+			if c.size() < d.size() {
+				// Keep the larger of the two chunks.
+				c = d
+				addWork = false
 			}
 		}
+		// Add new chunk to list of chunks for object.
+		newchunks = append(newchunks, c)
+		interior[i] = newchunks
+		// Also arrange to scan the new chunk. Note that if we merged
+		// with an existing chunk (or chunks), those will get rescanned.
+		// Duplicate work, but that's ok. TODO: but could be expensive.
+		if addWork {
+			work = append(work, workRecord{
+				a: a.Add(c.off - off),
+				t: c.t,
+				r: c.r,
+			})
+		}
+	}
 
-		// Merge any interior typings with the 0-offset typing.
-		for i, chunks := range interior {
-			t := p.types[i].t
-			r := p.types[i].r
-			if t == nil {
-				continue // We have no type info at offset 0.
-			}
-			for _, c := range chunks {
-				if c.max() <= r*t.Size {
-					// c is completely contained in the 0-offset typing. Ignore it.
-					continue
-				}
-				if c.min() <= r*t.Size {
-					// Typings overlap or abut. Extend if we can.
-					if c.t == t && c.min()%t.Size == 0 {
-						r = c.max() / t.Size
-						p.types[i].r = r
-					}
-					continue
-				}
-				// Note: at this point we throw away any interior typings that weren't
-				// merged with the 0-offset typing.  TODO: make more use of this info.
-			}
+	// Get typings starting at roots.
+	fr := &frameReader{p: p}
+	p.ForEachRoot(func(r *Root) bool {
+		if r.Frame != nil {
+			fr.live = r.Frame.Live
+			p.typeObject(r.Addr, r.Type, fr, add)
+		} else if r.Addr == 0 && r.Type.Kind == KindPtr && r.Type.Elem != nil {
+			p.typeObject(r.RegValue, r.Type.Elem, fr, add)
+		} else {
+			p.typeObject(r.Addr, r.Type, p.proc, add)
 		}
+		return true
 	})
+
+	// Propagate typings through the heap.
+	for len(work) > 0 {
+		c := work[len(work)-1]
+		work = work[:len(work)-1]
+		switch c.t.Kind {
+		case KindBool, KindInt, KindUint, KindFloat, KindComplex:
+			// Don't do O(n) function calls for big primitive slices
+			continue
+		}
+		for i := int64(0); i < c.r; i++ {
+			p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
+		}
+	}
+
+	// Merge any interior typings with the 0-offset typing.
+	for i, chunks := range interior {
+		t := p.types[i].t
+		r := p.types[i].r
+		if t == nil {
+			continue // We have no type info at offset 0.
+		}
+		for _, c := range chunks {
+			if c.max() <= r*t.Size {
+				// c is completely contained in the 0-offset typing. Ignore it.
+				continue
+			}
+			if c.min() <= r*t.Size {
+				// Typings overlap or abut. Extend if we can.
+				if c.t == t && c.min()%t.Size == 0 {
+					r = c.max() / t.Size
+					p.types[i].r = r
+				}
+				continue
+			}
+			// Note: at this point we throw away any interior typings that weren't
+			// merged with the 0-offset typing.  TODO: make more use of this info.
+		}
+	}
+
 }
 
 type reader interface {
@@ -689,11 +623,7 @@ func extractTypeFromFunctionName(method string, p *Process) *Type {
 		} else {
 			typeName = matches[1] + "." + matches[3]
 		}
-		s := p.runtimeNameMap[typeName]
-		if len(s) > 0 {
-			// TODO: filter with the object size when there are multiple candidates.
-			return s[0]
-		}
+		return p.rtTypeByName[typeName]
 	}
 	return nil
 }
@@ -701,7 +631,7 @@ func extractTypeFromFunctionName(method string, p *Process) *Type {
 // ifaceIndir reports whether t is stored indirectly in an interface value.
 func ifaceIndir(t core.Address, p *Process) bool {
 	typr := p.findRuntimeType(t)
-	return typr.Kind_()&uint8(p.rtConstants["kindDirectIface"]) == 0
+	return typr.Kind_()&uint8(p.rtConsts["kindDirectIface"]) == 0
 }
 
 // typeObject takes an address and a type for the data at that address.
@@ -844,6 +774,30 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 				add(bufPtr, rTyp, int64(dataqsiz))
 			}
 			p.typeObject(a.Add(f.Off), f.Type, r, add)
+		}
+	default:
+		panic(fmt.Sprintf("unknown type kind %s\n", t.Kind))
+	}
+}
+
+// forEachPointer iterates over each pointer in the type, emitting the offset of the
+// pointer in the type.
+func (t *Type) forEachPointer(baseOffset, ptrSize int64, yield func(off int64)) {
+	switch t.Kind {
+	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
+		// Nothing to do
+	case KindEface, KindIface:
+		yield(ptrSize)
+	case KindString, KindSlice, KindPtr, KindFunc:
+		yield(baseOffset)
+	case KindArray:
+		n := t.Elem.Size
+		for i := int64(0); i < t.Count; i++ {
+			t.Elem.forEachPointer(baseOffset+i*n, ptrSize, yield)
+		}
+	case KindStruct:
+		for _, f := range t.Fields {
+			f.Type.forEachPointer(baseOffset+f.Off, ptrSize, yield)
 		}
 	default:
 		panic(fmt.Sprintf("unknown type kind %s\n", t.Kind))

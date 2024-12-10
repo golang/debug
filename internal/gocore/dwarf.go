@@ -6,13 +6,16 @@ package gocore
 
 import (
 	"debug/dwarf"
+	"errors"
 	"fmt"
 	"reflect"
-	"regexp"
-	"sort"
 	"strings"
 
 	"golang.org/x/debug/internal/core"
+
+	"github.com/go-delve/delve/pkg/dwarf/loclist"
+	"github.com/go-delve/delve/pkg/dwarf/op"
+	"github.com/go-delve/delve/pkg/dwarf/regnum"
 )
 
 const (
@@ -20,8 +23,12 @@ const (
 )
 
 // read DWARF types from core dump.
-func (p *Process) readDWARFTypes() {
-	d, _ := p.proc.DWARF()
+func readDWARFTypes(p *core.Process) (map[dwarf.Type]*Type, error) {
+	d, err := p.DWARF()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DWARF: %v", err)
+	}
+	dwarfMap := make(map[dwarf.Type]*Type)
 
 	// Make one of our own Types for each dwarf type.
 	r := d.Reader()
@@ -37,35 +44,33 @@ func (p *Process) readDWARFTypes() {
 			if err != nil {
 				continue
 			}
-			t := &Type{Name: gocoreName(dt), Size: dwarfSize(dt, p.proc.PtrSize())}
+			t := &Type{Name: gocoreName(dt), Size: dwarfSize(dt, p.PtrSize())}
 			if goKind, ok := e.Val(AttrGoKind).(int64); ok {
 				t.goKind = reflect.Kind(goKind)
 			}
-			p.dwarfMap[dt] = t
+			dwarfMap[dt] = t
 			types = append(types, t)
 		}
 	}
 
-	p.runtimeNameMap = map[string][]*Type{}
-
 	// Fill in fields of types. Postponed until now so we're sure
 	// we have all the Types allocated and available.
-	for dt, t := range p.dwarfMap {
+	for dt, t := range dwarfMap {
 		switch x := dt.(type) {
 		case *dwarf.ArrayType:
 			t.Kind = KindArray
-			t.Elem = p.dwarfMap[x.Type]
+			t.Elem = dwarfMap[x.Type]
 			t.Count = x.Count
 		case *dwarf.PtrType:
 			t.Kind = KindPtr
 			// unsafe.Pointer has a void base type.
 			if _, ok := x.Type.(*dwarf.VoidType); !ok {
-				t.Elem = p.dwarfMap[x.Type]
+				t.Elem = dwarfMap[x.Type]
 			}
 		case *dwarf.StructType:
 			t.Kind = KindStruct
 			for _, f := range x.Field {
-				fType := p.dwarfMap[f.Type]
+				fType := dwarfMap[f.Type]
 				if fType == nil {
 					// Weird case: arrays of size 0 in structs, like
 					// Sysinfo_t.X_f. Synthesize a type so things later don't
@@ -75,24 +80,14 @@ func (p *Process) readDWARFTypes() {
 							Name:  f.Type.String(),
 							Kind:  KindArray,
 							Count: arr.Count,
-							Elem:  p.dwarfMap[arr.Type],
+							Elem:  dwarfMap[arr.Type],
 						}
 					} else {
-						panic(fmt.Sprintf(
+						return nil, fmt.Errorf(
 							"found a nil ftype for field %s.%s, type %s (%s) on ",
-							x.StructName, f.Name, f.Type, reflect.TypeOf(f.Type)))
+							x.StructName, f.Name, f.Type, reflect.TypeOf(f.Type))
 					}
 				}
-
-				// Work around issue 21094. There's no guarantee that the
-				// pointer type is in the DWARF, so just invent a Type.
-				if strings.HasPrefix(t.Name, "sudog<") && f.Name == "elem" &&
-					strings.Count(t.Name, "*")+1 != strings.Count(gocoreName(f.Type), "*") {
-					ptrName := "*" + gocoreName(f.Type)
-					fType = &Type{Name: ptrName, Kind: KindPtr, Size: p.proc.PtrSize(), Elem: fType}
-					p.runtimeNameMap[ptrName] = []*Type{fType}
-				}
-
 				t.Fields = append(t.Fields, Field{Name: f.Name, Type: fType, Off: f.ByteOffset})
 			}
 		case *dwarf.BoolType:
@@ -110,7 +105,7 @@ func (p *Process) readDWARFTypes() {
 		case *dwarf.TypedefType:
 			// handle these types in the loop below
 		default:
-			panic(fmt.Sprintf("unknown type %s %T", dt, dt))
+			return nil, fmt.Errorf("unknown type %s %T", dt, dt)
 		}
 	}
 
@@ -132,7 +127,7 @@ func (p *Process) readDWARFTypes() {
 	}
 
 	// Copy info from base types into typedefs.
-	for dt, t := range p.dwarfMap {
+	for dt, t := range dwarfMap {
 		tt, ok := dt.(*dwarf.TypedefType)
 		if !ok {
 			continue
@@ -146,7 +141,7 @@ func (p *Process) readDWARFTypes() {
 			}
 			break
 		}
-		bt := p.dwarfMap[base]
+		bt := dwarfMap[base]
 
 		// Copy type info from base. Everything except the name.
 		name := t.Name
@@ -169,59 +164,7 @@ func (p *Process) readDWARFTypes() {
 			t.Fields = nil
 		}
 	}
-
-	// Make a runtime name -> Type map for existing DWARF types.
-	for dt, t := range p.dwarfMap {
-		name := runtimeName(dt)
-		p.runtimeNameMap[name] = append(p.runtimeNameMap[name], t)
-	}
-
-	// Construct the runtime.specialfinalizer type.  It won't be found
-	// in DWARF before 1.10 because it does not appear in the type of any variable.
-	// type specialfinalizer struct {
-	//      special special
-	//      fn      *funcval
-	//      nret    uintptr
-	//      fint    *_type
-	//      ot      *ptrtype
-	// }
-	if p.runtimeNameMap["runtime.specialfinalizer"] == nil {
-		special := p.findType("runtime.special")
-		p.runtimeNameMap["runtime.specialfinalizer"] = []*Type{
-			&Type{
-				Name: "runtime.specialfinalizer",
-				Size: special.Size + 4*p.proc.PtrSize(),
-				Kind: KindStruct,
-				Fields: []Field{
-					Field{
-						Name: "special",
-						Off:  0,
-						Type: special,
-					},
-					Field{
-						Name: "fn",
-						Off:  special.Size,
-						Type: p.findType("*runtime.funcval"),
-					},
-					Field{
-						Name: "nret",
-						Off:  special.Size + p.proc.PtrSize(),
-						Type: p.findType("uintptr"),
-					},
-					Field{
-						Name: "fint",
-						Off:  special.Size + 2*p.proc.PtrSize(),
-						Type: p.findType("*runtime._type"),
-					},
-					Field{
-						Name: "fn",
-						Off:  special.Size + 3*p.proc.PtrSize(),
-						Type: p.findType("*runtime.ptrtype"),
-					},
-				},
-			},
-		}
-	}
+	return dwarfMap, nil
 }
 
 func isNonGoCU(e *dwarf.Entry) bool {
@@ -298,104 +241,14 @@ func gocoreName(dt dwarf.Type) string {
 	}
 }
 
-// Generate the name the runtime uses for a dwarf type. The DWARF generator
-// and the runtime use slightly different names for the same underlying type.
-func runtimeName(dt dwarf.Type) string {
-	switch x := dt.(type) {
-	case *dwarf.PtrType:
-		if _, ok := x.Type.(*dwarf.VoidType); ok {
-			return "unsafe.Pointer"
-		}
-		return "*" + runtimeName(x.Type)
-	case *dwarf.ArrayType:
-		return fmt.Sprintf("[%d]%s", x.Count, runtimeName(x.Type))
-	case *dwarf.StructType:
-		if !strings.HasPrefix(x.StructName, "struct {") {
-			// This is a named type, return that name.
-			return stripPackagePath(x.StructName)
-		}
-		// Figure out which fields have anonymous names.
-		var anon []bool
-		for _, f := range strings.Split(x.StructName[8:len(x.StructName)-1], ";") {
-			f = strings.TrimSpace(f)
-			anon = append(anon, !strings.Contains(f, " "))
-			// TODO: this isn't perfect. If the field type has a space in it,
-			// then this logic doesn't work. Need to search for keyword for
-			// field type, like "interface", "struct", ...
-		}
-		// Make sure anon is long enough. This probably never triggers.
-		for len(anon) < len(x.Field) {
-			anon = append(anon, false)
-		}
-
-		// Build runtime name from the DWARF fields.
-		s := "struct {"
-		first := true
-		for _, f := range x.Field {
-			if !first {
-				s += ";"
-			}
-			name := f.Name
-			if i := strings.Index(name, "."); i >= 0 {
-				name = name[i+1:]
-			}
-			if anon[0] {
-				s += fmt.Sprintf(" %s", runtimeName(f.Type))
-			} else {
-				s += fmt.Sprintf(" %s %s", name, runtimeName(f.Type))
-			}
-			first = false
-			anon = anon[1:]
-		}
-		s += " }"
-		return s
-	default:
-		return stripPackagePath(dt.String())
+func readRuntimeConstants(p *core.Process) (map[string]int64, error) {
+	d, err := p.DWARF()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DWARF: %v", err)
 	}
-}
-
-var pathRegexp = regexp.MustCompile(`([\w.-]+/)+\w+`)
-
-func stripPackagePath(name string) string {
-	// The runtime uses just package names. DWARF uses whole package paths.
-	// To convert from the latter to the former, get rid of the package paths.
-	// Examples:
-	//   text/template.Template -> template.Template
-	//   map[string]compress/gzip.Writer -> map[string]gzip.Writer
-	return pathRegexp.ReplaceAllStringFunc(name, func(path string) string {
-		return path[strings.LastIndex(path, "/")+1:]
-	})
-}
-
-// readRuntimeConstants populates the p.rtConstants map.
-func (p *Process) readRuntimeConstants() {
-	p.rtConstants = map[string]int64{}
-
-	// Hardcoded values for Go 1.9.
-	// (Go did not have constants in DWARF before 1.10.)
-	m := p.rtConstants
-	m["_MSpanDead"] = 0
-	m["_MSpanInUse"] = 1
-	m["_MSpanManual"] = 2
-	m["_MSpanFree"] = 3
-	m["_Gidle"] = 0
-	m["_Grunnable"] = 1
-	m["_Grunning"] = 2
-	m["_Gsyscall"] = 3
-	m["_Gwaiting"] = 4
-	m["_Gdead"] = 6
-	m["_Gscan"] = 0x1000
-	m["_PCDATA_StackMapIndex"] = 0
-	m["_FUNCDATA_LocalsPointerMaps"] = 1
-	m["_FUNCDATA_ArgsPointerMaps"] = 0
-	m["tflagExtraStar"] = 1 << 1
-	m["kindGCProg"] = 1 << 6
-	m["kindDirectIface"] = 1 << 5
-	m["_PageSize"] = 1 << 13
-	m["_KindSpecialFinalizer"] = 1
+	consts := map[string]int64{}
 
 	// From 1.10, these constants are recorded in DWARF records.
-	d, _ := p.proc.DWARF()
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag != dwarf.TagConstant {
@@ -414,8 +267,9 @@ func (p *Process) readRuntimeConstants() {
 		if c == nil {
 			continue
 		}
-		p.rtConstants[name] = c.Val.(int64)
+		consts[name] = c.Val.(int64)
 	}
+	return consts, nil
 }
 
 const (
@@ -425,8 +279,12 @@ const (
 	_DW_OP_consts         = 0x11
 )
 
-func (p *Process) readGlobals() {
-	d, _ := p.proc.DWARF()
+func readGlobals(p *core.Process, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
+	d, err := p.DWARF()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DWARF: %v", err)
+	}
+	var roots []*Root
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if isNonGoCU(e) {
@@ -450,13 +308,13 @@ func (p *Process) readGlobals() {
 			continue
 		}
 		var a core.Address
-		if p.proc.PtrSize() == 8 {
-			a = core.Address(p.proc.ByteOrder().Uint64(loc[1:]))
+		if p.PtrSize() == 8 {
+			a = core.Address(p.ByteOrder().Uint64(loc[1:]))
 		} else {
-			a = core.Address(p.proc.ByteOrder().Uint32(loc[1:]))
+			a = core.Address(p.ByteOrder().Uint32(loc[1:]))
 		}
-		a = a.Add(int64(p.proc.StaticBase()))
-		if !p.proc.Writeable(a) {
+		a = a.Add(int64(p.StaticBase()))
+		if !p.Writeable(a) {
 			// Read-only globals can't have heap pointers.
 			// TODO: keep roots around anyway?
 			continue
@@ -467,7 +325,7 @@ func (p *Process) readGlobals() {
 		}
 		dt, err := d.Type(f.Val.(dwarf.Offset))
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		if _, ok := dt.(*dwarf.UnspecifiedType); ok {
 			continue // Ignore markers like data/edata.
@@ -476,24 +334,34 @@ func (p *Process) readGlobals() {
 		if nf == nil {
 			continue
 		}
-		p.globals = append(p.globals, &Root{
+		roots = append(roots, &Root{
 			Name:  nf.Val.(string),
 			Addr:  a,
-			Type:  p.dwarfMap[dt],
+			Type:  dwarfTypeMap[dt],
 			Frame: nil,
 		})
 	}
+	return roots, nil
 }
 
-func (p *Process) readStackVars() {
-	type Var struct {
-		name string
-		off  int64
-		typ  *Type
+type dwarfVar struct {
+	lowPC, highPC core.Address
+	name          string
+	instr         []byte
+	typ           *Type
+}
+
+func readDWARFVars(p *core.Process, fns *funcTab, dwarfTypeMap map[dwarf.Type]*Type) (map[*Func][]dwarfVar, error) {
+	d, err := p.DWARF()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DWARF: %v", err)
 	}
-	vars := map[*Func][]Var{}
+	dLocSec, err := p.DWARFLoc()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DWARF: %v", err)
+	}
+	vars := make(map[*Func][]dwarfVar)
 	var curfn *Func
-	d, _ := p.proc.DWARF()
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if isNonGoCU(e) {
@@ -507,18 +375,18 @@ func (p *Process) readStackVars() {
 			if lowpc == nil || highpc == nil {
 				continue
 			}
-			min := core.Address(lowpc.Val.(uint64))
-			max := core.Address(highpc.Val.(uint64))
-			f := p.funcTab.find(min)
+			min := core.Address(lowpc.Val.(uint64) + p.StaticBase())
+			max := core.Address(highpc.Val.(uint64) + p.StaticBase())
+			f := fns.find(min)
 			if f == nil {
 				// some func Go doesn't know about. C?
 				curfn = nil
 			} else {
 				if f.entry != min {
-					panic("dwarf and runtime don't agree about start of " + f.name)
+					return nil, errors.New("dwarf and runtime don't agree about start of " + f.name)
 				}
-				if p.funcTab.find(max-1) != f {
-					panic("function ranges don't match for " + f.name)
+				if fns.find(max-1) != f {
+					return nil, errors.New("function ranges don't match for " + f.name)
 				}
 				curfn = f
 			}
@@ -531,102 +399,61 @@ func (p *Process) readStackVars() {
 		if aloc == nil {
 			continue
 		}
-		if aloc.Class != dwarf.ClassExprLoc {
-			// TODO: handle ClassLocListPtr here.
-			// As of go 1.11, locals are encoded this way.
-			// Until we fix this TODO, viewcore will not be able to
-			// show local variables.
+		if aloc.Class != dwarf.ClassLocListPtr {
 			continue
 		}
-		// Interpret locations of the form
-		//    DW_OP_call_frame_cfa
-		//    DW_OP_consts <off>
-		//    DW_OP_plus
-		// (with possibly missing DW_OP_consts & DW_OP_plus for the zero offset.)
-		// TODO: handle other possible locations (e.g. register locations).
-		loc := aloc.Val.([]byte)
-		if len(loc) == 0 || loc[0] != _DW_OP_call_frame_cfa {
-			continue
-		}
-		loc = loc[1:]
-		var off int64
-		if len(loc) != 0 && loc[0] == _DW_OP_consts {
-			loc = loc[1:]
-			var s uint
-			for len(loc) > 0 {
-				b := loc[0]
-				loc = loc[1:]
-				off += int64(b&0x7f) << s
-				s += 7
-				if b&0x80 == 0 {
-					break
-				}
-			}
-			off = off << (64 - s) >> (64 - s)
-			if len(loc) == 0 || loc[0] != _DW_OP_plus {
-				continue
-			}
-			loc = loc[1:]
-		}
-		if len(loc) != 0 {
-			continue // more stuff we don't recognize
-		}
+
+		// Read attributes for some high-level information.
 		f := e.AttrField(dwarf.AttrType)
 		if f == nil {
 			continue
 		}
 		dt, err := d.Type(f.Val.(dwarf.Offset))
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		nf := e.AttrField(dwarf.AttrName)
 		if nf == nil {
 			continue
 		}
 		name := nf.Val.(string)
-		vars[curfn] = append(vars[curfn], Var{name: name, off: off, typ: p.dwarfMap[dt]})
-	}
 
-	// Get roots from goroutine stacks.
-	for _, g := range p.goroutines {
-		for _, f := range g.frames {
-			// Start with all pointer slots as unnamed.
-			unnamed := map[core.Address]bool{}
-			for a := range f.Live {
-				unnamed[a] = true
+		// Read the location list.
+		locListOff := aloc.Val.(int64)
+		dr := loclist.NewDwarf2Reader(dLocSec, int(p.PtrSize()))
+		dr.Seek(int(locListOff))
+		var base uint64
+		var e loclist.Entry
+		for dr.Next(&e) {
+			if e.BaseAddressSelection() {
+				base = e.HighPC + p.StaticBase()
+				continue
 			}
-			// Emit roots for DWARF entries.
-			for _, v := range vars[f.f] {
-				r := &Root{
-					Name:  v.name,
-					Addr:  f.max.Add(v.off),
-					Type:  v.typ,
-					Frame: f,
-				}
-				f.roots = append(f.roots, r)
-				// Remove this variable from the set of unnamed pointers.
-				for a := r.Addr; a < r.Addr.Add(r.Type.Size); a = a.Add(p.proc.PtrSize()) {
-					delete(unnamed, a)
-				}
-			}
-			// Emit roots for unnamed pointer slots in the frame.
-			// Make deterministic by sorting first.
-			s := make([]core.Address, 0, len(unnamed))
-			for a := range unnamed {
-				s = append(s, a)
-			}
-			sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-			for _, a := range s {
-				r := &Root{
-					Name:  "unk",
-					Addr:  a,
-					Type:  p.findType("unsafe.Pointer"),
-					Frame: f,
-				}
-				f.roots = append(f.roots, r)
-			}
+			vars[curfn] = append(vars[curfn], dwarfVar{
+				lowPC:  core.Address(e.LowPC + base),
+				highPC: core.Address(e.HighPC + base),
+				instr:  e.Instr,
+				name:   name,
+				typ:    dwarfTypeMap[dt],
+			})
 		}
 	}
+	return vars, nil
+}
+
+func hardwareRegs2DWARF(hregs []core.Register) []*op.DwarfRegister {
+	n := regnum.AMD64MaxRegNum()
+	dregs := make([]*op.DwarfRegister, n)
+	for _, hreg := range hregs {
+		dwn, ok := regnum.AMD64NameToDwarf[hreg.Name]
+		if !ok {
+			continue
+		}
+		dreg := op.DwarfRegisterFromUint64(hreg.Value)
+		dreg.FillBytes()
+		dregs[dwn] = dreg
+	}
+	return dregs
 }
 
 /* Dwarf encoding notes

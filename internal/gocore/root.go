@@ -10,9 +10,11 @@ import (
 
 // A Root is an area of memory that might have pointers into the Go heap.
 type Root struct {
-	Name string
-	Addr core.Address
-	Type *Type // always non-nil
+	Name     string
+	Addr     core.Address
+	RegName  string
+	RegValue core.Address // set if Addr == 0
+	Type     *Type        // always non-nil
 	// Frame, if non-nil, points to the frame in which this root lives.
 	// Roots with non-nil Frame fields refer to local variables on a stack.
 	// A stack root might be a large type, with some of its fields live and

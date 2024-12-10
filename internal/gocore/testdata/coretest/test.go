@@ -1,5 +1,9 @@
 package main
 
+import (
+	"runtime"
+)
+
 // Large is an object that (since Go 1.22) is allocated in a span that has a
 // non-nil largeType field. Meaning it must be (>maxSmallSize-mallocHeaderSize).
 // At the time of writing this is (32768 - 8).
@@ -19,4 +23,5 @@ func main() {
 	o.arr[14] = 0xDE // Prevent a future smart compiler from allocating o directly on pings stack.
 
 	_ = *(*int)(nil)
+	runtime.KeepAlive(&o)
 }

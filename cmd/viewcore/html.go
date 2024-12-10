@@ -194,11 +194,11 @@ func serveHTML(c *gocore.Process, port int, async bool) {
 		tableStyle(w)
 		fmt.Fprintf(w, "<table>\n")
 		fmt.Fprintf(w, "<tr><th align=left>category</th><th align=left>bytes</th><th align=left>percent</th></tr>\n")
-		all := c.Stats().Size
-		var p func(*gocore.Stats, string)
-		p = func(s *gocore.Stats, prefix string) {
-			fmt.Fprintf(w, "<tr><td>%s%s</td><td align=right>%d</td><td align=right>%.2f</td></tr>\n", prefix, s.Name, s.Size, float64(s.Size)/float64(all)*100)
-			for _, c := range s.Children {
+		all := c.Stats().Value
+		var p func(*gocore.Statistic, string)
+		p = func(s *gocore.Statistic, prefix string) {
+			fmt.Fprintf(w, "<tr><td>%s%s</td><td align=right>%d</td><td align=right>%.2f</td></tr>\n", prefix, s.Name, s.Value, float64(s.Value)/float64(all)*100)
+			for c := range s.Children() {
 				p(c, prefix+"..")
 			}
 		}
