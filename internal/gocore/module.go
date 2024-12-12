@@ -70,7 +70,7 @@ func readModule(r region, fns *funcTab, rtTypeByName map[string]*Type, rtConsts 
 // readFunc parses a runtime._func and returns a *Func.
 // r must have type runtime._func.
 // pcln must have type []byte and represent the module's pcln table region.
-func (m *module) readFunc(r region, pctab region, funcnametab region, rtConsts map[string]int64) *Func {
+func (m *module) readFunc(r region, pctab region, funcnametab region, rtConsts constsMap) *Func {
 	f := &Func{module: m, r: r}
 	f.entry = m.textAddr(r.Field("entryOff").Uint32())
 	nameOff := r.Field("nameOff").Int32()
@@ -103,7 +103,7 @@ func (m *module) readFunc(r region, pctab region, funcnametab region, rtConsts m
 	}
 
 	// Read pcln tables we need.
-	if stackmap := int(rtConsts["_PCDATA_StackMapIndex"]); stackmap < len(f.pcdata) {
+	if stackmap := int(rtConsts.get("internal/abi.PCDATA_StackMapIndex")); stackmap < len(f.pcdata) {
 		f.stackMap.read(r.p, pctab.SliceIndex(int64(f.pcdata[stackmap])).a)
 	} else {
 		f.stackMap.setEmpty()

@@ -241,14 +241,28 @@ func gocoreName(dt dwarf.Type) string {
 	}
 }
 
-func readRuntimeConstants(p *core.Process) (map[string]int64, error) {
+type constsMap map[string]int64
+
+func (c constsMap) get(s string) int64 {
+	v, ok := c[s]
+	if !ok {
+		panic("failed to find constant " + s)
+	}
+	return v
+}
+
+func (c constsMap) find(s string) (int64, bool) {
+	v, ok := c[s]
+	return v, ok
+}
+
+func readConstants(p *core.Process) (constsMap, error) {
 	d, err := p.DWARF()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DWARF: %v", err)
 	}
 	consts := map[string]int64{}
 
-	// From 1.10, these constants are recorded in DWARF records.
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag != dwarf.TagConstant {
@@ -259,10 +273,6 @@ func readRuntimeConstants(p *core.Process) (map[string]int64, error) {
 			continue
 		}
 		name := f.Val.(string)
-		if !strings.HasPrefix(name, "runtime.") {
-			continue
-		}
-		name = name[8:]
 		c := e.AttrField(dwarf.AttrConstValue)
 		if c == nil {
 			continue

@@ -36,7 +36,7 @@ type Process struct {
 
 	// Runtime info for easier lookup.
 	rtGlobals map[string]region
-	rtConsts  map[string]int64
+	rtConsts  constsMap
 
 	// A module is a loadable unit. Most Go programs have 1, programs
 	// which load plugins will have more.
@@ -98,7 +98,7 @@ func Core(proc *core.Process) (p *Process, err error) {
 		}
 		p.rtTypeByName[name] = t
 	}
-	p.rtConsts, err = readRuntimeConstants(proc)
+	p.rtConsts, err = readConstants(proc)
 	if err != nil {
 		return nil, err
 	}
@@ -201,11 +201,11 @@ func readHeap(p *Process) (*heapTable, *Statistic, error) {
 	mheap := p.rtGlobals["mheap_"]
 
 	var arenas []arena
-	arenaSize := p.rtConsts["heapArenaBytes"]
+	arenaSize := p.rtConsts.get("runtime.heapArenaBytes")
 	if arenaSize%heapInfoSize != 0 {
 		panic("arenaSize not a multiple of heapInfoSize")
 	}
-	arenaBaseOffset := -p.rtConsts["arenaBaseOffsetUintptr"]
+	arenaBaseOffset := -p.rtConsts.get("runtime.arenaBaseOffsetUintptr")
 	if p.proc.PtrSize() == 4 && arenaBaseOffset != 0 {
 		panic("arenaBaseOffset must be 0 for 32-bit inferior")
 	}
@@ -312,17 +312,17 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 			return nil, nil, errors.New("weird mapping " + m.Perm().String())
 		}
 	}
-	pageSize := p.rtConsts["_PageSize"]
+	pageSize := p.rtConsts.get("runtime._PageSize")
 
 	// Span types.
-	spanInUse := uint8(p.rtConsts["mSpanInUse"])
-	spanManual := uint8(p.rtConsts["mSpanManual"])
-	spanDead := uint8(p.rtConsts["mSpanDead"])
+	spanInUse := uint8(p.rtConsts.get("runtime.mSpanInUse"))
+	spanManual := uint8(p.rtConsts.get("runtime.mSpanManual"))
+	spanDead := uint8(p.rtConsts.get("runtime.mSpanDead"))
 
 	// Malloc header constants (go 1.22+)
-	minSizeForMallocHeader := int64(p.rtConsts["minSizeForMallocHeader"])
-	mallocHeaderSize := int64(p.rtConsts["mallocHeaderSize"])
-	maxSmallSize := int64(p.rtConsts["maxSmallSize"])
+	minSizeForMallocHeader := int64(p.rtConsts.get("runtime.minSizeForMallocHeader"))
+	mallocHeaderSize := int64(p.rtConsts.get("runtime.mallocHeaderSize"))
+	maxSmallSize := int64(p.rtConsts.get("runtime.maxSmallSize"))
 
 	abiType := p.tryFindType("internal/abi.Type")
 
@@ -402,7 +402,7 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 			// Process special records.
 			for sp := s.Field("specials"); sp.Address() != 0; sp = sp.Field("next") {
 				sp = sp.Deref() // *special to special
-				if sp.Field("kind").Uint8() != uint8(p.rtConsts["_KindSpecialFinalizer"]) {
+				if sp.Field("kind").Uint8() != uint8(p.rtConsts.get("runtime._KindSpecialFinalizer")) {
 					// All other specials (just profile records) can't point into the heap.
 					continue
 				}
@@ -466,7 +466,8 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 					}
 					typ := region{p: p.proc, a: typeAddr, typ: abiType}
 					nptrs := int64(typ.Field("PtrBytes").Uintptr()) / int64(heap.ptrSize)
-					if typ.Field("Kind_").Uint8()&uint8(p.rtConsts["kindGCProg"]) != 0 {
+					kindGCProg, hasGCProgs := p.rtConsts.find("internal/abi.KindGCProg")
+					if hasGCProgs && typ.Field("Kind_").Uint8()&uint8(kindGCProg) != 0 {
 						panic("unexpected GC prog on small allocation")
 					}
 					gcdata := typ.Field("GCData").Address()
@@ -485,7 +486,8 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 				// is in use.
 				typ := s.Field("largeType").Deref()
 				nptrs := int64(typ.Field("PtrBytes").Uintptr()) / int64(heap.ptrSize)
-				if typ.Field("Kind_").Uint8()&uint8(p.rtConsts["kindGCProg"]) != 0 {
+				kindGCProg, hasGCProgs := p.rtConsts.find("internal/abi.KindGCProg")
+				if hasGCProgs && typ.Field("Kind_").Uint8()&uint8(kindGCProg) != 0 {
 					panic("large object's GCProg was not unrolled")
 				}
 				gcdata := typ.Field("GCData").Address()
@@ -513,9 +515,9 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 	// Also keep track of how much has been scavenged.
 	pages := mheap.Field("pages")
 	chunks := pages.Field("chunks")
-	pallocChunkBytes := p.rtConsts["pallocChunkBytes"]
-	pallocChunksL1Bits := p.rtConsts["pallocChunksL1Bits"]
-	pallocChunksL2Bits := p.rtConsts["pallocChunksL2Bits"]
+	pallocChunkBytes := p.rtConsts.get("runtime.pallocChunkBytes")
+	pallocChunksL1Bits := p.rtConsts.get("runtime.pallocChunksL1Bits")
+	pallocChunksL2Bits := p.rtConsts.get("runtime.pallocChunksL2Bits")
 	inuse := pages.Field("inUse")
 	ranges := inuse.Field("ranges")
 	for i := int64(0); i < ranges.SliceLen(); i++ {
@@ -621,24 +623,24 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 	}
 	st := r.Field("atomicstatus").Field("value")
 	status := st.Uint32()
-	status &^= uint32(p.rtConsts["_Gscan"])
+	status &^= uint32(p.rtConsts.get("runtime._Gscan"))
 	var sp, pc core.Address
 	switch status {
-	case uint32(p.rtConsts["_Gidle"]):
+	case uint32(p.rtConsts.get("runtime._Gidle")):
 		return g, nil
-	case uint32(p.rtConsts["_Grunnable"]), uint32(p.rtConsts["_Gwaiting"]):
+	case uint32(p.rtConsts.get("runtime._Grunnable")), uint32(p.rtConsts.get("runtime._Gwaiting")):
 		sched := r.Field("sched")
 		sp = core.Address(sched.Field("sp").Uintptr())
 		pc = core.Address(sched.Field("pc").Uintptr())
-	case uint32(p.rtConsts["_Grunning"]):
+	case uint32(p.rtConsts.get("runtime._Grunning")):
 		sp = osT.SP()
 		pc = osT.PC()
 		// TODO: back up to the calling frame?
-	case uint32(p.rtConsts["_Gsyscall"]):
+	case uint32(p.rtConsts.get("runtime._Gsyscall")):
 		sp = core.Address(r.Field("syscallsp").Uintptr())
 		pc = core.Address(r.Field("syscallpc").Uintptr())
 		// TODO: or should we use the osT registers?
-	case uint32(p.rtConsts["_Gdead"]):
+	case uint32(p.rtConsts.get("runtime._Gdead")):
 		return nil, nil
 		// TODO: copystack, others?
 	default:
@@ -874,6 +876,8 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 		} else {
 			sp = f.max
 			pc = core.Address(p.proc.ReadUintptr(sp - 8)) // TODO:amd64 only
+
+			isCrashFrame = false
 		}
 		if pc == 0 {
 			// TODO: when would this happen?
@@ -905,7 +909,7 @@ func readFrame(p *Process, sp, pc core.Address) (*Frame, error) {
 
 	// Find live ptrs in locals
 	live := map[core.Address]bool{}
-	if x := int(p.rtConsts["_FUNCDATA_LocalsPointerMaps"]); x < len(f.funcdata) {
+	if x := int(p.rtConsts.get("internal/abi.FUNCDATA_LocalsPointerMaps")); x < len(f.funcdata) {
 		addr := f.funcdata[x]
 		// TODO: Ideally we should have the same frame size check as
 		// runtime.getStackSize to detect errors when we are missing
@@ -918,7 +922,10 @@ func readFrame(p *Process, sp, pc core.Address) (*Frame, error) {
 			if err != nil {
 				return nil, fmt.Errorf("cannot read stack map at pc=%#x: %v", pc, err)
 			}
-			if idx < 0 {
+			if idx < -1 {
+				return nil, fmt.Errorf("cannot read stack map at pc=%#x: invalid stack map index %d", pc, idx)
+			}
+			if idx == -1 {
 				idx = 0
 			}
 			if idx < int64(n) {
@@ -934,7 +941,7 @@ func readFrame(p *Process, sp, pc core.Address) (*Frame, error) {
 		}
 	}
 	// Same for args
-	if x := int(p.rtConsts["_FUNCDATA_ArgsPointerMaps"]); x < len(f.funcdata) {
+	if x := int(p.rtConsts.get("internal/abi.FUNCDATA_ArgsPointerMaps")); x < len(f.funcdata) {
 		addr := f.funcdata[x]
 		if addr != 0 {
 			args := region{p: p.proc, a: addr, typ: p.findType("runtime.stackmap")}
@@ -944,11 +951,14 @@ func readFrame(p *Process, sp, pc core.Address) (*Frame, error) {
 			if err != nil {
 				return nil, fmt.Errorf("cannot read stack map at pc=%#x: %v", pc, err)
 			}
-			if idx < 0 {
+			if idx < -1 {
+				return nil, fmt.Errorf("cannot read stack map at pc=%#x: invalid stack map index %d", pc, idx)
+			}
+			if idx == -1 {
 				idx = 0
 			}
 			if idx < int64(n) {
-				bits := args.Field("bytedata").a.Add(int64(nbit+7) / 8 * idx)
+				bits := args.Field("bytedata").a.Add((int64(nbit+7) / 8) * idx)
 				base := frame.max
 				// TODO: add to base for LR archs.
 				for i := int64(0); i < int64(nbit); i++ {

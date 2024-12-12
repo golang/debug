@@ -224,7 +224,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 		b := make([]byte, n)
 		p.proc.ReadAt(b, x.Add(i+1))
 		name = string(b)
-		if r.TFlag()&uint8(p.rtConsts["tflagExtraStar"]) != 0 {
+		if r.TFlag()&uint8(p.rtConsts.get("internal/abi.TFlagExtraStar")) != 0 {
 			name = name[1:]
 		}
 	} else {
@@ -238,15 +238,16 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	ptrSize := p.proc.PtrSize()
 	nptrs := int64(r.PtrBytes()) / ptrSize
 	var ptrs []int64
-	if r.Kind_()&uint8(p.rtConsts["kindGCProg"]) == 0 {
+	kindGCProg, hasGCProgs := p.rtConsts.find("internal/abi.KindGCProg")
+	if hasGCProgs && r.Kind_()&uint8(kindGCProg) != 0 {
+		// TODO: run GC program. Go 1.23 and earlier only.
+	} else {
 		gcdata := r.GCData()
 		for i := int64(0); i < nptrs; i++ {
 			if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
 				ptrs = append(ptrs, i*ptrSize)
 			}
 		}
-	} else {
-		// TODO: run GC program to get ptr indexes
 	}
 
 	// Find a Type that matches this type.
@@ -540,7 +541,7 @@ func (p *Process) doTypeHeap() {
 			p.typeObject(r.Addr, r.Type, fr, add)
 		} else if r.Addr == 0 && r.Type.Kind == KindPtr && r.Type.Elem != nil {
 			p.typeObject(r.RegValue, r.Type.Elem, fr, add)
-		} else {
+		} else if r.Addr != 0 {
 			p.typeObject(r.Addr, r.Type, p.proc, add)
 		}
 		return true
@@ -631,7 +632,7 @@ func extractTypeFromFunctionName(method string, p *Process) *Type {
 // ifaceIndir reports whether t is stored indirectly in an interface value.
 func ifaceIndir(t core.Address, p *Process) bool {
 	typr := p.findRuntimeType(t)
-	return typr.Kind_()&uint8(p.rtConsts["kindDirectIface"]) == 0
+	return typr.Kind_()&uint8(p.rtConsts.get("internal/abi.KindDirectIface")) == 0
 }
 
 // typeObject takes an address and a type for the data at that address.
