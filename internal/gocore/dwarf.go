@@ -13,9 +13,9 @@ import (
 
 	"golang.org/x/debug/internal/core"
 
-	"github.com/go-delve/delve/pkg/dwarf/loclist"
-	"github.com/go-delve/delve/pkg/dwarf/op"
-	"github.com/go-delve/delve/pkg/dwarf/regnum"
+	"golang.org/x/debug/third_party/delve/dwarf/loclist"
+	"golang.org/x/debug/third_party/delve/dwarf/op"
+	"golang.org/x/debug/third_party/delve/dwarf/regnum"
 )
 
 const (
@@ -272,13 +272,6 @@ func readRuntimeConstants(p *core.Process) (map[string]int64, error) {
 	return consts, nil
 }
 
-const (
-	_DW_OP_addr           = 0x03
-	_DW_OP_call_frame_cfa = 0x9c
-	_DW_OP_plus           = 0x22
-	_DW_OP_consts         = 0x11
-)
-
 func readGlobals(p *core.Process, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
 	d, err := p.DWARF()
 	if err != nil {
@@ -304,7 +297,7 @@ func readGlobals(p *core.Process, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, e
 			continue
 		}
 		loc := f.Val.([]byte)
-		if len(loc) == 0 || loc[0] != _DW_OP_addr {
+		if len(loc) == 0 || loc[0] != byte(op.DW_OP_addr) {
 			continue
 		}
 		var a core.Address
@@ -417,6 +410,11 @@ func readDWARFVars(p *core.Process, fns *funcTab, dwarfTypeMap map[dwarf.Type]*T
 			continue
 		}
 		name := nf.Val.(string)
+
+		// No .debug_loc section, can't make progress.
+		if len(dLocSec) == 0 {
+			continue
+		}
 
 		// Read the location list.
 		locListOff := aloc.Val.(int64)

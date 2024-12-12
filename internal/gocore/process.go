@@ -17,8 +17,8 @@ import (
 
 	"golang.org/x/debug/internal/core"
 
-	"github.com/go-delve/delve/pkg/dwarf/op"
-	"github.com/go-delve/delve/pkg/dwarf/regnum"
+	"golang.org/x/debug/third_party/delve/dwarf/op"
+	"golang.org/x/debug/third_party/delve/dwarf/regnum"
 )
 
 // A Process represents the state of a Go process that core dumped.
@@ -115,7 +115,10 @@ func Core(proc *core.Process) (p *Process, err error) {
 		}
 	}
 
-	// Read all the data that depend on runtime globals.
+	// Read the build version.
+	//
+	// TODO(mknyszek): Check it and reject unsupported versions. Do this once we
+	// feel confident which versions it actually works for.
 	p.buildVersion = p.rtGlobals["buildVersion"].String()
 
 	// Read modules and function data.
@@ -403,7 +406,16 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 					// All other specials (just profile records) can't point into the heap.
 					continue
 				}
-				obj := min.Add(int64(sp.Field("offset").Uint64()))
+				offField := sp.Field("offset")
+				var off int64
+				if offField.typ.Size == p.proc.PtrSize() {
+					// Go 1.24+
+					off = int64(offField.Uintptr())
+				} else {
+					// Go 1.23 and below.
+					off = int64(offField.Uint16())
+				}
+				obj := min.Add(off)
 				p.globals = append(p.globals,
 					&Root{
 						Name:  fmt.Sprintf("finalizer for %x", obj),
@@ -688,6 +700,11 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 				// TODO(mknyszek): Handle composites via pieces returned by the stack program.
 				continue
 			}
+			// If the stack program indicates that there's just a single value
+			// in a single register, ExecuteStackProgram will return that register's
+			// contents. Otherwise, if it returns an address, it's referring to a
+			// location on the stack, which is one indirection from what we actually
+			// want.
 			if addr != 0 && len(pieces) == 1 && v.typ.Kind == KindPtr {
 				r := &Root{
 					Name:     v.name,
@@ -764,6 +781,11 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 				if addr == 0 {
 					continue
 				}
+				// If the stack program indicates that there's just a single value
+				// in a single register, ExecuteStackProgram will return that register's
+				// contents. Otherwise, if it returns an address, it's referring to a
+				// location on the stack, which is one indirection from what we actually
+				// want.
 				if addr != 0 && len(pieces) == 1 && v.typ.Kind == KindPtr {
 					ctxt = core.Address(addr)
 				} else {

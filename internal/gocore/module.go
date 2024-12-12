@@ -48,20 +48,9 @@ func readModule(r region, fns *funcTab, rtTypeByName map[string]*Type, rtConsts 
 	n := ftab.SliceLen() - 1 // last slot is a dummy, just holds entry
 	for i := int64(0); i < n; i++ {
 		ft := ftab.SliceIndex(i)
-		var min, max core.Address
-		var funcoff int64
-		if ft.HasField("entryoff") {
-			min = m.textAddr(ft.Field("entryoff").Uint32())
-			max = m.textAddr(ftab.SliceIndex(i + 1).Field("entryoff").Uint32())
-			funcoff = int64(ft.Field("funcoff").Uint32())
-		} else {
-			// Prior to 1.18, functab.entry directly referenced the
-			// entries.
-			min = core.Address(ft.Field("entry").Uintptr())
-			max = core.Address(ftab.SliceIndex(i + 1).Field("entry").Uintptr())
-			// funcoff changed type, but had the same meaning.
-			funcoff = int64(ft.Field("funcoff").Uintptr())
-		}
+		min := m.textAddr(ft.Field("entryoff").Uint32())
+		max := m.textAddr(ftab.SliceIndex(i + 1).Field("entryoff").Uint32())
+		funcoff := int64(ft.Field("funcoff").Uint32())
 		fr := pcln.SliceIndex(funcoff).Cast(rtTypeByName["runtime._func"])
 		var f *Func
 		if havePCtab {
@@ -83,42 +72,15 @@ func readModule(r region, fns *funcTab, rtTypeByName map[string]*Type, rtConsts 
 // pcln must have type []byte and represent the module's pcln table region.
 func (m *module) readFunc(r region, pctab region, funcnametab region, rtConsts map[string]int64) *Func {
 	f := &Func{module: m, r: r}
-	var nameOff int32
-	switch {
-	case r.HasField("entryOff"):
-		f.entry = m.textAddr(r.Field("entryOff").Uint32())
-		nameOff = r.Field("nameOff").Int32()
-	case r.HasField("entryoff"):
-		// Prior to 1.20, entryOff and nameOff were named entryoff and
-		// nameoff, respectively.
-		f.entry = m.textAddr(r.Field("entryoff").Uint32())
-		nameOff = r.Field("nameoff").Int32()
-	default:
-		// Prior to 1.18, _func.entry directly referenced the entries.
-		f.entry = core.Address(r.Field("entry").Uintptr())
-		nameOff = r.Field("nameoff").Int32()
-	}
+	f.entry = m.textAddr(r.Field("entryOff").Uint32())
+	nameOff := r.Field("nameOff").Int32()
 	f.name = r.p.ReadCString(funcnametab.SliceIndex(int64(nameOff)).a)
-	pcsp := r.Field("pcsp")
-	var pcspIdx int64
-	if pcsp.typ.Kind == KindUint {
-		// In 1.16, pcsp changed to be a uint32 from an int32.
-		pcspIdx = int64(pcsp.Uint32())
-	} else {
-		pcspIdx = int64(pcsp.Int32())
-	}
+	pcspIdx := int64(r.Field("pcsp").Uint32())
 	f.frameSize.read(r.p, pctab.SliceIndex(pcspIdx).a)
 
 	// Parse pcdata and funcdata, which are laid out beyond the end of the _func.
-	// In 1.16, npcdata changed to be a uint32 from an int32.
 	npcdata := r.Field("npcdata")
-	var n uint32
-	if npcdata.typ.Kind == KindUint {
-		// In 1.16, pcsp changed to be a uint32 from an int32.
-		n = npcdata.Uint32()
-	} else {
-		n = uint32(npcdata.Int32())
-	}
+	n := npcdata.Uint32()
 	nfd := r.Field("nfuncdata")
 	a := nfd.a.Add(nfd.typ.Size)
 
