@@ -7,7 +7,6 @@ package gocore
 import (
 	"fmt"
 	"reflect"
-	"regexp"
 	"strings"
 
 	"golang.org/x/debug/internal/core"
@@ -20,10 +19,13 @@ type Type struct {
 	Name string
 	Size int64
 	Kind Kind // common dwarf types.
-	// go-specific types obtained from AttrGoKind, such as string and slice.
+	// Go-specific types obtained from AttrGoKind, such as string and slice.
 	// Kind and gokind are not correspond one to one, both need to be preserved now.
 	// For example, slices are described in dwarf by a 3-field struct, so its Kind is Struct and its goKind is Slice.
 	goKind reflect.Kind
+	// Go-specific types obtained from AttrGoRuntimeType.
+	// May be nil if this type is not referenced by the DWARF.
+	goAddr core.Address
 
 	// Fields only valid for a subset of kinds.
 	Count  int64   // for kind == KindArray
@@ -142,7 +144,7 @@ type runtimeType struct {
 // findRuntimeType finds either abi.Type (Go 1.21+) or runtime._type.
 func (p *Process) findRuntimeType(a core.Address) runtimeType {
 	return runtimeType{
-		reg: region{p: p.proc, a: a, typ: p.tryFindType("internal/abi.Type")},
+		reg: region{p: p.proc, a: a, typ: p.rtTypeByName["internal/abi.Type"]},
 	}
 }
 
@@ -185,7 +187,7 @@ type runtimeItab struct {
 // findItab finds either abi.ITab (Go 1.21+) or runtime.itab.
 func (p *Process) findItab() runtimeItab {
 	return runtimeItab{
-		typ: p.tryFindType("internal/abi.ITab"),
+		typ: p.rtTypeByName["internal/abi.ITab"],
 	}
 }
 
@@ -202,6 +204,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if t := p.rtTypeMap[a]; t != nil {
 		return t
 	}
+	// There's no corresponding DWARF type. Make our own.
 
 	// Read runtime._type.size
 	r := p.findRuntimeType(a)
@@ -250,48 +253,36 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 		}
 	}
 
-	// Find a Type that matches this type.
-	// (The matched type will be one constructed from DWARF info.)
-	// It must match name, size, and pointer bits.
-	t := p.rtTypeByName[name]
-	if t != nil && (size != t.Size || !equal(ptrs, t.ptrs())) {
-		t = nil
+	// Build the type from the name, size, and ptr/nonptr bits.
+	t := &Type{Name: name, Size: size, Kind: KindStruct}
+	n := t.Size / ptrSize
+
+	// Types to use for ptr/nonptr fields of runtime types which
+	// have no corresponding DWARF type.
+	ptr := p.rtTypeByName["unsafe.Pointer"]
+	nonptr := p.rtTypeByName["uintptr"]
+	if ptr == nil || nonptr == nil {
+		panic("ptr / nonptr standins missing")
 	}
-	if t == nil {
-		// There's no corresponding DWARF type.  Make our own.
-		t = &Type{Name: name, Size: size, Kind: KindStruct}
-		n := t.Size / ptrSize
 
-		// Types to use for ptr/nonptr fields of runtime types which
-		// have no corresponding DWARF type.
-		ptr := p.findType("unsafe.Pointer")
-		nonptr := p.findType("uintptr")
-		if ptr == nil || nonptr == nil {
-			panic("ptr / nonptr standins missing")
+	for i := int64(0); i < n; i++ {
+		typ := nonptr
+		if len(ptrs) > 0 && ptrs[0] == i*ptrSize {
+			typ = ptr
+			ptrs = ptrs[1:]
 		}
+		t.Fields = append(t.Fields, Field{
+			Name: fmt.Sprintf("f%d", i),
+			Off:  i * ptrSize,
+			Type: typ,
+		})
 
-		for i := int64(0); i < n; i++ {
-			typ := nonptr
-			if len(ptrs) > 0 && ptrs[0] == i*ptrSize {
-				typ = ptr
-				ptrs = ptrs[1:]
-			}
-			t.Fields = append(t.Fields, Field{
-				Name: fmt.Sprintf("f%d", i),
-				Off:  i * ptrSize,
-				Type: typ,
-			})
-
-		}
-		if t.Size%ptrSize != 0 {
-			// TODO: tail of <ptrSize data.
-		}
+	}
+	if t.Size%ptrSize != 0 {
+		// TODO: tail of <ptrSize data.
 	}
 
 	// Memoize.
-	if p.rtTypeMap == nil {
-		p.rtTypeMap = make(map[core.Address]*Type)
-	}
 	p.rtTypeMap[a] = t
 	return t
 }
@@ -585,7 +576,6 @@ func (p *Process) doTypeHeap() {
 			// merged with the 0-offset typing.  TODO: make more use of this info.
 		}
 	}
-
 }
 
 type reader interface {
@@ -610,23 +600,8 @@ func (fr *frameReader) ReadInt(a core.Address) int64 {
 	return fr.p.proc.ReadInt(a)
 }
 
-// Match wrapper function name for method value.
-// eg. main.(*Bar).func-fm, or main.Bar.func-fm.
-var methodRegexp = regexp.MustCompile(`(\w+)\.(\(\*)?(\w+)(\))?\.\w+\-fm$`)
-
-// Extract the type of the method value from its wrapper function name,
-// return the type named *main.Bar or main.Bar, in the previous cases.
-func extractTypeFromFunctionName(method string, p *Process) *Type {
-	if matches := methodRegexp.FindStringSubmatch(method); len(matches) == 5 {
-		var typeName string
-		if matches[2] == "(*" && matches[4] == ")" {
-			typeName = "*" + matches[1] + "." + matches[3]
-		} else {
-			typeName = matches[1] + "." + matches[3]
-		}
-		return p.rtTypeByName[typeName]
-	}
-	return nil
+func methodFromMethodValueWrapper(name string) (string, bool) {
+	return strings.CutSuffix(name, "-fm")
 }
 
 // ifaceIndir reports whether t is stored indirectly in an interface value.
@@ -683,12 +658,16 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 					}
 				}
 			}
-			if directTyp.Kind != KindFunc && directTyp.Kind != KindPtr {
-				panic(fmt.Sprintf("type of direct interface, originally %s (kind %s), isn't a pointer: %s (kind %s)", typ, typ.Kind, directTyp, directTyp.Kind))
+			if directTyp.Kind == KindPtr {
+				p.typeObject(data, directTyp, r, add)
+				break
 			}
-			break
+			if directTyp.Kind == KindFunc {
+				add(data, directTyp, 1)
+				break
+			}
+			panic(fmt.Sprintf("type of direct interface, originally %s (kind %s), isn't a pointer: %s (kind %s)", typ, typ.Kind, directTyp, directTyp.Kind))
 		}
-		add(data, directTyp, 1)
 	case KindString:
 		ptr := r.ReadPtr(a)
 		len := r.ReadInt(a.Add(ptrSize))
@@ -724,11 +703,20 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			f.closure = ft
 		}
 		p.typeObject(closure, ft, r, add)
-		// handle the special case for method value.
+
+		// Handle the special case for method value.
 		// It's a single-entry closure laid out like {pc uintptr, x T}.
-		if typ := extractTypeFromFunctionName(f.name, p); typ != nil {
-			ptr := closure.Add(p.proc.PtrSize())
-			p.typeObject(ptr, typ, r, add)
+		if method, ok := methodFromMethodValueWrapper(f.name); ok {
+			mf := p.funcTab.findByName(method)
+			if mf != nil {
+				for _, v := range p.dwarfVars[mf] {
+					if v.kind == dwarfParam {
+						ptr := closure.Add(p.proc.PtrSize())
+						p.typeObject(ptr, v.typ, r, add)
+						break
+					}
+				}
+			}
 		}
 	case KindArray:
 		n := t.Elem.Size

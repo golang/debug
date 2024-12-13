@@ -19,16 +19,22 @@ import (
 )
 
 const (
-	AttrGoKind dwarf.Attr = 0x2900
+	AttrGoKind        dwarf.Attr = 0x2900
+	AttrGoRuntimeType dwarf.Attr = 0x2904
 )
 
-// read DWARF types from core dump.
-func readDWARFTypes(p *core.Process) (map[dwarf.Type]*Type, error) {
+func readDWARFTypes(p *core.Process) (map[dwarf.Type]*Type, map[core.Address]*Type, error) {
 	d, err := p.DWARF()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read DWARF: %v", err)
+		return nil, nil, fmt.Errorf("failed to read DWARF: %v", err)
 	}
 	dwarfMap := make(map[dwarf.Type]*Type)
+	addrMap := make(map[core.Address]*Type)
+	syms, _ := p.Symbols() // It's OK to ignore the error. If we don't have symbols, that's OK; it's a soft error.
+	// It's OK if typBase is 0 and not present. We won't be able to type the heap, probably,
+	// but it may still be useful (though painful) to someone to try and debug the core, so don't
+	// error out here.
+	typBase := syms["runtime.types"]
 
 	// Make one of our own Types for each dwarf type.
 	r := d.Reader()
@@ -47,6 +53,17 @@ func readDWARFTypes(p *core.Process) (map[dwarf.Type]*Type, error) {
 			t := &Type{Name: gocoreName(dt), Size: dwarfSize(dt, p.PtrSize())}
 			if goKind, ok := e.Val(AttrGoKind).(int64); ok {
 				t.goKind = reflect.Kind(goKind)
+			}
+			// Guard against typBase being zero. In reality, it's very unlikely for the DWARF
+			// to be present but typBase to be zero, but let's just be defensive. addrMap is
+			// only really necessary for typing the heap, which is "optional."
+			if typBase != 0 {
+				if offset, ok := e.Val(AttrGoRuntimeType).(uint64); ok {
+					// N.B. AttrGoRuntimeType is not defined for typedefs, so addrMap will
+					// always refer to the base type.
+					t.goAddr = typBase.Add(int64(offset))
+					addrMap[typBase.Add(int64(offset))] = t
+				}
 			}
 			dwarfMap[dt] = t
 			types = append(types, t)
@@ -83,7 +100,7 @@ func readDWARFTypes(p *core.Process) (map[dwarf.Type]*Type, error) {
 							Elem:  dwarfMap[arr.Type],
 						}
 					} else {
-						return nil, fmt.Errorf(
+						return nil, nil, fmt.Errorf(
 							"found a nil ftype for field %s.%s, type %s (%s) on ",
 							x.StructName, f.Name, f.Type, reflect.TypeOf(f.Type))
 					}
@@ -105,7 +122,7 @@ func readDWARFTypes(p *core.Process) (map[dwarf.Type]*Type, error) {
 		case *dwarf.TypedefType:
 			// handle these types in the loop below
 		default:
-			return nil, fmt.Errorf("unknown type %s %T", dt, dt)
+			return nil, nil, fmt.Errorf("unknown type %s %T", dt, dt)
 		}
 	}
 
@@ -164,7 +181,7 @@ func readDWARFTypes(p *core.Process) (map[dwarf.Type]*Type, error) {
 			t.Fields = nil
 		}
 	}
-	return dwarfMap, nil
+	return dwarfMap, addrMap, nil
 }
 
 func isNonGoCU(e *dwarf.Entry) bool {
@@ -347,8 +364,17 @@ func readGlobals(p *core.Process, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, e
 	return roots, nil
 }
 
+type dwarfVarKind int
+
+const (
+	dwarfVarUnknown dwarfVarKind = iota
+	dwarfParam
+	dwarfLocal
+)
+
 type dwarfVar struct {
 	lowPC, highPC core.Address
+	kind          dwarfVarKind
 	name          string
 	instr         []byte
 	typ           *Type
@@ -398,6 +424,13 @@ func readDWARFVars(p *core.Process, fns *funcTab, dwarfTypeMap map[dwarf.Type]*T
 		if e.Tag != dwarf.TagVariable && e.Tag != dwarf.TagFormalParameter {
 			continue
 		}
+		var kind dwarfVarKind
+		switch e.Tag {
+		case dwarf.TagFormalParameter:
+			kind = dwarfParam
+		case dwarf.TagVariable:
+			kind = dwarfLocal
+		}
 		aloc := e.AttrField(dwarf.AttrLocation)
 		if aloc == nil {
 			continue
@@ -440,6 +473,7 @@ func readDWARFVars(p *core.Process, fns *funcTab, dwarfTypeMap map[dwarf.Type]*T
 			vars[curfn] = append(vars[curfn], dwarfVar{
 				lowPC:  core.Address(e.LowPC + base),
 				highPC: core.Address(e.HighPC + base),
+				kind:   kind,
 				instr:  e.Instr,
 				name:   name,
 				typ:    dwarfTypeMap[dt],

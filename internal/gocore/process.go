@@ -45,12 +45,13 @@ type Process struct {
 	// Maps core.Address to functions.
 	funcTab *funcTab
 
+	// DWARF variables in each function.
+	dwarfVars map[*Func][]dwarfVar
+
 	// Fundamental type mappings extracted from the core.
 	dwarfTypeMap map[dwarf.Type]*Type
-	rtTypeByName map[string]*Type
-
-	// rtTypeMap maps a core.Address to a *Type. Constructed incrementally, on-demand.
-	rtTypeMap map[core.Address]*Type
+	rtTypeByName map[string]*Type // Core runtime types only, from DWARF.
+	rtTypeMap    map[core.Address]*Type
 
 	// Memory usage breakdown.
 	stats *Statistic
@@ -79,24 +80,17 @@ func Core(proc *core.Process) (p *Process, err error) {
 	p = &Process{proc: proc}
 
 	// Initialize everything that just depends on DWARF.
-	p.dwarfTypeMap, err = readDWARFTypes(proc)
+	p.dwarfTypeMap, p.rtTypeMap, err = readDWARFTypes(proc)
 	if err != nil {
 		return nil, err
 	}
 	p.rtTypeByName = make(map[string]*Type)
 	for dt, t := range p.dwarfTypeMap {
-		name := gocoreName(dt)
-		if _, ok := p.rtTypeByName[name]; ok {
-			// If a runtime type matches more than one DWARF type,
-			// pick one arbitrarily.
-			//
-			// This looks mostly harmless. DWARF has some redundant entries.
-			// For example, [32]uint8 appears twice.
-			//
-			// TODO(mknyszek): Investigate the reason for this duplication.
-			continue
+		// Make an index of some low-level types we'll need unambiguous access to.
+		if name := gocoreName(dt); strings.HasPrefix(name, "runtime.") || strings.HasPrefix(name, "internal/abi.") || strings.HasPrefix(name, "unsafe.") || !strings.Contains(name, ".") {
+			// Sometimes there's duplicate types in the DWARF. That's fine, they're always the same.
+			p.rtTypeByName[name] = t
 		}
-		p.rtTypeByName[name] = t
 	}
 	p.rtConsts, err = readConstants(proc)
 	if err != nil {
@@ -134,13 +128,13 @@ func Core(proc *core.Process) (p *Process, err error) {
 	}
 
 	// Read stack and register variables from DWARF.
-	dwarfVars, err := readDWARFVars(proc, p.funcTab, p.dwarfTypeMap)
+	p.dwarfVars, err = readDWARFVars(proc, p.funcTab, p.dwarfTypeMap)
 	if err != nil {
 		return nil, err
 	}
 
 	// Read goroutines.
-	p.goroutines, err = readGoroutines(p, dwarfVars)
+	p.goroutines, err = readGoroutines(p, p.dwarfVars)
 	if err != nil {
 		return nil, err
 	}
@@ -175,18 +169,6 @@ func (p *Process) Globals() []*Root {
 // FindFunc returns the function which contains the code at address pc, if any.
 func (p *Process) FindFunc(pc core.Address) *Func {
 	return p.funcTab.find(pc)
-}
-
-func (p *Process) findType(name string) *Type {
-	typ := p.tryFindType(name)
-	if typ == nil {
-		panic("can't find type " + name)
-	}
-	return typ
-}
-
-func (p *Process) tryFindType(name string) *Type {
-	return p.rtTypeByName[name]
 }
 
 // arena is a summary of the size of components of a heapArena.
@@ -324,7 +306,7 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 	mallocHeaderSize := int64(p.rtConsts.get("runtime.mallocHeaderSize"))
 	maxSmallSize := int64(p.rtConsts.get("runtime.maxSmallSize"))
 
-	abiType := p.tryFindType("internal/abi.Type")
+	abiType := p.rtTypeByName["internal/abi.Type"]
 
 	// Process spans.
 	if pageSize%heapInfoSize != 0 {
@@ -420,7 +402,7 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 					&Root{
 						Name:  fmt.Sprintf("finalizer for %x", obj),
 						Addr:  sp.a,
-						Type:  p.findType("runtime.specialfinalizer"),
+						Type:  p.rtTypeByName["runtime.specialfinalizer"],
 						Frame: nil,
 					})
 				// TODO: these aren't really "globals", as they
@@ -502,7 +484,7 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 		case spanManual:
 			stats.manualSpanSize += spanSize
 			stats.manualAllocSize += spanSize
-			for x := core.Address(s.Field("manualFreeList").Cast(p.findType("uintptr")).Uintptr()); x != 0; x = p.proc.ReadPtr(x) {
+			for x := core.Address(s.Field("manualFreeList").Cast(p.rtTypeByName["uintptr"]).Uintptr()); x != 0; x = p.proc.ReadPtr(x) {
 				stats.manualAllocSize -= elemSize
 				stats.manualFreeSize += elemSize
 			}
@@ -753,7 +735,7 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 			r := &Root{
 				Name:  "unk",
 				Addr:  a,
-				Type:  p.findType("unsafe.Pointer"),
+				Type:  p.rtTypeByName["unsafe.Pointer"],
 				Frame: f,
 			}
 			f.roots = append(f.roots, r)
@@ -915,7 +897,7 @@ func readFrame(p *Process, sp, pc core.Address) (*Frame, error) {
 		// runtime.getStackSize to detect errors when we are missing
 		// the stackmap.
 		if addr != 0 {
-			locals := region{p: p.proc, a: addr, typ: p.findType("runtime.stackmap")}
+			locals := region{p: p.proc, a: addr, typ: p.rtTypeByName["runtime.stackmap"]}
 			n := locals.Field("n").Int32()       // # of bitmaps
 			nbit := locals.Field("nbit").Int32() // # of bits per bitmap
 			idx, err := f.stackMap.find(off)
@@ -944,7 +926,7 @@ func readFrame(p *Process, sp, pc core.Address) (*Frame, error) {
 	if x := int(p.rtConsts.get("internal/abi.FUNCDATA_ArgsPointerMaps")); x < len(f.funcdata) {
 		addr := f.funcdata[x]
 		if addr != 0 {
-			args := region{p: p.proc, a: addr, typ: p.findType("runtime.stackmap")}
+			args := region{p: p.proc, a: addr, typ: p.rtTypeByName["runtime.stackmap"]}
 			n := args.Field("n").Int32()       // # of bitmaps
 			nbit := args.Field("nbit").Int32() // # of bits per bitmap
 			idx, err := f.stackMap.find(off)

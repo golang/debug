@@ -22,6 +22,7 @@ func readModules(rtTypeByName map[string]*Type, rtConsts map[string]int64, rtGlo
 	n := ms.SliceLen()
 	var modules []*module
 	var fnTab funcTab
+	fnTab.byName = make(map[string]*Func)
 	for i := int64(0); i < n; i++ {
 		md := ms.SliceIndex(i).Deref()
 		modules = append(modules, readModule(md, &fnTab, rtTypeByName, rtConsts))
@@ -145,10 +146,12 @@ type funcTabEntry struct {
 
 type funcTab struct {
 	entries []funcTabEntry
+	byName  map[string]*Func
 }
 
 // add records that PCs in the range [min,max) map to function f.
 func (t *funcTab) add(min, max core.Address, f *Func) {
+	t.byName[f.name] = f
 	t.entries = append(t.entries, funcTabEntry{min: min, max: max, f: f})
 }
 
@@ -159,7 +162,7 @@ func (t *funcTab) sort() {
 	})
 }
 
-// Finds a Func for the given address.  Sort must have been called already.
+// find finds a Func for the given address. sort must have been called already.
 func (t *funcTab) find(pc core.Address) *Func {
 	n := sort.Search(len(t.entries), func(i int) bool {
 		return t.entries[i].max > pc
@@ -168,6 +171,11 @@ func (t *funcTab) find(pc core.Address) *Func {
 		return nil
 	}
 	return t.entries[n].f
+}
+
+// findByName finds a Func for the given name.
+func (t *funcTab) findByName(name string) *Func {
+	return t.byName[name]
 }
 
 // a pcTab maps from an offset in a function to an int64.

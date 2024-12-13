@@ -88,15 +88,16 @@ func (f *Frame) Parent() *Frame {
 
 // A Func represents a Go function.
 type Func struct {
-	r         region // inferior region holding a runtime._func
-	module    *module
-	name      string
-	entry     core.Address
-	frameSize pcTab // map from pc to frame size at that pc
-	pcdata    []int32
-	funcdata  []core.Address
-	stackMap  pcTab // map from pc to stack map # (index into locals and args bitmaps)
-	closure   *Type // the type to use for closures of this function. Lazily allocated.
+	r              region // inferior region holding a runtime._func
+	module         *module
+	name           string
+	entry          core.Address
+	frameSize      pcTab // map from pc to frame size at that pc
+	pcdata         []int32
+	funcdata       []core.Address
+	stackMap       pcTab // map from pc to stack map # (index into locals and args bitmaps)
+	methodValueFor *Func // if != nil, this Func is a method value wrapper, and *Func is the method
+	closure        *Type // the type to use for closures of this function. Lazily allocated.
 }
 
 // Name returns the name of the function, as reported by DWARF.

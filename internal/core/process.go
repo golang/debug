@@ -273,7 +273,7 @@ func Core(corePath, base, exePath string) (*Process, error) {
 		return nil, fmt.Errorf("error reading args: %v", err)
 	}
 
-	syms, symErr := readSymbols(&mem, coreFile)
+	syms, symErr := readSymbols(&mem, coreFile, staticBase)
 
 	dwarf, dwarfErr := exeElf.DWARF()
 	if dwarfErr != nil {
@@ -735,7 +735,7 @@ func readThreads(meta metadata, notes noteMap) []*Thread {
 	return threads
 }
 
-func readSymbols(mem *splicedMemory, coreFile *os.File) (map[string]Address, error) {
+func readSymbols(mem *splicedMemory, coreFile *os.File, staticBase uint64) (map[string]Address, error) {
 	seen := map[*os.File]struct{}{
 		// Don't bother trying to read symbols from the core itself.
 		coreFile: struct{}{},
@@ -766,7 +766,7 @@ func readSymbols(mem *splicedMemory, coreFile *os.File) (map[string]Address, err
 			continue
 		}
 		for _, s := range syms {
-			allSyms[s.Name] = Address(s.Value)
+			allSyms[s.Name] = Address(s.Value).Add(int64(staticBase))
 		}
 	}
 
