@@ -123,7 +123,7 @@ func checkDominator(t *testing.T, d ltDom) bool {
 		case n == pseudoRoot:
 			return &pRoot
 		case r != nil:
-			return &roots[d.p.findRootIndex(r)]
+			return &roots[r.id]
 		default:
 			idx, _ := d.p.findObjectIndex(d.p.Addr(o))
 			return &objects[idx]
@@ -168,7 +168,7 @@ type sanityVertex struct {
 func (v *sanityVertex) String(p *Process) string {
 	switch {
 	case v.root != nil:
-		return fmt.Sprintf("root %s %#x (type %s)", v.root.Name, v.root.Addr, v.root.Type)
+		return fmt.Sprintf("root %s (type %s)", v.root.Name, v.root.Type)
 	case v.obj != 0:
 		typ, _ := p.Type(v.obj)
 		var typeName string

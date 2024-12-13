@@ -62,9 +62,6 @@ func (p *Process) markObjects() {
 	// Not a huge deal given that we'll just ignore outright bad pointers, but
 	// we may accidentally mark some objects as live erroneously.
 	for _, g := range p.goroutines {
-		for _, r := range g.regRoots {
-			add(core.Address(r.RegValue))
-		}
 		for _, f := range g.frames {
 			for a := range f.Live {
 				add(p.proc.ReadPtr(a))
@@ -92,11 +89,10 @@ func (p *Process) markObjects() {
 		if !strings.HasPrefix(r.Name, "finalizer for ") {
 			continue
 		}
-		for _, f := range r.Type.Fields {
-			if f.Type.Kind == KindPtr {
-				add(p.proc.ReadPtr(r.Addr.Add(f.Off)))
-			}
-		}
+		p.ForEachRootPtr(r, func(_ int64, o Object, _ int64) bool {
+			add(core.Address(o))
+			return true
+		})
 	}
 
 	// Expand root set to all reachable objects.
@@ -224,11 +220,6 @@ func (p *Process) ForEachRoot(fn func(r *Root) bool) {
 		}
 	}
 	for _, g := range p.goroutines {
-		for _, r := range g.regRoots {
-			if !fn(r) {
-				return
-			}
-		}
 		for _, f := range g.frames {
 			for _, r := range f.roots {
 				if !fn(r) {
@@ -287,65 +278,8 @@ func (p *Process) ForEachPtr(x Object, fn func(int64, Object, int64) bool) {
 
 // ForEachRootPtr behaves like ForEachPtr but it starts with a Root instead of an Object.
 func (p *Process) ForEachRootPtr(r *Root, fn func(int64, Object, int64) bool) {
-	edges1(p, r, 0, r.Type, fn)
-}
-
-// edges1 calls fn for the edges found in an object of type t living at offset off in the root r.
-// If fn returns false, return immediately with false.
-func edges1(p *Process, r *Root, off int64, t *Type, fn func(int64, Object, int64) bool) bool {
-	switch t.Kind {
-	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
-		// no edges here
-	case KindIface, KindEface:
-		// The first word is a type or itab.
-		// Itabs are never in the heap.
-		// Types might be, though.
-		a := r.Addr.Add(off)
-		if r.Frame == nil || r.Frame.Live[a] {
-			dst, off2 := p.FindObject(p.proc.ReadPtr(a))
-			if dst != 0 {
-				if !fn(off, dst, off2) {
-					return false
-				}
-			}
-		}
-		// Treat second word like a pointer.
-		off += p.proc.PtrSize()
-		fallthrough
-	case KindPtr, KindString, KindSlice, KindFunc:
-		if t.Kind == KindPtr && r.Addr == 0 {
-			dst, off2 := p.FindObject(core.Address(r.RegValue))
-			if dst != 0 {
-				if !fn(off, dst, off2) {
-					return false
-				}
-			}
-			break
-		}
-		a := r.Addr.Add(off)
-		if r.Frame == nil || r.Frame.Live[a] {
-			dst, off2 := p.FindObject(p.proc.ReadPtr(a))
-			if dst != 0 {
-				if !fn(off, dst, off2) {
-					return false
-				}
-			}
-		}
-	case KindArray:
-		s := t.Elem.Size
-		for i := int64(0); i < t.Count; i++ {
-			if !edges1(p, r, off+i*s, t.Elem, fn) {
-				return false
-			}
-		}
-	case KindStruct:
-		for _, f := range t.Fields {
-			if !edges1(p, r, off+f.Off, f.Type, fn) {
-				return false
-			}
-		}
-	}
-	return true
+	ptrBuf := make([]byte, 8)
+	walkRootTypePtrs(p, r, ptrBuf, 0, r.Type, fn)
 }
 
 const heapInfoSize = 512

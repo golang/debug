@@ -170,7 +170,9 @@ func serveHTML(c *gocore.Process, port int, async bool) {
 			fmt.Fprintf(w, "<table>\n")
 			fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 			for _, r := range f.Roots() {
-				htmlObject(w, c, r.Name, r.Addr, r.Type, f.Live)
+				if r.HasAddress() {
+					htmlObject(w, c, r.Name, r.Addr(), r.Type, f.Live)
+				}
 			}
 			fmt.Fprintf(w, "</table>\n")
 		}
@@ -181,7 +183,9 @@ func serveHTML(c *gocore.Process, port int, async bool) {
 		fmt.Fprintf(w, "<table>\n")
 		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 		for _, r := range c.Globals() {
-			htmlObject(w, c, r.Name, r.Addr, r.Type, nil)
+			if r.HasAddress() {
+				htmlObject(w, c, r.Name, r.Addr(), r.Type, nil)
+			}
 		}
 		fmt.Fprintf(w, "</table>\n")
 	})

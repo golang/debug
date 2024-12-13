@@ -13,9 +13,6 @@ type Goroutine struct {
 	stackSize int64  // current stack allocation
 	frames    []*Frame
 
-	// Registers containing live pointers.
-	regRoots []*Root
-
 	// TODO: defers, in-progress panics
 }
 

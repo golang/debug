@@ -228,7 +228,7 @@ func (d *ltDom) calculate() {
 			d.p.ForEachReversePtr(obj, func(x Object, r *Root, _, _ int64) bool {
 				var v int
 				if r != nil {
-					v = d.p.findRootIndex(r) + 1
+					v = r.id + 1
 				} else {
 					v, _ = d.p.findObjectIndex(d.p.Addr(x))
 					v += d.nRoots + 1
@@ -397,7 +397,7 @@ func (d *ltDom) dot(w io.Writer) {
 			if len(typeName) > 30 {
 				typeName = typeName[:30]
 			}
-			label = fmt.Sprintf("root %s %#x (type %s)", root.Name, root.Addr, typeName)
+			label = fmt.Sprintf("root %s (type %s)", root.Name, typeName)
 		default:
 			typ, _ := d.p.Type(obj)
 			var typeName string

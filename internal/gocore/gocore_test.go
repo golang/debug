@@ -253,15 +253,31 @@ func TestObjects(t *testing.T) {
 			{"-buildmode=pie"},
 		} {
 			t.Run(strings.Join(buildFlags, ","), func(t *testing.T) {
-				p := loadExampleGenerated(t, buildFlags...)
-				n := 0
 				const largeObjectThreshold = 32768
-				large := 0 // Number of objects larger than (or equal to largeObjectThreshold)
+
+				p := loadExampleGenerated(t, buildFlags...)
+
+				// Statistics to check.
+				n := 0
+				largeObjects := 0 // Number of objects larger than (or equal to largeObjectThreshold)
+				myPairObjects := 0
+				anyNodeObjects := 0
+				typeSafeNodeObjects := 0
+
 				p.ForEachObject(func(x Object) bool {
 					siz := p.Size(x)
-					t.Logf("%s size=%d", typeName(p, x), p.Size(x))
+					typ := typeName(p, x)
+					t.Logf("%s size=%d", typ, p.Size(x))
 					if siz >= largeObjectThreshold {
-						large++
+						largeObjects++
+					}
+					switch typ {
+					case "main.myPair":
+						myPairObjects++
+					case "main.anyNode":
+						anyNodeObjects++
+					case "main.typeSafeNode[main.myPair]":
+						typeSafeNodeObjects++
 					}
 					n++
 					return true
@@ -269,8 +285,23 @@ func TestObjects(t *testing.T) {
 				if n < 10 {
 					t.Errorf("#objects = %d, want >10", n)
 				}
-				if large != 1 {
-					t.Errorf("expected exactly one object larger than %d, found %d", largeObjectThreshold, large)
+				if largeObjects != 1 {
+					t.Errorf("expected exactly one object larger than %d, found %d", largeObjectThreshold, largeObjects)
+				}
+
+				// Check object counts.
+				const depth = 5
+				const tsTrees = 3
+				const anTrees = 2
+				const nodes = 1<<depth - 1
+				if want := tsTrees*nodes + anTrees*nodes*2; myPairObjects != want {
+					t.Errorf("expected exactly %d main.myPair objects, found %d", want, myPairObjects)
+				}
+				if want := anTrees * nodes; anyNodeObjects != want {
+					t.Errorf("expected exactly %d main.anyNode objects, found %d", want, anyNodeObjects)
+				}
+				if want := tsTrees * nodes; typeSafeNodeObjects != want {
+					t.Errorf("expected exactly %d main.typeSafeNode[main.myPair] objects, found %d", want, typeSafeNodeObjects)
 				}
 			})
 		}

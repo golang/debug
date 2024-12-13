@@ -68,11 +68,17 @@ type Process struct {
 	// A "reverse edge" for object #i is a location in memory where a pointer
 	// to object #i lives.
 	initReverseEdges sync.Once
-	redge            []core.Address
+	redge            []reverseEdge
 	ridx             []int64
-	// Sorted list of all roots.
-	// Only initialized if FlagReverse is passed to Core.
+	// Sorted list of all roots, sorted by id.
 	rootIdx []*Root
+	nRoots  int
+}
+
+type reverseEdge struct {
+	addr core.Address // 0 if root != nil and vice versa.
+	root *Root        // Roots do not always have well-defined addresses.
+	rOff int64        // Offset of pointer in root.
 }
 
 // Core takes a loaded core file and extracts Go information from it.
@@ -96,7 +102,7 @@ func Core(proc *core.Process) (p *Process, err error) {
 	if err != nil {
 		return nil, err
 	}
-	p.globals, err = readGlobals(proc, p.dwarfTypeMap)
+	p.globals, err = readGlobals(proc, &p.nRoots, p.dwarfTypeMap)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +111,10 @@ func Core(proc *core.Process) (p *Process, err error) {
 	p.rtGlobals = make(map[string]region)
 	for _, g := range p.globals {
 		if strings.HasPrefix(g.Name, "runtime.") {
-			p.rtGlobals[g.Name[8:]] = region{p: proc, a: g.Addr, typ: g.Type}
+			if g.pieces[0].kind != addrPiece || len(g.pieces) > 1 {
+				panic("global is unexpectedly stored in pieces")
+			}
+			p.rtGlobals[g.Name[8:]] = region{p: proc, a: core.Address(g.pieces[0].value), typ: g.Type}
 		}
 	}
 
@@ -398,13 +407,8 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 					off = int64(offField.Uint16())
 				}
 				obj := min.Add(off)
-				p.globals = append(p.globals,
-					&Root{
-						Name:  fmt.Sprintf("finalizer for %x", obj),
-						Addr:  sp.a,
-						Type:  p.rtTypeByName["runtime.specialfinalizer"],
-						Frame: nil,
-					})
+				typ := p.rtTypeByName["runtime.specialfinalizer"]
+				p.globals = append(p.globals, p.makeMemRoot(fmt.Sprintf("finalizer for %x", obj), typ, nil, sp.a))
 				// TODO: these aren't really "globals", as they
 				// are kept alive by the object they reference being alive.
 				// But we have no way of adding edges from an object to
@@ -642,7 +646,6 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 	regs := op.NewDwarfRegisters(p.proc.StaticBase(), dregs, binary.LittleEndian, regnum.AMD64_Rip, regnum.AMD64_Rsp, regnum.AMD64_Rbp, 0)
 
 	// Read all the frames.
-	isCrashFrame := false
 	for {
 		f, err := readFrame(p, sp, pc)
 		if err != nil {
@@ -666,7 +669,6 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 		for a := range f.Live {
 			unnamed[a] = true
 		}
-		conservativeLiveness := isCrashFrame && len(f.Live) == 0
 
 		// Emit roots for DWARF entries.
 		for _, v := range dwarfVars[f.f] {
@@ -680,45 +682,35 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 			if err != nil {
 				return nil, fmt.Errorf("failed to execute DWARF stack program for variable %s: %v", v.name, err)
 			}
-			if addr == 0 {
-				// TODO(mknyszek): Handle composites via pieces returned by the stack program.
-				continue
-			}
-			// If the stack program indicates that there's just a single value
-			// in a single register, ExecuteStackProgram will return that register's
-			// contents. Otherwise, if it returns an address, it's referring to a
-			// location on the stack, which is one indirection from what we actually
-			// want.
-			if addr != 0 && len(pieces) == 1 && v.typ.Kind == KindPtr {
-				r := &Root{
-					Name:     v.name,
-					RegName:  regnum.AMD64ToName(pieces[0].Val),
-					RegValue: core.Address(addr),
-					Type:     v.typ,
-					Frame:    f,
-				}
-				g.regRoots = append(g.regRoots, r)
-			} else {
-				r := &Root{
-					Name:  v.name,
-					Addr:  core.Address(addr),
-					Type:  v.typ,
-					Frame: f,
-				}
-				f.roots = append(f.roots, r)
+			if len(pieces) != 0 {
+				// The variable is "de-structured" and broken up into multiple pieces.
+				var rps []rootPiece
+				off := int64(0)
+				for _, p := range pieces {
+					rp := rootPiece{size: int64(p.Size), off: off}
+					switch p.Kind {
+					case op.AddrPiece:
+						// Remove this variable from the set of unnamed pointers.
+						delete(unnamed, core.Address(p.Val))
 
-				if conservativeLiveness {
-					// This is a frame that is likely not at a safe point, so the liveness
-					// map is almost certainly empty. If it's not, then great, we can use
-					// that for precise information, but otherwise, let's be conservative
-					// and populate liveness data from the DWARF.
-					r.Type.forEachPointer(0, p.proc.PtrSize(), func(off int64) {
-						f.Live[r.Addr.Add(off)] = true
-					})
+						rp.kind = addrPiece
+						rp.value = p.Val
+					case op.RegPiece:
+						rp.kind = regPiece
+						rp.value = regs.Uint64Val(p.Val)
+					case op.ImmPiece:
+						rp.kind = immPiece
+						rp.value = p.Val
+					}
+					off += int64(p.Size)
 				}
+				f.roots = append(f.roots, p.makeCompositeRoot(v.name, v.typ, f, rps))
+			} else if addr != 0 && len(pieces) == 0 {
+				// Simple contiguous stack location.
+				f.roots = append(f.roots, p.makeMemRoot(v.name, v.typ, f, core.Address(addr)))
 
 				// Remove this variable from the set of unnamed pointers.
-				for a := r.Addr; a < r.Addr.Add(r.Type.Size); a = a.Add(p.proc.PtrSize()) {
+				for a := core.Address(addr); a < core.Address(addr).Add(v.typ.Size); a = a.Add(p.proc.PtrSize()) {
 					delete(unnamed, a)
 				}
 			}
@@ -732,13 +724,8 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 		}
 		sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
 		for _, a := range s {
-			r := &Root{
-				Name:  "unk",
-				Addr:  a,
-				Type:  p.rtTypeByName["unsafe.Pointer"],
-				Frame: f,
-			}
-			f.roots = append(f.roots, r)
+			typ := p.rtTypeByName["unsafe.Pointer"]
+			f.roots = append(f.roots, p.makeMemRoot("unk", typ, f, a))
 		}
 
 		// Figure out how to unwind to the next frame.
@@ -853,13 +840,9 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 			// Update register state.
 			dregs := hardwareRegs2DWARF(hregs)
 			regs = op.NewDwarfRegisters(p.proc.StaticBase(), dregs, binary.LittleEndian, regnum.AMD64_Rip, regnum.AMD64_Rsp, regnum.AMD64_Rbp, 0)
-
-			isCrashFrame = true
 		} else {
 			sp = f.max
 			pc = core.Address(p.proc.ReadUintptr(sp - 8)) // TODO:amd64 only
-
-			isCrashFrame = false
 		}
 		if pc == 0 {
 			// TODO: when would this happen?

@@ -4,12 +4,6 @@
 
 package gocore
 
-import (
-	"sort"
-
-	"golang.org/x/debug/internal/core"
-)
-
 func (p *Process) reverseEdges() {
 	p.initReverseEdges.Do(func() {
 		// First, count the number of edges into each object.
@@ -40,7 +34,7 @@ func (p *Process) reverseEdges() {
 		}
 
 		// Allocate all the storage for the reverse edges.
-		p.redge = make([]core.Address, n)
+		p.redge = make([]reverseEdge, n)
 
 		// Add edges to the lists.
 		p.ForEachObject(func(x Object) bool {
@@ -49,7 +43,7 @@ func (p *Process) reverseEdges() {
 				e := cnt[idx]
 				e--
 				cnt[idx] = e
-				p.redge[e] = p.Addr(x).Add(i)
+				p.redge[e] = reverseEdge{addr: p.Addr(x).Add(i)}
 				return true
 			})
 			return true
@@ -60,7 +54,7 @@ func (p *Process) reverseEdges() {
 				e := cnt[idx]
 				e--
 				cnt[idx] = e
-				p.redge[e] = r.Addr.Add(i)
+				p.redge[e] = reverseEdge{root: r, rOff: i}
 				return true
 			})
 			return true
@@ -70,11 +64,11 @@ func (p *Process) reverseEdges() {
 		p.ridx = cnt
 
 		// Make root index.
+		p.rootIdx = make([]*Root, p.nRoots)
 		p.ForEachRoot(func(r *Root) bool {
-			p.rootIdx = append(p.rootIdx, r)
+			p.rootIdx[r.id] = r
 			return true
 		})
-		sort.Slice(p.rootIdx, func(i, j int) bool { return p.rootIdx[i].Addr < p.rootIdx[j].Addr })
 	})
 }
 
@@ -91,33 +85,24 @@ func (p *Process) ForEachReversePtr(y Object, fn func(x Object, r *Root, i, j in
 
 	idx, _ := p.findObjectIndex(p.Addr(y))
 	for _, a := range p.redge[p.ridx[idx]:p.ridx[idx+1]] {
-		// Read pointer, compute offset in y.
-		ptr := p.proc.ReadPtr(a)
-		j := ptr.Sub(p.Addr(y))
-
-		// Find source of pointer.
-		x, i := p.FindObject(a)
-		if x != 0 {
-			// Source is an object.
-			if !fn(x, nil, i, j) {
+		if a.root != nil {
+			ptr := p.readRootPtr(a.root, a.rOff)
+			if !fn(0, a.root, a.rOff, ptr.Sub(p.Addr(y))) {
 				return
 			}
-			continue
-		}
-		// Source is a root.
-		k := sort.Search(len(p.rootIdx), func(k int) bool {
-			r := p.rootIdx[k]
-			return a < r.Addr.Add(r.Type.Size)
-		})
-		r := p.rootIdx[k]
-		if !fn(0, r, a.Sub(r.Addr), j) {
-			return
+		} else {
+			// Read pointer, compute offset in y.
+			ptr := p.proc.ReadPtr(a.addr)
+			j := ptr.Sub(p.Addr(y))
+
+			// Find source of pointer.
+			x, i := p.FindObject(a.addr)
+			if x != 0 {
+				// Source is an object.
+				if !fn(x, nil, i, j) {
+					return
+				}
+			}
 		}
 	}
-}
-
-func (p *Process) findRootIndex(r *Root) int {
-	return sort.Search(len(p.rootIdx), func(k int) bool {
-		return p.rootIdx[k].Addr >= r.Addr
-	})
 }

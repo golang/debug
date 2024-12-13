@@ -299,7 +299,7 @@ func readConstants(p *core.Process) (constsMap, error) {
 	return consts, nil
 }
 
-func readGlobals(p *core.Process, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
+func readGlobals(p *core.Process, nRoots *int, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
 	d, err := p.DWARF()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DWARF: %v", err)
@@ -354,12 +354,8 @@ func readGlobals(p *core.Process, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, e
 		if nf == nil {
 			continue
 		}
-		roots = append(roots, &Root{
-			Name:  nf.Val.(string),
-			Addr:  a,
-			Type:  dwarfTypeMap[dt],
-			Frame: nil,
-		})
+		typ := dwarfTypeMap[dt]
+		roots = append(roots, makeMemRoot(nRoots, nf.Val.(string), typ, nil, a))
 	}
 	return roots, nil
 }

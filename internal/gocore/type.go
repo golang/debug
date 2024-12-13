@@ -527,13 +527,16 @@ func (p *Process) doTypeHeap() {
 	// Get typings starting at roots.
 	fr := &frameReader{p: p}
 	p.ForEachRoot(func(r *Root) bool {
-		if r.Frame != nil {
-			fr.live = r.Frame.Live
-			p.typeObject(r.Addr, r.Type, fr, add)
-		} else if r.Addr == 0 && r.Type.Kind == KindPtr && r.Type.Elem != nil {
-			p.typeObject(r.RegValue, r.Type.Elem, fr, add)
-		} else if r.Addr != 0 {
-			p.typeObject(r.Addr, r.Type, p.proc, add)
+		if len(r.pieces) == 1 && r.pieces[0].kind == addrPiece {
+			addr := core.Address(r.pieces[0].value)
+			if r.Frame != nil {
+				fr.live = r.Frame.Live
+				p.typeObject(addr, r.Type, fr, add)
+			} else {
+				p.typeObject(addr, r.Type, p.proc, add)
+			}
+		} else {
+			// TODO(mknyszek): Support roots broken into pieces.
 		}
 		return true
 	})
@@ -620,13 +623,24 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
 		// Nothing to do
 	case KindEface, KindIface:
-		// interface. Use the type word to determine the type
+		// Interface.
+		//
+		// Load the data word first and back out if its a nil
+		// or typed-nil interface. We must do this because it's
+		// our only signal that this value is dead. Consider
+		// a dead eface variable on the stack: the data field
+		// will return nil because it's dead, but the type pointer
+		// will likely be bogus.
+		data := a.Add(ptrSize)
+		if r.ReadPtr(data) == 0 { // nil interface
+			return
+		}
+		// Use the type word to determine the type
 		// of the pointed-to object.
 		typPtr := r.ReadPtr(a)
 		if typPtr == 0 { // nil interface
 			return
 		}
-		data := a.Add(ptrSize)
 		if t.Kind == KindIface {
 			typPtr = p.proc.ReadPtr(typPtr.Add(p.findItab().Type().Off))
 		}
@@ -743,17 +757,6 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			// TODO: also oldbuckets
 		}
 		for _, f := range t.Fields {
-			// sync.entry.p(in sync.map) is an unsafe.pointer to an empty interface.
-			if t.Name == "sync.entry" && f.Name == "p" && f.Type.Kind == KindPtr && f.Type.Elem == nil {
-				ptr := r.ReadPtr(a.Add(f.Off))
-				if ptr != 0 {
-					typ := &Type{
-						Name: "sync.entry<interface{}>",
-						Kind: KindEface,
-					}
-					add(ptr, typ, 1)
-				}
-			}
 			// hchan.buf(in chan) is an unsafe.pointer to an [dataqsiz]elemtype.
 			if strings.HasPrefix(t.Name, "hchan<") && f.Name == "buf" && f.Type.Kind == KindPtr {
 				elemType := p.proc.ReadPtr(a.Add(t.field("elemtype").Off))
