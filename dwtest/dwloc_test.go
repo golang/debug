@@ -86,14 +86,14 @@ func buildHarness(t *testing.T, dir string) (string, string) {
 
 	// Run builds.
 	harnessPath := filepath.Join(dir, "dumpdwloc.exe")
-	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", harnessPath)
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-trimpath", "-o", harnessPath)
 	cmd.Dir = bd
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build failed (%v): %s", err, b)
 	}
 
 	nooptHarnessPath := filepath.Join(dir, "dumpdwloc.exe")
-	cmd = exec.Command(testenv.GoToolPath(t), "build", "-gcflags=all=-l -N", "-o", nooptHarnessPath)
+	cmd = exec.Command(testenv.GoToolPath(t), "build", "-trimpath", "-gcflags=all=-l -N", "-o", nooptHarnessPath)
 	cmd.Dir = bd
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build failed (%v): %s", err, b)
@@ -129,7 +129,7 @@ func gobuild(t *testing.T, sourceCode string, pname string, dir string) string {
 	// A note on this build: Delve currently has problems digesting
 	// PIE binaries on Windows; until this can be straightened out,
 	// default to "exe" buildmode.
-	cmd := exec.Command(testenv.GoToolPath(t), "build", "-buildmode=exe", "-o", epath, spath)
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-trimpath", "-buildmode=exe", "-o", epath, spath)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Logf("%% build output: %s\n", b)
 		t.Fatalf("build failed: %s", err)

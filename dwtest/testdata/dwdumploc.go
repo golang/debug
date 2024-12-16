@@ -241,16 +241,17 @@ func locateFuncDetails(executable string, fcn string) (finfo, error) {
 
 		verb(1, "found function %s at offset %x", fcn, off)
 		rrv.dwOffset = off
-		if lopc, ok := die.Val(dwarf.AttrLowpc).(uint64); ok {
-			rrv.dwLoPC = lopc
-		} else {
-			return finfo{}, fmt.Errorf("target function seems to be missing LowPC attribute")
+
+		// Collect the start/end PC for the func. The format/class of
+		// the high PC attr may vary depending on which DWARF version
+		// we're generating; invoke a helper to handle the various
+		// possibilities.
+		lowpc, highpc, perr := dwtest.SubprogLoAndHighPc(die)
+		if perr != nil {
+			return finfo{}, fmt.Errorf("sibprog die malformed: %v", perr)
 		}
-		if hipc, ok := die.Val(dwarf.AttrHighpc).(uint64); ok {
-			rrv.dwHiPC = hipc
-		} else {
-			return finfo{}, fmt.Errorf("target function seems to be missing HighPC attribute")
-		}
+		rrv.dwLoPC = lowpc
+		rrv.dwHiPC = highpc
 		rrv.dwx = &dwx
 		rrv.name = fcn
 		rrv.valid = true
