@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"runtime"
 )
 
@@ -129,6 +130,17 @@ var globalTypeSafeTreeFM func() int
 var block = make(chan struct{})
 
 var a anyNode
+
+func init() {
+	if coredumpFilter := os.Getenv("GO_DEBUG_TEST_COREDUMP_FILTER"); coredumpFilter != "" {
+		if err := os.WriteFile("/proc/self/coredump_filter", []byte(coredumpFilter), 0600); err != nil {
+			os.Stderr.WriteString("crash: unable to set coredump_filter: ")
+			os.Stderr.WriteString(err.Error())
+			os.Stderr.WriteString("\n")
+			os.Exit(0) // Don't crash (which is an error for the called).
+		}
+	}
+}
 
 func main() {
 	globalAnyTree.root = makeAnyTree(5)

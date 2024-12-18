@@ -273,7 +273,10 @@ func Core(corePath, base, exePath string) (*Process, error) {
 		return nil, fmt.Errorf("error reading args: %v", err)
 	}
 
-	syms, symErr := readSymbols(&mem, coreFile, staticBase)
+	syms, symErr := readSymbols(staticBase, exeElf)
+	if symErr != nil {
+		symErr = fmt.Errorf("%v: from file %s", symErr, exeFile.Name())
+	}
 
 	dwarf, dwarfErr := exeElf.DWARF()
 	if dwarfErr != nil {
@@ -735,42 +738,29 @@ func readThreads(meta metadata, notes noteMap) []*Thread {
 	return threads
 }
 
-func readSymbols(mem *splicedMemory, coreFile *os.File, staticBase uint64) (map[string]Address, error) {
-	seen := map[*os.File]struct{}{
-		// Don't bother trying to read symbols from the core itself.
-		coreFile: struct{}{},
-	}
-
+// readSymbols loads all symbols from the SHT_SYMTAB section of the executable
+// file.
+//
+// TODO(aktau): Should we read symbols from the files underlying all available
+// executable mappings? This used to be done (see e.g.:
+// https://go.dev/cl/137375) but currently viewcore supports PIE and mixed
+// binaries without needing to read multiple files.
+//
+// NOTE: The core file itself does not contain a symbols section (SHT_SYMTAB),
+// so we don't read from it.
+func readSymbols(staticBase uint64, exeElf *elf.File) (map[string]Address, error) {
 	allSyms := make(map[string]Address)
-	var symErr error
 
-	// Read symbols from all available files.
-	for _, m := range mem.mappings {
-		if m.f == nil {
-			continue
-		}
-		if _, ok := seen[m.f]; ok {
-			continue
-		}
-		seen[m.f] = struct{}{}
-
-		e, err := elf.NewFile(m.f)
-		if err != nil {
-			symErr = fmt.Errorf("can't read symbols from %s: %v", m.f.Name(), err)
-			continue
-		}
-
-		syms, err := e.Symbols()
-		if err != nil {
-			symErr = fmt.Errorf("can't read symbols from %s: %v", m.f.Name(), err)
-			continue
-		}
-		for _, s := range syms {
-			allSyms[s.Name] = Address(s.Value).Add(int64(staticBase))
-		}
+	syms, err := exeElf.Symbols()
+	if err != nil {
+		return allSyms, fmt.Errorf("can't read symbols from main executable: %v", err)
 	}
 
-	return allSyms, symErr
+	for _, s := range syms {
+		allSyms[s.Name] = Address(s.Value).Add(int64(staticBase))
+	}
+
+	return allSyms, nil
 }
 
 func (p *Process) Warnings() []string {
