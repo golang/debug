@@ -7,7 +7,6 @@ package gocore
 import (
 	"iter"
 	"math/bits"
-	"strings"
 
 	"golang.org/x/debug/internal/core"
 )
@@ -54,46 +53,20 @@ func (p *Process) markObjects() {
 	// Note that we don't just use the DWARF roots, just in case DWARF isn't complete.
 	// Instead we use exactly what the runtime uses.
 
-	// Goroutine roots
-	//
 	// BUG: If the process dumps core with a thread in mallocgc at the point
 	// where an object is reachable from the stack but it hasn't been zeroed
-	// yet, it's possible for us to observe stale pointers here and follow them.
+	// yet, it's possible for us to observe stale pointers in a goroutine stack
+	// frame and follow them.
+	//
 	// Not a huge deal given that we'll just ignore outright bad pointers, but
 	// we may accidentally mark some objects as live erroneously.
-	for _, g := range p.goroutines {
-		for _, f := range g.frames {
-			for a := range f.Live {
-				add(p.proc.ReadPtr(a))
-			}
-		}
-	}
-
-	// Global roots
-	for _, m := range p.modules {
-		for _, s := range [2]string{"data", "bss"} {
-			min := core.Address(m.r.Field(s).Uintptr())
-			max := core.Address(m.r.Field("e" + s).Uintptr())
-			gc := m.r.Field("gc" + s + "mask").Field("bytedata").Address()
-			num := max.Sub(min) / ptrSize
-			for i := int64(0); i < num; i++ {
-				if p.proc.ReadUint8(gc.Add(i/8))>>uint(i%8)&1 != 0 {
-					add(p.proc.ReadPtr(min.Add(i * ptrSize)))
-				}
-			}
-		}
-	}
-
-	// Finalizers
-	for _, r := range p.globals {
-		if !strings.HasPrefix(r.Name, "finalizer for ") {
-			continue
-		}
-		p.ForEachRootPtr(r, func(_ int64, o Object, _ int64) bool {
-			add(core.Address(o))
+	p.ForEachRoot(func(r *Root) bool {
+		p.forEachRootPtr(r, func(_ int64, ptr core.Address) bool {
+			add(ptr)
 			return true
 		})
-	}
+		return true
+	})
 
 	// Expand root set to all reachable objects.
 	for len(q) > 0 {
@@ -278,6 +251,20 @@ func (p *Process) ForEachPtr(x Object, fn func(int64, Object, int64) bool) {
 
 // ForEachRootPtr behaves like ForEachPtr but it starts with a Root instead of an Object.
 func (p *Process) ForEachRootPtr(r *Root, fn func(int64, Object, int64) bool) {
+	p.forEachRootPtr(r, func(off int64, ptr core.Address) bool {
+		dst, off2 := p.FindObject(ptr)
+		if dst != 0 {
+			if !fn(off, dst, off2) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// forEachRootPtr walks all the pointers of the root, even if they don't point to
+// a valid object.
+func (p *Process) forEachRootPtr(r *Root, fn func(int64, core.Address) bool) {
 	ptrBuf := make([]byte, 8)
 	walkRootTypePtrs(p, r, ptrBuf, 0, r.Type, fn)
 }

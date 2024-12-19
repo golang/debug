@@ -273,7 +273,7 @@ func (c constsMap) find(s string) (int64, bool) {
 	return v, ok
 }
 
-func readConstants(p *core.Process) (constsMap, error) {
+func readDWARFConstants(p *core.Process) (constsMap, error) {
 	d, err := p.DWARF()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DWARF: %v", err)
@@ -299,7 +299,7 @@ func readConstants(p *core.Process) (constsMap, error) {
 	return consts, nil
 }
 
-func readGlobals(p *core.Process, nRoots *int, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
+func readDWARFGlobals(p *core.Process, nRoots *int, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
 	d, err := p.DWARF()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DWARF: %v", err)

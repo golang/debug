@@ -5,12 +5,14 @@
 package gocore
 
 import (
+	"cmp"
 	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
 	"math/bits"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -98,11 +100,11 @@ func Core(proc *core.Process) (p *Process, err error) {
 			p.rtTypeByName[name] = t
 		}
 	}
-	p.rtConsts, err = readConstants(proc)
+	p.rtConsts, err = readDWARFConstants(proc)
 	if err != nil {
 		return nil, err
 	}
-	p.globals, err = readGlobals(proc, &p.nRoots, p.dwarfTypeMap)
+	p.globals, err = readDWARFGlobals(proc, &p.nRoots, p.dwarfTypeMap)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +132,12 @@ func Core(proc *core.Process) (p *Process, err error) {
 		return nil, err
 	}
 
+	// Fix up global roots that don't appear in DWARF, but still have live pointers.
+	p.globals, err = fixUpGlobals(proc, p.modules, p.globals, p.rtTypeByName["unsafe.Pointer"], &p.nRoots)
+	if err != nil {
+		return nil, err
+	}
+
 	// Initialize the heap data structures.
 	p.heap, p.stats, err = readHeap(p)
 	if err != nil {
@@ -147,8 +155,10 @@ func Core(proc *core.Process) (p *Process, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// From this point on, all roots are found, initialized, and ready to use.
 
-	p.markObjects() // needs to be after readGlobals, readGs.
+	// Find all the objects from the roots.
+	p.markObjects()
 	return p, nil
 }
 
@@ -178,6 +188,48 @@ func (p *Process) Globals() []*Root {
 // FindFunc returns the function which contains the code at address pc, if any.
 func (p *Process) FindFunc(pc core.Address) *Func {
 	return p.funcTab.find(pc)
+}
+
+func forEachGlobalPtr(p *core.Process, modules []*module, f func(core.Address) bool) {
+	for _, m := range modules {
+		for _, s := range [2]string{"data", "bss"} {
+			min := core.Address(m.r.Field(s).Uintptr())
+			max := core.Address(m.r.Field("e" + s).Uintptr())
+			gc := m.r.Field("gc" + s + "mask").Field("bytedata").Address()
+			num := max.Sub(min) / p.PtrSize()
+			for i := int64(0); i < num; i++ {
+				if p.ReadUint8(gc.Add(i/8))>>uint(i%8)&1 != 0 {
+					f(min.Add(i * p.PtrSize()))
+				}
+			}
+		}
+	}
+}
+
+func fixUpGlobals(p *core.Process, modules []*module, globals []*Root, unsafePtrType *Type, nRoots *int) ([]*Root, error) {
+	slices.SortFunc(globals, func(a, b *Root) int {
+		// Assume all globals have an address.
+		return cmp.Compare(a.Addr(), b.Addr())
+	})
+	var extraGlobals []*Root // Extra global roots not described by DWARF.
+	forEachGlobalPtr(p, modules, func(addr core.Address) bool {
+		if len(globals) > 0 {
+			// Skip over globals that are already accounted for.
+			i, ok := slices.BinarySearchFunc(globals, addr, func(a *Root, b core.Address) int {
+				return cmp.Compare(a.Addr(), b)
+			})
+			if i >= 0 && !ok {
+				i--
+			}
+			if i >= 0 && globals[i].Addr() != 0 && addr >= globals[i].Addr() && addr < globals[i].Addr().Add(globals[i].Type.Size) {
+				return true
+			}
+		}
+		root := makeMemRoot(nRoots, "unk", unsafePtrType, nil, addr)
+		extraGlobals = append(extraGlobals, root)
+		return true
+	})
+	return append(globals, extraGlobals...), nil
 }
 
 // arena is a summary of the size of components of a heapArena.

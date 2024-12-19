@@ -222,14 +222,9 @@ func checkProcess(t *testing.T, p *Process) {
 		t.Errorf("stat[%q].Size == 0, want >0", heapName)
 	}
 
-	// TODO(aktau): Adding package os to the test binary causes the dominator test
-	// to panic. We suspect the dominator code may not be working right even if it
-	// doesn't crash. This needs a fixup and dedicated tests at a later time.
-	if false {
-		lt := runLT(p)
-		if !checkDominator(t, lt) {
-			t.Errorf("sanityCheckDominator(...) = false, want true")
-		}
+	lt := runLT(p)
+	if !checkDominator(t, lt) {
+		t.Errorf("sanityCheckDominator(...) = false, want true")
 	}
 }
 

@@ -127,7 +127,7 @@ func (pr *Process) readRootAt(r *Root, b []byte, offset int64) core.Address {
 
 // walkRootTypePtrs calls fn for the edges found in an object of type t living at offset off in the root r.
 // If fn returns false, return immediately with false.
-func walkRootTypePtrs(p *Process, r *Root, ptrBuf []byte, off int64, t *Type, fn func(int64, Object, int64) bool) bool {
+func walkRootTypePtrs(p *Process, r *Root, ptrBuf []byte, off int64, t *Type, fn func(int64, core.Address) bool) bool {
 	switch t.Kind {
 	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
 		// no edges here
@@ -144,11 +144,8 @@ func walkRootTypePtrs(p *Process, r *Root, ptrBuf []byte, off int64, t *Type, fn
 			} else {
 				ptr = core.Address(binary.LittleEndian.Uint64(ptrBuf[:]))
 			}
-			dst, off2 := p.FindObject(ptr)
-			if dst != 0 {
-				if !fn(off, dst, off2) {
-					return false
-				}
+			if !fn(off, ptr) {
+				return false
 			}
 		}
 		// Treat second word like a pointer.
@@ -163,11 +160,8 @@ func walkRootTypePtrs(p *Process, r *Root, ptrBuf []byte, off int64, t *Type, fn
 			} else {
 				ptr = core.Address(binary.LittleEndian.Uint64(ptrBuf[:]))
 			}
-			dst, off2 := p.FindObject(ptr)
-			if dst != 0 {
-				if !fn(off, dst, off2) {
-					return false
-				}
+			if !fn(off, ptr) {
+				return false
 			}
 		}
 	case KindArray:
