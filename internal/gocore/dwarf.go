@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 
+	"golang.org/x/debug/dwtest"
 	"golang.org/x/debug/internal/core"
 
 	"golang.org/x/debug/third_party/delve/dwarf/loclist"
@@ -395,22 +396,30 @@ func readDWARFVars(p *core.Process, fns *funcTab, dwarfTypeMap map[dwarf.Type]*T
 		}
 
 		if e.Tag == dwarf.TagSubprogram {
-			lowpc := e.AttrField(dwarf.AttrLowpc)
-			highpc := e.AttrField(dwarf.AttrHighpc)
-			if lowpc == nil || highpc == nil {
+			if e.AttrField(dwarf.AttrLowpc) == nil ||
+				e.AttrField(dwarf.AttrHighpc) == nil {
 				continue
 			}
-			min := core.Address(lowpc.Val.(uint64) + p.StaticBase())
-			max := core.Address(highpc.Val.(uint64) + p.StaticBase())
-			f := fns.find(min)
+
+			// Collect the start/end PC for the func. The format/class of
+			// the high PC attr may vary depending on which DWARF version
+			// we're generating; invoke a helper to handle the various
+			// possibilities.
+			lowpc, highpc, perr := dwtest.SubprogLoAndHighPc(e)
+			if perr != nil {
+				return nil, fmt.Errorf("subprog die malformed: %v", perr)
+			}
+			fmin := core.Address(lowpc + p.StaticBase())
+			fmax := core.Address(highpc + p.StaticBase())
+			f := fns.find(fmin)
 			if f == nil {
 				// some func Go doesn't know about. C?
 				curfn = nil
 			} else {
-				if f.entry != min {
+				if f.entry != fmin {
 					return nil, errors.New("dwarf and runtime don't agree about start of " + f.name)
 				}
-				if fns.find(max-1) != f {
+				if fns.find(fmax-1) != f {
 					return nil, errors.New("function ranges don't match for " + f.name)
 				}
 				curfn = f
