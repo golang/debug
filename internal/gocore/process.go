@@ -499,6 +499,8 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 						continue
 					}
 					typeAddr := p.proc.ReadPtr(min.Add(off))
+					// Note: typeAddr might be nil if the core was taken while a goroutine was
+					// actively allocating a large object.
 					if typeAddr == 0 {
 						continue
 					}
@@ -522,16 +524,22 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 				// is not valid if the object is dead. However, because large objects are
 				// 1:1 with spans, we can be certain largeType is valid as long as the span
 				// is in use.
-				typ := s.Field("largeType").Deref()
-				nptrs := int64(typ.Field("PtrBytes").Uintptr()) / int64(heap.ptrSize)
-				kindGCProg, hasGCProgs := p.rtConsts.find("internal/abi.KindGCProg")
-				if hasGCProgs && typ.Field("Kind_").Uint8()&uint8(kindGCProg) != 0 {
-					panic("large object's GCProg was not unrolled")
-				}
-				gcdata := typ.Field("GCData").Address()
-				for i := int64(0); i < nptrs; i++ {
-					if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
-						heap.setIsPointer(min.Add(i * int64(heap.ptrSize)))
+				//
+				// Note: largeType might be nil if the core was taken while a goroutine was
+				// actively allocating a large object.
+				typPtr := s.Field("largeType")
+				if typPtr.Address() != 0 {
+					typ := typPtr.Deref()
+					nptrs := int64(typ.Field("PtrBytes").Uintptr()) / int64(heap.ptrSize)
+					kindGCProg, hasGCProgs := p.rtConsts.find("internal/abi.KindGCProg")
+					if hasGCProgs && typ.Field("Kind_").Uint8()&uint8(kindGCProg) != 0 {
+						panic("large object's GCProg was not unrolled")
+					}
+					gcdata := typ.Field("GCData").Address()
+					for i := int64(0); i < nptrs; i++ {
+						if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
+							heap.setIsPointer(min.Add(i * int64(heap.ptrSize)))
+						}
 					}
 				}
 			}
