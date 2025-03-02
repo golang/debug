@@ -47,11 +47,13 @@ type Process struct {
 	memory    splicedMemory // virtual address mappings
 	pageTable pageTable4    // for fast address->mapping lookups
 
-	syms     map[string]Address // symbols (could be empty if executable is stripped)
-	symErr   error              // an error encountered while reading symbols
-	dwarf    *dwarf.Data        // debugging info (could be nil)
-	dwarfErr error              // an error encountered while reading DWARF
-	dwarfLoc []byte             // .debug_loc section
+	syms          map[string]Address // symbols (could be empty if executable is stripped)
+	symErr        error              // an error encountered while reading symbols
+	dwarf         *dwarf.Data        // debugging info (could be nil)
+	dwarfErr      error              // an error encountered while reading DWARF
+	dwarfLoc      []byte             // .debug_loc section
+	dwarfLocLists []byte             // .debug_loclists section
+	dwarfAddr     []byte             // .debug_addr section
 
 	warnings []string // warnings generated during loading
 }
@@ -181,6 +183,14 @@ func (p *Process) DWARFLoc() ([]byte, error) {
 	return p.dwarfLoc, p.dwarfErr
 }
 
+func (p *Process) DWARFLocLists() ([]byte, error) {
+	return p.dwarfLocLists, p.dwarfErr
+}
+
+func (p *Process) DWARFAddr() ([]byte, error) {
+	return p.dwarfAddr, p.dwarfErr
+}
+
 // Symbols returns a mapping from name to inferior address, along with
 // any error encountered during reading the symbol information.
 // (There may be both an error and some returned symbols.)
@@ -282,12 +292,27 @@ func Core(corePath, base, exePath string) (*Process, error) {
 	if dwarfErr != nil {
 		dwarfErr = fmt.Errorf("error reading DWARF info from %s: %v", exeFile.Name(), dwarfErr)
 	}
-	var dwarfLoc []byte
-	if locSection := exeElf.Section(".debug_loc"); locSection != nil {
-		var err error
-		dwarfLoc, err = locSection.Data()
-		if err != nil && dwarfErr == nil {
-			dwarfErr = fmt.Errorf("error reading DWARF location list section from %s: %v", exeFile.Name(), err)
+
+	// Note that we expect to find .debug_loc for DWARF V4 binaries
+	// and .debug_loclists + .debug_addr for DWARF V5.  If C code is
+	// mixed in, we may see both sections, since you're allowed to mix
+	// different DWARF versions by compilation unit.
+	var dwarfLoc, dwarfLocLists, dwarfAddr []byte
+	toRead := []struct {
+		name    string
+		payload *[]byte
+	}{
+		{name: ".debug_loc", payload: &dwarfLoc},
+		{name: ".debug_loclists", payload: &dwarfLocLists},
+		{name: ".debug_addr", payload: &dwarfAddr},
+	}
+	for _, secitem := range toRead {
+		if section := exeElf.Section(secitem.name); section != nil {
+			payload, err := section.Data()
+			if err != nil && dwarfErr == nil {
+				dwarfErr = fmt.Errorf("error reading DWARF %s section from %s: %v", secitem.name, exeFile.Name(), err)
+			}
+			*(secitem.payload) = payload
 		}
 	}
 
@@ -368,19 +393,21 @@ func Core(corePath, base, exePath string) (*Process, error) {
 	}
 
 	p := &Process{
-		meta:       meta,
-		entryPoint: entryPoint,
-		staticBase: staticBase,
-		args:       args,
-		threads:    threads,
-		memory:     mem,
-		pageTable:  pageTable,
-		syms:       syms,
-		symErr:     symErr,
-		dwarf:      dwarf,
-		dwarfErr:   dwarfErr,
-		dwarfLoc:   dwarfLoc,
-		warnings:   warnings,
+		meta:          meta,
+		entryPoint:    entryPoint,
+		staticBase:    staticBase,
+		args:          args,
+		threads:       threads,
+		memory:        mem,
+		pageTable:     pageTable,
+		syms:          syms,
+		symErr:        symErr,
+		dwarf:         dwarf,
+		dwarfErr:      dwarfErr,
+		dwarfLoc:      dwarfLoc,
+		dwarfLocLists: dwarfLocLists,
+		dwarfAddr:     dwarfAddr,
+		warnings:      warnings,
 	}
 
 	return p, nil

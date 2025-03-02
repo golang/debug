@@ -14,6 +14,7 @@ import (
 	"golang.org/x/debug/dwtest"
 	"golang.org/x/debug/internal/core"
 
+	"golang.org/x/debug/third_party/delve/dwarf/godwarf"
 	"golang.org/x/debug/third_party/delve/dwarf/loclist"
 	"golang.org/x/debug/third_party/delve/dwarf/op"
 	"golang.org/x/debug/third_party/delve/dwarf/regnum"
@@ -386,15 +387,40 @@ func readDWARFVars(p *core.Process, fns *funcTab, dwarfTypeMap map[dwarf.Type]*T
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DWARF: %v", err)
 	}
+	dLocListsSec, derr := p.DWARFLocLists()
+	if derr != nil {
+		return nil, fmt.Errorf("failed to read DWARF: %v", derr)
+	}
+	dAddrSec, daerr := p.DWARFAddr()
+	if daerr != nil {
+		return nil, fmt.Errorf("failed to read DWARF: %v", daerr)
+	}
+	debugAddrSec := godwarf.ParseAddr(dAddrSec)
 	vars := make(map[*Func][]dwarfVar)
 	var curfn *Func
 	r := d.Reader()
+	addrBase := uint64(0)
+	unitVersion := 4
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if isNonGoCU(e) {
 			r.SkipChildren()
 			continue
 		}
-
+		if e.Tag == dwarf.TagCompileUnit {
+			// Determine whether we're looking at DWARF version 5 or
+			// some version prior to 5.  At the moment the DWARF
+			// reading machinery in debug/dwarf keeps track of DWARF
+			// version for each unit but doesn't expose this info to
+			// clients, so we need to do the detection indirectly,
+			// here by looking for an attribute that only gets generated
+			// if DWARF 5 is being used.
+			if f := e.AttrField(dwarf.AttrAddrBase); f != nil {
+				addrBase = uint64(f.Val.(int64))
+				unitVersion = 5
+			} else {
+				unitVersion = 4
+			}
+		}
 		if e.Tag == dwarf.TagSubprogram {
 			if e.AttrField(dwarf.AttrLowpc) == nil ||
 				e.AttrField(dwarf.AttrHighpc) == nil {
@@ -459,30 +485,74 @@ func readDWARFVars(p *core.Process, fns *funcTab, dwarfTypeMap map[dwarf.Type]*T
 		}
 		name := nf.Val.(string)
 
-		// No .debug_loc section, can't make progress.
-		if len(dLocSec) == 0 {
-			continue
-		}
+		// FIXME A note on the code above: we're screening out
+		// variables that don't have a specific name and type, which
+		// on the surface seems workable, however this also rejects
+		// vars corresponding to "concrete" instances of vars that
+		// have been inlined, which is almost certainly a mistake. For
+		// more on concrete/abstract variables see
+		// https://github.com/golang/proposal/blob/master/design/22080-dwarf-inlining.md#how-the-generated-dwarf-should-look,
+		// which has examples.  Instead what the code above should be
+		// doing is caching any abstract variables it encounters in a
+		// map (indexed by DWARF offset), then when it encounters a
+		// concrete var, pick the name and type up from the abstract
+		// variable.
 
-		// Read the location list.
-		locListOff := aloc.Val.(int64)
-		dr := loclist.NewDwarf2Reader(dLocSec, int(p.PtrSize()))
-		dr.Seek(int(locListOff))
-		var base uint64
-		var e loclist.Entry
-		for dr.Next(&e) {
-			if e.BaseAddressSelection() {
-				base = e.HighPC + p.StaticBase()
-				continue
+		switch unitVersion {
+		case 5:
+			{
+				// No .debug_loclists section, can't make progress.
+				if len(dLocListsSec) == 0 {
+					continue
+				}
+
+				debugAddr := debugAddrSec.GetSubsection(addrBase)
+				// Read the location lists.
+				locListOff := aloc.Val.(int64)
+				dr := loclist.NewDwarf5Reader(dLocListsSec)
+				elist, err := dr.Enumerate(locListOff, p.StaticBase(), debugAddr)
+				if err != nil {
+					return nil, err
+				}
+				for _, e := range elist {
+					vars[curfn] = append(vars[curfn], dwarfVar{
+						lowPC:  core.Address(e.LowPC),
+						highPC: core.Address(e.HighPC),
+						kind:   kind,
+						instr:  e.Instr,
+						name:   name,
+						typ:    dwarfTypeMap[dt],
+					})
+				}
 			}
-			vars[curfn] = append(vars[curfn], dwarfVar{
-				lowPC:  core.Address(e.LowPC + base),
-				highPC: core.Address(e.HighPC + base),
-				kind:   kind,
-				instr:  e.Instr,
-				name:   name,
-				typ:    dwarfTypeMap[dt],
-			})
+		default:
+			{
+				// No .debug_loc section, can't make progress.
+				if len(dLocSec) == 0 {
+					continue
+				}
+
+				// Read the location list.
+				locListOff := aloc.Val.(int64)
+				dr := loclist.NewDwarf2Reader(dLocSec, int(p.PtrSize()))
+				dr.Seek(int(locListOff))
+				var base uint64
+				var e loclist.Entry
+				for dr.Next(&e) {
+					if e.BaseAddressSelection() {
+						base = e.HighPC + p.StaticBase()
+						continue
+					}
+					vars[curfn] = append(vars[curfn], dwarfVar{
+						lowPC:  core.Address(e.LowPC + base),
+						highPC: core.Address(e.HighPC + base),
+						kind:   kind,
+						instr:  e.Instr,
+						name:   name,
+						typ:    dwarfTypeMap[dt],
+					})
+				}
+			}
 		}
 	}
 	return vars, nil
