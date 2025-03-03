@@ -1,14 +1,13 @@
 module dwdumploc
 
-go 1.18
+go 1.21
 
-require github.com/go-delve/delve v1.20.3-0.20230620165530-afef1aec605e
+require github.com/go-delve/delve v1.24.1-0.20250303164244-e6e7aeb66705
 
 require (
-	github.com/cilium/ebpf v0.7.0 // indirect
-	github.com/hashicorp/golang-lru v0.5.4 // indirect
-	github.com/konsorten/go-windows-terminal-sequences v1.0.3 // indirect
-	github.com/sirupsen/logrus v1.6.0 // indirect
-	golang.org/x/arch v0.0.0-20190927153633-4e8777c89be4 // indirect
-	golang.org/x/sys v0.0.0-20220908164124-27713097b956 // indirect
+	github.com/cilium/ebpf v0.11.0 // indirect
+	github.com/hashicorp/golang-lru v1.0.2 // indirect
+	golang.org/x/arch v0.11.0 // indirect
+	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 // indirect
+	golang.org/x/sys v0.26.0 // indirect
 )
