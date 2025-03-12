@@ -119,12 +119,13 @@ func runHarness(t *testing.T, harnessPath string, exePath string, fcn string) st
 // gobuild is a helper to build a Go program from source code,
 // so that we can inspect selected bits of DWARF in the resulting binary.
 // Return value is binary path.
-func gobuild(t *testing.T, sourceCode string, pname string, dir string) string {
+func gobuild(t *testing.T, sourceCode string, pname string, dir string) (string, string) {
 	spath := filepath.Join(dir, pname+".go")
 	if err := os.WriteFile(spath, []byte(sourceCode), 0644); err != nil {
 		t.Fatalf("write to %s failed: %s", spath, err)
 	}
 	epath := filepath.Join(dir, pname+".exe")
+	nooppath := filepath.Join(dir, pname+".noop.exe")
 
 	// A note on this build: Delve currently has problems digesting
 	// PIE binaries on Windows; until this can be straightened out,
@@ -134,13 +135,22 @@ func gobuild(t *testing.T, sourceCode string, pname string, dir string) string {
 		t.Logf("%% build output: %s\n", b)
 		t.Fatalf("build failed: %s", err)
 	}
-	return epath
+	cmd = exec.Command(testenv.GoToolPath(t), "build", "-gcflags=-N -l", "-trimpath", "-buildmode=exe", "-o", nooppath, spath)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("%% build output: %s\n", b)
+		t.Fatalf("build failed: %s", err)
+	}
+	return epath, nooppath
 }
 
 const programSourceCode = `
 package main
 
-import "context"
+import (
+	"context"
+	"strings"
+	"fmt"
+)
 
 var G int
 
@@ -178,10 +188,29 @@ func (db *DB) Issue46845(ctx context.Context, dc *driverConn, release func(error
 	return nil, nil
 }
 
+//go:noinline
+func Issue72053() {
+		u := Address{Addr: "127.0.0.1"}
+		fmt.Println(u)
+}
+
+type Address struct {
+		TLS  bool
+		Addr string
+}
+
+//go:noinline
+func (a Address) String() string {
+		sb := new(strings.Builder)
+		sb.WriteString(a.Addr)
+		return sb.String()
+}
+
 func main() {
 	Issue47354("poo")
 	var d DB
 	d.Issue46845(context.Background(), nil, func(error) {}, "foo", nil)
+	Issue72053()
 }
 
 `
@@ -232,6 +261,20 @@ func testIssue46845(t *testing.T, harnessPath string, ppath string) {
 	want := strings.TrimSpace(expected[runtime.GOARCH])
 	if got != want {
 		t.Errorf("failed Issue47354 arch %s:\ngot: %s\nwant: %s",
+			runtime.GOARCH, got, want)
+	}
+}
+
+func testIssue72053(t *testing.T, harnessPath string, ppath string) {
+	expected := map[string]string{
+		"amd64": "1: in-param \"a\" loc=\"{ [0: S=1 RAX] [1: S=8 RBX] [2: S=8 RCX] }\"\n2: out-param \"~r0\" loc=\"<not available>\"",
+		"arm64": "1: in-param \"a\" loc=\"{ [0: S=1 R0] [1: S=8 R1] [2: S=8 R2] }\"\n2: out-param \"~r0\" loc=\"<not available>\"",
+	}
+	fname := "Address.String"
+	got := runHarness(t, harnessPath, ppath, "main."+fname)
+	want := expected[runtime.GOARCH]
+	if got != want {
+		t.Errorf("failed Issue47354 arch %s:\ngot: %q\nwant: %q",
 			runtime.GOARCH, got, want)
 	}
 }
@@ -293,7 +336,7 @@ func TestDwarfVariableLocations(t *testing.T) {
 	// Build program to inspect. NB: we're building at default (with
 	// optimization); it might also be worth doing a "-l -N" build
 	// to verify the location expressions in that case.
-	ppath := gobuild(t, programSourceCode, "prog", tdir)
+	ppath, nooppath := gobuild(t, programSourceCode, "prog", tdir)
 
 	// Sub-tests for each function we want to inspect.
 	t.Run("Issue47354", func(t *testing.T) {
@@ -303,6 +346,10 @@ func TestDwarfVariableLocations(t *testing.T) {
 	t.Run("Issue46845", func(t *testing.T) {
 		t.Parallel()
 		testIssue46845(t, harnessPath, ppath)
+	})
+	t.Run("Issue72053", func(t *testing.T) {
+		t.Parallel()
+		testIssue72053(t, harnessPath, nooppath)
 	})
 	t.Run("RuntimeThrow", func(t *testing.T) {
 		t.Parallel()
