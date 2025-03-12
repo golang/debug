@@ -274,7 +274,7 @@ func testIssue72053(t *testing.T, harnessPath string, ppath string) {
 	got := runHarness(t, harnessPath, ppath, "main."+fname)
 	want := expected[runtime.GOARCH]
 	if got != want {
-		t.Errorf("failed Issue47354 arch %s:\ngot: %q\nwant: %q",
+		t.Errorf("failed Issue72053 arch %s:\ngot: %q\nwant: %q",
 			runtime.GOARCH, got, want)
 	}
 }
