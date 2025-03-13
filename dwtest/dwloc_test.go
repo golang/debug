@@ -266,12 +266,12 @@ func testIssue46845(t *testing.T, harnessPath string, ppath string) {
 }
 
 func testIssue72053(t *testing.T, harnessPath string, ppath string) {
+	testenv.NeedsGo1Point(t, 25)
+
 	expected := map[string]string{
-		"amd64": "1: in-param \"a\" loc=\"{ [0: S=1 RAX] [1: S=8 RBX] [2: S=8 RCX] }\"\n2: out-param \"~r0\" loc=\"<not available>\"",
-		"arm64": "1: in-param \"a\" loc=\"{ [0: S=1 R0] [1: S=8 R1] [2: S=8 R2] }\"\n2: out-param \"~r0\" loc=\"<not available>\"",
+		"amd64": "1: in-param \"a\" loc=\"{ [0: S=1 RAX] [1: S=7 addr=0x0] [2: S=8 RBX] [3: S=8 RCX] }\"\n2: out-param \"~r0\" loc=\"addr=fa8\"",
 	}
-	fname := "Address.String"
-	got := runHarness(t, harnessPath, ppath, "main."+fname)
+	got := runHarness(t, harnessPath, ppath, "main.Address.String")
 	want := expected[runtime.GOARCH]
 	if got != want {
 		t.Errorf("failed Issue72053 arch %s:\ngot: %q\nwant: %q",
