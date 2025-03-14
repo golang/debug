@@ -132,6 +132,7 @@ func NeedsGo1Point(t Testing, x int) {
 	}
 }
 
+// NeedsArch skips test if the current arch is different than the one required.
 func NeedsArch(t Testing, arch string) {
 	if t, ok := t.(helperer); ok {
 		t.Helper()
