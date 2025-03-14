@@ -131,3 +131,12 @@ func NeedsGo1Point(t Testing, x int) {
 		t.Skipf("running Go version %q is version 1.%d, older than required 1.%d", runtime.Version(), Go1Point(), x)
 	}
 }
+
+func NeedsArch(t Testing, arch string) {
+	if t, ok := t.(helperer); ok {
+		t.Helper()
+	}
+	if runtime.GOARCH != arch {
+		t.Skipf("current arch is %q, test requires %q", runtime.GOARCH, arch)
+	}
+}

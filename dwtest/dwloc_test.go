@@ -118,7 +118,8 @@ func runHarness(t *testing.T, harnessPath string, exePath string, fcn string) st
 
 // gobuild is a helper to build a Go program from source code,
 // so that we can inspect selected bits of DWARF in the resulting binary.
-// Return value is binary path.
+// The first return value is the path to the binary compiled with optimizations,
+// the second is the path to the binary compiled without optimizations.
 func gobuild(t *testing.T, sourceCode string, pname string, dir string) (string, string) {
 	spath := filepath.Join(dir, pname+".go")
 	if err := os.WriteFile(spath, []byte(sourceCode), 0644); err != nil {
@@ -267,6 +268,7 @@ func testIssue46845(t *testing.T, harnessPath string, ppath string) {
 
 func testIssue72053(t *testing.T, harnessPath string, ppath string) {
 	testenv.NeedsGo1Point(t, 25)
+	testenv.NeedsArch(t, "amd64")
 
 	expected := map[string]string{
 		"amd64": "1: in-param \"a\" loc=\"{ [0: S=1 RAX] [1: S=7 addr=0x0] [2: S=8 RBX] [3: S=8 RCX] }\"\n2: out-param \"~r0\" loc=\"addr=fa8\"",
