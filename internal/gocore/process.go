@@ -535,10 +535,13 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 					if hasGCProgs && typ.Field("Kind_").Uint8()&uint8(kindGCProg) != 0 {
 						panic("large object's GCProg was not unrolled")
 					}
+					size := typ.Field("Size_").Uintptr()
 					gcdata := typ.Field("GCData").Address()
-					for i := int64(0); i < nptrs; i++ {
-						if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
-							heap.setIsPointer(min.Add(i * int64(heap.ptrSize)))
+					for s := min; s < max; s = s.Add(int64(size)) {
+						for i := int64(0); i < nptrs; i++ {
+							if (p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8))&1 != 0 {
+								heap.setIsPointer(s.Add(i * int64(heap.ptrSize)))
+							}
 						}
 					}
 				}

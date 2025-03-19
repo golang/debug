@@ -276,6 +276,7 @@ func TestObjects(t *testing.T) {
 				myPairObjects := 0
 				anyNodeObjects := 0
 				typeSafeNodeObjects := 0
+				bigSliceElemObjects := 0
 
 				p.ForEachObject(func(x Object) bool {
 					siz := p.Size(x)
@@ -291,6 +292,8 @@ func TestObjects(t *testing.T) {
 						anyNodeObjects++
 					case "main.typeSafeNode[main.myPair]":
 						typeSafeNodeObjects++
+					case "main.bigSliceElem":
+						bigSliceElemObjects++
 					}
 					n++
 					return true
@@ -298,7 +301,7 @@ func TestObjects(t *testing.T) {
 				if n < 10 {
 					t.Errorf("#objects = %d, want >10", n)
 				}
-				if largeObjects != 1 {
+				if largeObjects != 2 {
 					t.Errorf("expected exactly one object larger than %d, found %d", largeObjectThreshold, largeObjects)
 				}
 
@@ -315,6 +318,9 @@ func TestObjects(t *testing.T) {
 				}
 				if want := tsTrees * nodes; typeSafeNodeObjects != want {
 					t.Errorf("expected exactly %d main.typeSafeNode[main.myPair] objects, found %d", want, typeSafeNodeObjects)
+				}
+				if want := 32 << 10; bigSliceElemObjects != want {
+					t.Errorf("expected exactly %d main.globalBigSliceInt objects, found %d", want, bigSliceElemObjects)
 				}
 			})
 		}

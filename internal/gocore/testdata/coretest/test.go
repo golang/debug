@@ -122,10 +122,15 @@ type Xer interface {
 	X() int64
 }
 
+type bigSliceElem struct {
+	x, y, z float64
+}
+
 var globalAnyTree AnyTree
 var globalAnyTreeFM func() int
 var globalTypeSafeTree TypeSafeTree[myPair]
 var globalTypeSafeTreeFM func() int
+var globalBigSlice []*bigSliceElem
 
 var block = make(chan struct{})
 
@@ -143,6 +148,10 @@ func init() {
 }
 
 func main() {
+	globalBigSlice = make([]*bigSliceElem, 32<<10)
+	for i := range globalBigSlice {
+		globalBigSlice[i] = &bigSliceElem{float64(i), float64(i) - 0.5, float64(i * 124)}
+	}
 	globalAnyTree.root = makeAnyTree(5)
 	globalTypeSafeTree.root = makeTypeSafeTree(5)
 
