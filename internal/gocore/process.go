@@ -766,6 +766,7 @@ func readGoroutine(p *Process, r region, dwarfVars map[*Func][]dwarfVar) (*Gorou
 						rp.value = p.Val
 					}
 					off += int64(p.Size)
+					rps = append(rps, rp)
 				}
 				f.roots = append(f.roots, p.makeCompositeRoot(v.name, v.typ, f, rps))
 			} else if addr != 0 && len(pieces) == 0 {
