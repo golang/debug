@@ -1,5 +1,5 @@
 // Copyright 2017 The Go Authors.  All rights reserved.
-// Use of this source code is governed by a BSD-style
+// Use of this srcFile code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 //go:build darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris
@@ -36,9 +36,8 @@ func loadCore(t *testing.T, corePath, base, exePath string) *Process {
 	return p
 }
 
-// loadExampleGenerated generates a core from a binary built with
-// runtime.GOROOT().
-func loadExampleGenerated(t *testing.T, buildFlags, env []string) *Process {
+// createAndLoadCore generates a core from a binary built with runtime.GOROOT().
+func createAndLoadCore(t *testing.T, srcFile string, buildFlags, env []string) *Process {
 	t.Helper()
 	testenv.MustHaveGoBuild(t)
 	switch runtime.GOOS {
@@ -57,7 +56,7 @@ func loadExampleGenerated(t *testing.T, buildFlags, env []string) *Process {
 	}
 
 	dir := t.TempDir()
-	file, output, err := generateCore(dir, buildFlags, env)
+	file, output, err := generateCore(srcFile, dir, buildFlags, env)
 	t.Logf("crasher output: %s", output)
 	if err != nil {
 		t.Fatalf("generateCore() got err %v want nil", err)
@@ -158,24 +157,23 @@ func doRunCrasher(cmd *exec.Cmd) (pid int, output []byte, err error) {
 	return cmd.Process.Pid, b.Bytes(), nil
 }
 
-func generateCore(dir string, buildFlags, env []string) (string, []byte, error) {
+func generateCore(srcFile, dir string, buildFlags, env []string) (string, []byte, error) {
 	goTool, err := testenv.GoTool()
 	if err != nil {
 		return "", nil, fmt.Errorf("cannot find go tool: %w", err)
 	}
 
-	const source = "./testdata/coretest/test.go"
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", nil, fmt.Errorf("erroring getting cwd: %w", err)
 	}
 
-	srcPath := filepath.Join(cwd, source)
+	srcPath := filepath.Join(cwd, srcFile)
 	argv := []string{"build"}
 	argv = append(argv, buildFlags...)
-	argv = append(argv, "-o", "test.exe", srcPath)
+	argv = append(argv, "-o", filepath.Join(dir, "test.exe"), "./"+filepath.Base(srcFile))
 	cmd := exec.Command(goTool, argv...)
-	cmd.Dir = dir
+	cmd.Dir = filepath.Dir(srcPath)
 
 	b, err := cmd.CombinedOutput()
 	if err != nil {
@@ -241,7 +239,7 @@ func (p parameters) String() string {
 	if len(p.env) != 0 {
 		parts = append(parts, "env="+strings.Join(p.env, ","))
 	}
-	return cmp.Or(strings.Join(parts, "%"), "DEFAULT")
+	return cmp.Or(strings.Join(parts, "%"), "default")
 }
 
 // Variations in build and execution environments common to different tests.
@@ -251,77 +249,122 @@ var variations = [...]parameters{
 	{buildFlags: []string{"-buildmode=pie"}, env: []string{"GO_DEBUG_TEST_COREDUMP_FILTER=0x3f"}},
 }
 
+func testSrcFiles(t *testing.T) []string {
+	srcs, err := filepath.Glob("testdata/testprogs/*.go")
+	if err != nil {
+		t.Skipf("failed to find sources: %v", err)
+	}
+	return srcs
+}
+
 func TestVersions(t *testing.T) {
 	t.Run("goroot", func(t *testing.T) {
 		for _, test := range variations {
-			t.Run(test.String(), func(t *testing.T) {
-				p := loadExampleGenerated(t, test.buildFlags, test.env)
-				checkProcess(t, p)
-			})
+			for _, src := range testSrcFiles(t) {
+				t.Run(test.String()+"/"+filepath.Base(src), func(t *testing.T) {
+					p := createAndLoadCore(t, src, test.buildFlags, test.env)
+					checkProcess(t, p)
+				})
+			}
 		}
 	})
 }
 
 func TestObjects(t *testing.T) {
+	const largeObjectThreshold = 32768
+
 	t.Run("goroot", func(t *testing.T) {
 		for _, test := range variations {
 			t.Run(test.String(), func(t *testing.T) {
-				const largeObjectThreshold = 32768
+				t.Run("bigslice.go", func(t *testing.T) {
+					p := createAndLoadCore(t, "testdata/testprogs/bigslice.go", test.buildFlags, test.env)
 
-				p := loadExampleGenerated(t, test.buildFlags, test.env)
+					// Statistics to check.
+					largeObjects := 0 // Number of objects larger than (or equal to largeObjectThreshold)
+					bigSliceElemObjects := 0
 
-				// Statistics to check.
-				n := 0
-				largeObjects := 0 // Number of objects larger than (or equal to largeObjectThreshold)
-				myPairObjects := 0
-				anyNodeObjects := 0
-				typeSafeNodeObjects := 0
-				bigSliceElemObjects := 0
-
-				p.ForEachObject(func(x Object) bool {
-					siz := p.Size(x)
-					typ := typeName(p, x)
-					t.Logf("%s size=%d", typ, p.Size(x))
-					if siz >= largeObjectThreshold {
-						largeObjects++
+					p.ForEachObject(func(x Object) bool {
+						siz := p.Size(x)
+						typ := typeName(p, x)
+						//t.Logf("%s size=%d", typ, p.Size(x))
+						if siz >= largeObjectThreshold {
+							largeObjects++
+						}
+						switch typ {
+						case "main.bigSliceElem":
+							bigSliceElemObjects++
+						}
+						return true
+					})
+					if largeObjects != 1 {
+						t.Errorf("expected exactly one object larger than %d, found %d", largeObjectThreshold, largeObjects)
 					}
-					switch typ {
-					case "main.myPair":
-						myPairObjects++
-					case "main.anyNode":
-						anyNodeObjects++
-					case "main.typeSafeNode[main.myPair]":
-						typeSafeNodeObjects++
-					case "main.bigSliceElem":
-						bigSliceElemObjects++
+
+					// Check object counts.
+					if want := 32 << 10; bigSliceElemObjects != want {
+						t.Errorf("expected exactly %d main.globalBigSliceInt objects, found %d", want, bigSliceElemObjects)
 					}
-					n++
-					return true
 				})
-				if n < 10 {
-					t.Errorf("#objects = %d, want >10", n)
-				}
-				if largeObjects != 2 {
-					t.Errorf("expected exactly one object larger than %d, found %d", largeObjectThreshold, largeObjects)
-				}
+				t.Run("large.go", func(t *testing.T) {
+					p := createAndLoadCore(t, "testdata/testprogs/large.go", test.buildFlags, test.env)
 
-				// Check object counts.
-				const depth = 5
-				const tsTrees = 3
-				const anTrees = 2
-				const nodes = 1<<depth - 1
-				if want := tsTrees*nodes + anTrees*nodes*2; myPairObjects != want {
-					t.Errorf("expected exactly %d main.myPair objects, found %d", want, myPairObjects)
-				}
-				if want := anTrees * nodes; anyNodeObjects != want {
-					t.Errorf("expected exactly %d main.anyNode objects, found %d", want, anyNodeObjects)
-				}
-				if want := tsTrees * nodes; typeSafeNodeObjects != want {
-					t.Errorf("expected exactly %d main.typeSafeNode[main.myPair] objects, found %d", want, typeSafeNodeObjects)
-				}
-				if want := 32 << 10; bigSliceElemObjects != want {
-					t.Errorf("expected exactly %d main.globalBigSliceInt objects, found %d", want, bigSliceElemObjects)
-				}
+					// Statistics to check.
+					largeObjects := 0 // Number of objects larger than (or equal to largeObjectThreshold)
+					p.ForEachObject(func(x Object) bool {
+						siz := p.Size(x)
+						//typ := typeName(p, x)
+						//t.Logf("%s size=%d", typ, p.Size(x))
+						if siz >= largeObjectThreshold {
+							largeObjects++
+						}
+						return true
+					})
+					if largeObjects != 1 {
+						t.Errorf("expected exactly one object larger than %d, found %d", largeObjectThreshold, largeObjects)
+					}
+				})
+				t.Run("trees.go", func(t *testing.T) {
+					p := createAndLoadCore(t, "testdata/testprogs/trees.go", test.buildFlags, test.env)
+
+					// Statistics to check.
+					n := 0
+					myPairObjects := 0
+					anyNodeObjects := 0
+					typeSafeNodeObjects := 0
+
+					p.ForEachObject(func(x Object) bool {
+						typ := typeName(p, x)
+						//t.Logf("%s size=%d", typ, p.Size(x))
+						switch typ {
+						case "main.myPair":
+							myPairObjects++
+						case "main.anyNode":
+							anyNodeObjects++
+						case "main.typeSafeNode[main.myPair]":
+							typeSafeNodeObjects++
+						}
+						n++
+						return true
+					})
+					if n < 10 {
+						t.Errorf("#objects = %d, want >10", n)
+					}
+
+					// Check object counts.
+					const depth = 5
+					const tsTrees = 3
+					const anTrees = 2
+					const nodes = 1<<depth - 1
+					if want := tsTrees*nodes + anTrees*nodes*2; myPairObjects != want {
+						t.Errorf("expected exactly %d main.myPair objects, found %d", want, myPairObjects)
+					}
+					if want := anTrees * nodes; anyNodeObjects != want {
+						t.Errorf("expected exactly %d main.anyNode objects, found %d", want, anyNodeObjects)
+					}
+					if want := tsTrees * nodes; typeSafeNodeObjects != want {
+						t.Errorf("expected exactly %d main.typeSafeNode[main.myPair] objects, found %d", want, typeSafeNodeObjects)
+					}
+				})
 			})
 		}
 	})
