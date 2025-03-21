@@ -68,14 +68,14 @@ func (p *Process) makeCompositeRoot(name string, typ *Type, fr *Frame, pieces []
 	return r
 }
 
-func (pr *Process) readRootPtr(r *Root, offset int64) core.Address {
+func (pr *Process) readRootPtr(r *Root, offset int64) (value, from core.Address) {
 	// TODO(mknyszek): Little-endian only.
 	ptrBuf := make([]byte, pr.proc.PtrSize())
-	pr.readRootAt(r, ptrBuf, offset)
+	from = pr.readRootAt(r, ptrBuf, offset)
 	if pr.proc.PtrSize() == 4 {
-		return core.Address(binary.LittleEndian.Uint32(ptrBuf))
+		return core.Address(binary.LittleEndian.Uint32(ptrBuf)), from
 	}
-	return core.Address(binary.LittleEndian.Uint64(ptrBuf))
+	return core.Address(binary.LittleEndian.Uint64(ptrBuf)), from
 }
 
 // ReadRootAt reads data out of this root. offset+len(b) must be less than r.Type.Size.

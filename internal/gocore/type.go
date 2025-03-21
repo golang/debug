@@ -5,6 +5,7 @@
 package gocore
 
 import (
+	"encoding/binary"
 	"fmt"
 	"reflect"
 	"strings"
@@ -525,18 +526,13 @@ func (p *Process) doTypeHeap() {
 	}
 
 	// Get typings starting at roots.
-	fr := &frameReader{p: p}
 	p.ForEachRoot(func(r *Root) bool {
-		if len(r.pieces) == 1 && r.pieces[0].kind == addrPiece {
-			addr := core.Address(r.pieces[0].value)
-			if r.Frame != nil {
-				fr.live = r.Frame.Live
-				p.typeObject(addr, r.Type, fr, add)
-			} else {
-				p.typeObject(addr, r.Type, p.proc, add)
-			}
+		rr := &rootReaderAt{p: p, r: r}
+		if r.Frame != nil {
+			rr.frameLive = r.Frame.Live
+			p.typeObject(rr, r.Type, add)
 		} else {
-			// TODO(mknyszek): Support roots broken into pieces.
+			p.typeObject(rr, r.Type, add)
 		}
 		return true
 	})
@@ -551,7 +547,7 @@ func (p *Process) doTypeHeap() {
 			continue
 		}
 		for i := int64(0); i < c.r; i++ {
-			p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
+			p.typeObject(&addrReaderAt{p, c.a.Add(i * c.t.Size)}, c.t, add)
 		}
 	}
 
@@ -581,26 +577,82 @@ func (p *Process) doTypeHeap() {
 	}
 }
 
-type reader interface {
-	ReadPtr(core.Address) core.Address
-	ReadInt(core.Address) int64
+// valueReaderAt is an interface that abstracts over reading logically contiguous
+// values. This is to allow contiguously reading values that are not actually stored
+// contiguously.
+type valueReaderAt interface {
+	// ReadPtrAt loads a core.Address at offset bytes from the start of the value.
+	//
+	// Returns the code.Address read and the address it was read from, if there exists
+	// such a meaningful address (that is, from might be zero if, for example, the
+	// core.Address was read out of a register).
+	ReadPtrAt(offset int64) (value, from core.Address)
+
+	// ReadIntAt loads a Go 'int' at offset bytes from the start of the value.
+	//
+	// Returns the 'int' read and the address it was read from, if there exists
+	// such a meaningful address (that is, from might be zero if, for example, the
+	// 'int' was read out of a register).
+	ReadIntAt(offset int64) (value int64, from core.Address)
+
+	// Advance returns a new valueReaderAt that starts at an offset into the value
+	// represented by this valueReaderAt. This is useful for reading, for example,
+	// struct values. Each field value in the struct can be referenced by advancing
+	// to the field offset.
+	Advance(offset int64) valueReaderAt
 }
 
-// A frameReader reads data out of a stack frame.
-// Any pointer slots marked as dead will read as nil instead of their real value.
-type frameReader struct {
-	p    *Process
-	live map[core.Address]bool
+// addrReaderAt is a trivial valueReaderAt that reads a value stored contiguously
+// in memory at some address.
+type addrReaderAt struct {
+	p *Process
+	a core.Address
 }
 
-func (fr *frameReader) ReadPtr(a core.Address) core.Address {
-	if !fr.live[a] {
-		return 0
+func (ar *addrReaderAt) ReadPtrAt(offset int64) (value, from core.Address) {
+	return ar.p.proc.ReadPtr(ar.a.Add(offset)), ar.a.Add(offset)
+}
+
+func (ar *addrReaderAt) ReadIntAt(offset int64) (value int64, from core.Address) {
+	return ar.p.proc.ReadInt(ar.a.Add(offset)), ar.a.Add(offset)
+}
+
+func (ar *addrReaderAt) Advance(offset int64) valueReaderAt {
+	nar := *ar
+	nar.a = nar.a.Add(offset)
+	return &nar
+}
+
+// rootReaderAt is a valueReaderAt that reads a value stored logically contiguously
+// in a Root.
+type rootReaderAt struct {
+	p         *Process
+	r         *Root
+	offset    int64
+	frameLive map[core.Address]bool
+}
+
+func (rr *rootReaderAt) ReadPtrAt(offset int64) (value, from core.Address) {
+	ptr, from := rr.p.readRootPtr(rr.r, offset+rr.offset)
+	if from != 0 && rr.frameLive != nil && !rr.frameLive[from] {
+		return 0, from
 	}
-	return fr.p.proc.ReadPtr(a)
+	return ptr, from
 }
-func (fr *frameReader) ReadInt(a core.Address) int64 {
-	return fr.p.proc.ReadInt(a)
+
+func (rr *rootReaderAt) ReadIntAt(offset int64) (value int64, from core.Address) {
+	var i [8]byte
+	from = rr.p.readRootAt(rr.r, i[:], offset+rr.offset)
+	if rr.p.proc.PtrSize() == 4 {
+		return int64(binary.LittleEndian.Uint32(i[:])), from
+	}
+	return int64(binary.LittleEndian.Uint64(i[:])), from
+}
+
+func (rr *rootReaderAt) Advance(offset int64) valueReaderAt {
+	nrr := *rr
+	nrr.offset += offset
+	return &nrr
 }
 
 func methodFromMethodValueWrapper(name string) (string, bool) {
@@ -616,7 +668,7 @@ func ifaceIndir(t core.Address, p *Process) bool {
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
 // and the type + repeat count of the thing that it points to.
-func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
+func (p *Process) typeObject(r valueReaderAt, t *Type, add func(core.Address, *Type, int64)) {
 	ptrSize := p.proc.PtrSize()
 
 	switch t.Kind {
@@ -631,13 +683,12 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// a dead eface variable on the stack: the data field
 		// will return nil because it's dead, but the type pointer
 		// will likely be bogus.
-		data := a.Add(ptrSize)
-		if r.ReadPtr(data) == 0 { // nil interface
+		if value, _ := r.ReadPtrAt(ptrSize); value == 0 { // nil interface
 			return
 		}
 		// Use the type word to determine the type
 		// of the pointed-to object.
-		typPtr := r.ReadPtr(a)
+		typPtr, data := r.ReadPtrAt(0)
 		if typPtr == 0 { // nil interface
 			return
 		}
@@ -651,7 +702,8 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			// Indirect interface: the interface introduced a new
 			// level of indirection, not reflected in the type.
 			// Read through it.
-			add(r.ReadPtr(data), typ, 1)
+			value, _ := r.ReadPtrAt(ptrSize)
+			add(value, typ, 1)
 			return
 		}
 
@@ -672,27 +724,24 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 					}
 				}
 			}
-			if directTyp.Kind == KindPtr {
-				p.typeObject(data, directTyp, r, add)
-				break
-			}
-			if directTyp.Kind == KindFunc {
-				add(data, directTyp, 1)
+			if directTyp.Kind == KindPtr || directTyp.Kind == KindFunc {
+				p.typeObject(r.Advance(ptrSize), directTyp, add)
 				break
 			}
 			panic(fmt.Sprintf("type of direct interface, originally %s (kind %s), isn't a pointer: %s (kind %s)", typ, typ.Kind, directTyp, directTyp.Kind))
 		}
 	case KindString:
-		ptr := r.ReadPtr(a)
-		len := r.ReadInt(a.Add(ptrSize))
+		ptr, _ := r.ReadPtrAt(0)
+		len, _ := r.ReadIntAt(ptrSize)
 		add(ptr, t.Elem, len)
 	case KindSlice:
-		ptr := r.ReadPtr(a)
-		cap := r.ReadInt(a.Add(2 * ptrSize))
+		ptr, _ := r.ReadPtrAt(0)
+		cap, _ := r.ReadIntAt(2 * ptrSize)
 		add(ptr, t.Elem, cap)
 	case KindPtr:
 		if t.Elem != nil { // unsafe.Pointer has a nil Elem field.
-			add(r.ReadPtr(a), t.Elem, 1)
+			ptr, _ := r.ReadPtrAt(0)
+			add(ptr, t.Elem, 1)
 		}
 	case KindFunc:
 		// The referent is a closure. We don't know much about the
@@ -700,7 +749,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// The runtime._type we want exists in the binary (for all
 		// heap-allocated closures, anyway) but it would be hard to find
 		// just given the pc.
-		closure := r.ReadPtr(a)
+		closure, _ := r.ReadPtrAt(0)
 		if closure == 0 {
 			break
 		}
@@ -716,7 +765,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			// TODO: better value for size?
 			f.closure = ft
 		}
-		p.typeObject(closure, ft, r, add)
+		p.typeObject(&addrReaderAt{p, closure}, ft, add)
 
 		// Handle the special case for method value.
 		// It's a single-entry closure laid out like {pc uintptr, x T}.
@@ -726,7 +775,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 				for _, v := range p.dwarfVars[mf] {
 					if v.kind == dwarfParam {
 						ptr := closure.Add(p.proc.PtrSize())
-						p.typeObject(ptr, v.typ, r, add)
+						p.typeObject(&addrReaderAt{p, ptr}, v.typ, add)
 						break
 					}
 				}
@@ -735,7 +784,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	case KindArray:
 		n := t.Elem.Size
 		for i := int64(0); i < t.Count; i++ {
-			p.typeObject(a.Add(i*n), t.Elem, r, add)
+			p.typeObject(r.Advance(i*n), t.Elem, add)
 		}
 	case KindStruct:
 		if strings.HasPrefix(t.Name, "hash<") {
@@ -746,11 +795,12 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			var n int64
 			for _, f := range t.Fields {
 				if f.Name == "buckets" {
-					bPtr = p.proc.ReadPtr(a.Add(f.Off))
+					bPtr, _ = r.ReadPtrAt(f.Off)
 					bTyp = f.Type.Elem
 				}
 				if f.Name == "B" {
-					n = int64(1) << p.proc.ReadUint8(a.Add(f.Off))
+					shift, _ := r.ReadIntAt(f.Off)
+					n = int64(1) << uint8(shift)
 				}
 			}
 			add(bPtr, bTyp, n)
@@ -759,13 +809,13 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		for _, f := range t.Fields {
 			// hchan.buf(in chan) is an unsafe.pointer to an [dataqsiz]elemtype.
 			if strings.HasPrefix(t.Name, "hchan<") && f.Name == "buf" && f.Type.Kind == KindPtr {
-				elemType := p.proc.ReadPtr(a.Add(t.field("elemtype").Off))
-				bufPtr := r.ReadPtr(a.Add(t.field("buf").Off))
+				elemType, _ := r.ReadPtrAt(t.field("elemtype").Off)
+				bufPtr, _ := r.ReadPtrAt(t.field("buf").Off)
 				rTyp := p.runtimeType2Type(elemType, 0)
-				dataqsiz := p.proc.ReadUintptr(a.Add(t.field("dataqsiz").Off))
+				dataqsiz, _ := r.ReadPtrAt(t.field("dataqsiz").Off)
 				add(bufPtr, rTyp, int64(dataqsiz))
 			}
-			p.typeObject(a.Add(f.Off), f.Type, r, add)
+			p.typeObject(r.Advance(f.Off), f.Type, add)
 		}
 	default:
 		panic(fmt.Sprintf("unknown type kind %s\n", t.Kind))

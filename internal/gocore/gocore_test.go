@@ -301,9 +301,7 @@ func TestObjects(t *testing.T) {
 					}
 
 					// Check object counts.
-					//
-					// TODO(mknyszek): Support typing roots in pieces.
-					if want := 32 << 10; bigSliceElemObjects != want {
+					if want := 3 * (32 << 10); bigSliceElemObjects != want {
 						t.Errorf("expected exactly %d main.bigSliceElem objects, found %d", want, bigSliceElemObjects)
 					}
 				})

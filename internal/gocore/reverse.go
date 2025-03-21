@@ -86,7 +86,7 @@ func (p *Process) ForEachReversePtr(y Object, fn func(x Object, r *Root, i, j in
 	idx, _ := p.findObjectIndex(p.Addr(y))
 	for _, a := range p.redge[p.ridx[idx]:p.ridx[idx+1]] {
 		if a.root != nil {
-			ptr := p.readRootPtr(a.root, a.rOff)
+			ptr, _ := p.readRootPtr(a.root, a.rOff)
 			if !fn(0, a.root, a.rOff, ptr.Sub(p.Addr(y))) {
 				return
 			}
