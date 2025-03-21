@@ -296,13 +296,15 @@ func TestObjects(t *testing.T) {
 						}
 						return true
 					})
-					if largeObjects != 1 {
-						t.Errorf("expected exactly one object larger than %d, found %d", largeObjectThreshold, largeObjects)
+					if largeObjects != 3 {
+						t.Errorf("expected exactly three object larger than %d, found %d", largeObjectThreshold, largeObjects)
 					}
 
 					// Check object counts.
+					//
+					// TODO(mknyszek): Support typing roots in pieces.
 					if want := 32 << 10; bigSliceElemObjects != want {
-						t.Errorf("expected exactly %d main.globalBigSliceInt objects, found %d", want, bigSliceElemObjects)
+						t.Errorf("expected exactly %d main.bigSliceElem objects, found %d", want, bigSliceElemObjects)
 					}
 				})
 				t.Run("large.go", func(t *testing.T) {
