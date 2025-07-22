@@ -370,6 +370,38 @@ func TestObjects(t *testing.T) {
 	})
 }
 
+func TestGlobals(t *testing.T) {
+	t.Run("goroot", func(t *testing.T) {
+		for _, test := range variations {
+			t.Run(test.String(), func(t *testing.T) {
+				t.Run("globals.go", func(t *testing.T) {
+					p := createAndLoadCore(t, "testdata/testprogs/globals.go", test.buildFlags, test.env)
+					for _, g := range p.Globals() {
+						var want []bool
+						switch g.Name {
+						default:
+							continue
+						case "main.string_":
+							want = []bool{true, false}
+						case "main.slice":
+							want = []bool{true, false, false}
+						case "main.struct_":
+							want = []bool{false, false, false, true, false, true, false, false}
+						}
+						a := g.Addr()
+						for i, wantPtr := range want {
+							gotPtr := p.IsPtr(a.Add(int64(i) * p.Process().PtrSize()))
+							if gotPtr != wantPtr {
+								t.Errorf("IsPtr(%s+%d)=%v, want %v", g.Name, int64(i)*p.Process().PtrSize(), gotPtr, wantPtr)
+							}
+						}
+					}
+				})
+			})
+		}
+	})
+}
+
 // typeName returns a string representing the type of this object.
 func typeName(c *Process, x Object) string {
 	size := c.Size(x)

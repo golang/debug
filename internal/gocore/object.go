@@ -129,8 +129,8 @@ func (p *Process) IsPtr(a core.Address) bool {
 				continue
 			}
 			gc := m.r.Field("gc" + s + "mask").Field("bytedata").Address()
-			i := a.Sub(min)
-			return p.proc.ReadUint8(gc.Add(i/8))>>uint(i%8) != 0
+			i := a.Sub(min) / p.proc.PtrSize()
+			return p.proc.ReadUint8(gc.Add(i/8))>>uint(i%8)&1 != 0
 		}
 	}
 	// Everywhere else can't be a pointer. At least, not a pointer into the Go heap.
