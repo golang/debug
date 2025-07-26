@@ -664,7 +664,7 @@ func ifaceIndir(t core.Address, p *Process) bool {
 	typr := p.findRuntimeType(t)
 	if tflagDirectIface, ok := p.rtConsts.find("internal/abi.TFlagDirectIface"); ok {
 		// 1.26 and later, direct bit stored in tflags
-		return typr.TFlag()&uint8(tflagDirectIface) != 0
+		return typr.TFlag()&uint8(tflagDirectIface) == 0
 	}
 	// 1.25 and earlier, direct bit stored in kind field
 	return typr.Kind_()&uint8(p.rtConsts.get("internal/abi.KindDirectIface")) == 0
