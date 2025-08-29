@@ -362,6 +362,9 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 	spanManual := uint8(p.rtConsts.get("runtime.mSpanManual"))
 	spanDead := uint8(p.rtConsts.get("runtime.mSpanDead"))
 
+	// Green Tea GC.
+	spanInlineMarkBitsTyp := p.rtTypeByName["runtime.spanInlineMarkBits"]
+
 	// Malloc header constants (go 1.22+)
 	minSizeForMallocHeader := int64(p.rtConsts.get("runtime.minSizeForMallocHeader"))
 	mallocHeaderSize := int64(p.rtConsts.get("runtime.mallocHeaderSize"))
@@ -474,7 +477,16 @@ func readHeap0(p *Process, mheap region, arenas []arena, arenaBaseOffset int64) 
 			if elemSize <= minSizeForMallocHeader {
 				// Heap bits in span.
 				bitmapSize := spanSize / int64(heap.ptrSize) / 8
-				bitmapAddr := min.Add(spanSize - bitmapSize)
+				markBitsSize := int64(0)
+				if spanInlineMarkBitsTyp != nil && elemSize >= 16 {
+					// Green Tea GC only: we store the mark bits inline
+					// in the span for small objects >= 16 bytes in size.
+					markBitsSize = spanInlineMarkBitsTyp.Size
+				}
+				objectsSize := spanSize - (bitmapSize + markBitsSize)
+
+				// Span layout: [objects][heapbits][markbits] (mark bits with Green Tea GC only)
+				bitmapAddr := min.Add(objectsSize)
 				for i := int64(0); i < bitmapSize; i++ {
 					bits := p.proc.ReadUint8(bitmapAddr.Add(int64(i)))
 					for j := int64(0); j < 8; j++ {
