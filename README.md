@@ -6,7 +6,7 @@ This repository holds utilities and libraries for debugging Go programs.
 
 **WARNING!**
 Please expect breaking changes and unstable APIs.
-Most of them are currently are at an early, *experimental* stage.
+Most of them are currently at an early, *experimental* stage.
 
 ## Report Issues / Send Patches
 
