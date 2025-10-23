@@ -40,7 +40,7 @@ import (
 	"strings"
 
 	"github.com/go-delve/delve/pkg/dwarf/op"
-	"github.com/go-delve/delve/pkg/proc"
+	"github.com/go-delve/delve/service/debugger"
 )
 
 var verbflag = flag.Int("v", 0, "Verbose trace output level")
@@ -404,16 +404,44 @@ func pstring(addr int64, pcs []op.Piece, err error) (string, error) {
 	return r, nil
 }
 
-// processParams initializes a 'proc.BinaryInfo' object for the binary
-// in question and then walks the formal parameters of the selected
+// processParams launches the executable via debugger.Launch and gets the
+// BinaryInfo object from it. It then walks the formal parameters of the selected
 // function, invoking the Location method on each param to read its
 // location expression. Results are dumped to stdout, and an error is
 // returned if something goes wrong.
 func processParams(executable string, fi *finfo) error {
 	const _cfa = 0x1000
-	bi := proc.NewBinaryInfo(runtime.GOOS, runtime.GOARCH)
-	if err := bi.LoadBinaryInfo(executable, 0, []string{}); err != nil {
-		return err
+
+	config := &debugger.Config{
+		Backend:        "native",
+		WorkingDir:     ".",
+		CheckGoVersion: false,
+	}
+	dbg, err := debugger.New(config, []string{executable})
+	if err != nil {
+		return fmt.Errorf("failed to create debugger: %v", err)
+	}
+
+	// Ensure we detach and kill the process when done
+	defer dbg.Detach(true)
+
+	// Get the BinaryInfo from the launched process
+	tgt, unlock := dbg.LockTargetGroup()
+	bi := tgt.Selected.BinInfo()
+	unlock()
+
+	// Disassemble the function to find RET instructions for return parameter verification
+	instructions, err := dbg.Disassemble(0, fi.dwLoPC, fi.dwHiPC)
+	if err != nil {
+		return fmt.Errorf("failed to disassemble function: %v", err)
+	}
+
+	// Find all RET instructions
+	var retAddrs []uint64
+	for _, instr := range instructions {
+		if instr.IsRet() {
+			retAddrs = append(retAddrs, instr.Loc.PC)
+		}
 	}
 
 	// Walk subprogram DIE's children.
@@ -433,21 +461,41 @@ func processParams(executable string, fi *finfo) error {
 		if e.Tag == dwarf.TagFormalParameter {
 			isrvar = e.Val(dwarf.AttrVarParam).(bool)
 		}
-		addr, pieces, _, err := bi.Location(e, dwarf.AttrLocation, fi.dwLoPC, op.DwarfRegisters{CFA: _cfa, FrameBase: _cfa}, nil)
-		pdump, err := pstring(addr, pieces, err)
-		if err != nil {
-			if fmt.Sprintf("%s", err) == "empty OP stack" {
-				pdump = "<not available>"
-			} else {
-				return fmt.Errorf("bad return from bi.Location at pc 0x%x: %q\n", fi.dwLoPC, err)
-			}
-		}
-		wh := "in"
-		if isrvar {
-			wh = "out"
-		}
-		fmt.Printf("%d: %s-param %q loc=%q\n", idx, wh, name, pdump)
 
+		// For unnamed return parameters, verify location at all RET instructions. Unnamed anonymous return parameters should
+		// only be considered live around MakeResult OPs.
+		if isrvar {
+			if len(retAddrs) == 0 {
+				return fmt.Errorf("return parameter %q found but no RET instructions in function", name)
+			}
+
+			// Check location at each RET instruction
+			for retIdx, retPC := range retAddrs {
+				addr, pieces, _, err := bi.Location(e, dwarf.AttrLocation, retPC, op.DwarfRegisters{CFA: _cfa, FrameBase: _cfa}, nil)
+				pdump, err := pstring(addr, pieces, err)
+				if err != nil {
+					if fmt.Sprintf("%s", err) == "empty OP stack" {
+						pdump = "<not available>"
+					} else {
+						return fmt.Errorf("bad return from bi.Location at pc 0x%x: %q\n", retPC, err)
+					}
+				}
+				fmt.Printf("%d: out-param %q at RET[%d] loc=%q\n", idx, name, retIdx, pdump)
+			}
+		} else {
+			// For input parameters or named return values, use entry PC
+			pc := fi.dwLoPC
+			addr, pieces, _, err := bi.Location(e, dwarf.AttrLocation, pc, op.DwarfRegisters{CFA: _cfa, FrameBase: _cfa}, nil)
+			pdump, err := pstring(addr, pieces, err)
+			if err != nil {
+				if fmt.Sprintf("%s", err) == "empty OP stack" {
+					pdump = "<not available>"
+				} else {
+					return fmt.Errorf("bad return from bi.Location at pc 0x%x: %q\n", fi.dwLoPC, err)
+				}
+			}
+			fmt.Printf("%d: in-param %q loc=%q\n", idx, name, pdump)
+		}
 	}
 	return nil
 

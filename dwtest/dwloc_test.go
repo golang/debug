@@ -113,7 +113,7 @@ func runHarness(t *testing.T, harnessPath string, exePath string, fcn string) st
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("running 'harness -m %s -f %s': %v", exePath, fcn, err)
 	}
-	return strings.TrimSpace(string(b.Bytes()))
+	return strings.TrimSpace(b.String())
 }
 
 // gobuild is a helper to build a Go program from source code,
@@ -151,6 +151,7 @@ import (
 	"context"
 	"strings"
 	"fmt"
+	"net/http"
 )
 
 var G int
@@ -207,11 +208,109 @@ func (a Address) String() string {
 		return sb.String()
 }
 
+//go:noinline
+func Issue65405(a int, b string) (int, error) {
+	http.Handle("/", http.StripPrefix("/static/", http.FileServer(http.Dir("./output"))))
+	return a + len(b), nil
+}
+
+//go:noinline
+func RegisterLivenessNamedRetParam() (result int) {
+	// This function demonstrates the register reuse issue.
+	// The return value 'result' should only be valid in its register
+	// after it's actually set, not throughout the entire function.
+
+	// Early in the function, do some work that uses registers
+	x := 42
+	y := 100
+	z := x * y  // Register allocator may use RAX here for multiplication
+
+	// Do more work that might reuse the return register
+	for i := 0; i < 10; i++ {
+		z += i  // More register usage
+	}
+
+	// Only NOW do we actually set the return value
+	result = z  // Return value is only valid in RAX from here
+
+	// A debugger querying 'result' before this point would get
+	// incorrect values if the location list claims it's in RAX
+	// for the entire function
+	return result
+}
+
+//go:noinline
+func RegisterLivenessUnnamedRetParam() int {
+	x := 42
+	y := 100
+	z := x * y
+
+	for i := 0; i < 10; i++ {
+		z += i  // More register usage
+	}
+
+	return z
+}
+
+//go:noinline
+func multiReturn() (int, int, int, string, float64) {
+	return 1, 2, 3, "test", 4.5
+}
+
+//go:noinline
+func singleReturn() int {
+	return 42
+}
+
+//go:noinline
+func multiReturnStmts(i int) int {
+	if i < 10 {
+		return 55
+	}
+	i += 100
+	i *= i
+	return i
+}
+
+//go:noinline
+func ManyArgsWithNamedReturns(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p int) (sum int, product int) {
+	// Use all arguments in computations
+	sum = a + b + c + d + e + f + g + h
+	product = 1
+
+	// More operations to ensure all args are used
+	temp1 := i * j
+	temp2 := k * l
+	temp3 := m * n
+	temp4 := o * p
+
+	sum += temp1 + temp2 + temp3 + temp4
+
+	// Compute product using all arguments
+	product = (a + 1) * (b + 1) * (c + 1) * (d + 1)
+	product += (e + f) * (g + h) * (i + j) * (k + l)
+	product += (m + n) * (o + p)
+
+	// Final adjustments
+	sum = sum * 2
+	product = product / 2
+
+	return sum, product
+}
+
 func main() {
 	Issue47354("poo")
 	var d DB
 	d.Issue46845(context.Background(), nil, func(error) {}, "foo", nil)
 	Issue72053()
+	_, _ = Issue65405(42, "test")
+	a, b, _, _, _ := multiReturn()
+	f := singleReturn()
+	_ = a + b + f
+	_ = RegisterLivenessNamedRetParam()
+	_ = RegisterLivenessUnnamedRetParam()
+	_, _ = ManyArgsWithNamedReturns(1, 2, 3, 4, 5, 6, a, b, f, 1, 2, 3, 4, 5, 6, 7)
+	_ = multiReturnStmts(a+b)
 }
 
 `
@@ -243,8 +342,10 @@ func testIssue46845(t *testing.T, harnessPath string, ppath string) {
 4: in-param "release" loc="{ [0: S=0 RSI] }"
 5: in-param "query" loc="{ [0: S=8 R8] [1: S=8 R9] }"
 6: in-param "args" loc="{ [0: S=8 addr=0x1000] [1: S=8 addr=0x1008] [2: S=8 addr=0x1010] }"
-7: out-param "res" loc="<not available>"
-8: out-param "err" loc="<not available>"
+7: out-param "res" at RET[0] loc="addr=f98"
+7: out-param "res" at RET[1] loc="addr=f98"
+8: out-param "err" at RET[0] loc="addr=fa8"
+8: out-param "err" at RET[1] loc="addr=fa8"
 `,
 		"arm64": `
 1: in-param "db" loc="{ [0: S=0 R0] }"
@@ -261,7 +362,7 @@ func testIssue46845(t *testing.T, harnessPath string, ppath string) {
 	got := runHarness(t, harnessPath, ppath, "main."+fname)
 	want := strings.TrimSpace(expected[runtime.GOARCH])
 	if got != want {
-		t.Errorf("failed Issue47354 arch %s:\ngot: %s\nwant: %s",
+		t.Errorf("failed Issue46845 arch %s:\ngot: %s\nwant: %s",
 			runtime.GOARCH, got, want)
 	}
 }
@@ -270,7 +371,7 @@ func testIssue72053(t *testing.T, harnessPath string, ppath string) {
 	testenv.NeedsGo1Point(t, 25)
 	testenv.NeedsArch(t, "amd64")
 
-	want := "1: in-param \"a\" loc=\"{ [0: S=1 RAX] [1: S=7 addr=0x0] [2: S=8 RBX] [3: S=8 RCX] }\"\n2: out-param \"~r0\" loc=\"addr=fa8\""
+	want := "1: in-param \"a\" loc=\"{ [0: S=1 RAX] [1: S=7 addr=0x0] [2: S=8 RBX] [3: S=8 RCX] }\"\n2: out-param \"~r0\" at RET[0] loc=\"addr=fa8\""
 	got := runHarness(t, harnessPath, ppath, "main.Address.String")
 	if got != want {
 		t.Errorf("failed Issue72053 arch %s:\ngot: %q\nwant: %q",
@@ -297,6 +398,182 @@ func testRuntimeThrow(t *testing.T, harnessPath, nooptHarnessPath, ppath string)
 		if got != want {
 			t.Errorf("failed RuntimeThrow arch %s, harness %s:\ngot: %q\nwant: %q", runtime.GOARCH, harness, got, want)
 		}
+	}
+}
+
+func testIssue65405(t *testing.T, harnessPath string, ppath string) {
+	// Test that function parameters have location lists
+	expected := map[string]string{
+		"amd64": `1: in-param "a" loc="{ [0: S=0 RAX] }"
+2: in-param "b" loc="{ [0: S=8 RBX] [1: S=8 RCX] }"
+3: out-param "~r0" at RET[0] loc="{ [0: S=0 RAX] }"
+4: out-param "~r1" at RET[0] loc="{ [0: S=8 RBX] [1: S=8 RCX] }"`,
+		"arm64": `1: in-param "a" loc="{ [0: S=0 R0] }"
+2: in-param "b" loc="{ [0: S=8 R1] [1: S=8 R2] }"
+3: out-param "~r0" at RET[0] loc="{ [0: S=0 R0] }"
+4: out-param "~r1" at RET[0] loc="{ [0: S=8 R1] [1: S=8 R2] }"`,
+	}
+	fname := "Issue65405"
+	got := runHarness(t, harnessPath, ppath, "main."+fname)
+	want := expected[runtime.GOARCH]
+	if got != want {
+		t.Errorf("failed Issue65405 arch %s:\ngot: %q\nwant: %q",
+			runtime.GOARCH, got, want)
+	}
+}
+
+func testReturnValueRegisters(t *testing.T, harnessPath string, ppath string) {
+	// Test return value register assignments for multiReturn function
+	// Verify that return values follow ABI conventions
+	expected := map[string]string{
+		"amd64": `1: out-param "~r0" at RET[0] loc="{ [0: S=0 RAX] }"
+2: out-param "~r1" at RET[0] loc="{ [0: S=0 RBX] }"
+3: out-param "~r2" at RET[0] loc="{ [0: S=0 RCX] }"
+4: out-param "~r3" at RET[0] loc="{ [0: S=8 RDI] [1: S=8 RSI] }"
+5: out-param "~r4" at RET[0] loc="{ [0: S=0 X0] }"`,
+		"arm64": `1: out-param "~r0" at RET[0] loc="{ [0: S=0 R0] }"
+2: out-param "~r1" at RET[0] loc="{ [0: S=0 R1] }"
+3: out-param "~r2" at RET[0] loc="{ [0: S=0 R2] }"
+4: out-param "~r3" at RET[0] loc="{ [0: S=8 R3] [1: S=8 R4] }"
+5: out-param "~r4" at RET[0] loc="{ [0: S=0 F0] }"`,
+	}
+	fname := "multiReturn"
+	got := runHarness(t, harnessPath, ppath, "main."+fname)
+	want := expected[runtime.GOARCH]
+	if got != want {
+		t.Errorf("failed ReturnValueRegisters arch %s:\ngot: %q\nwant: %q",
+			runtime.GOARCH, got, want)
+	}
+}
+
+func testRegisterLivenessNamedRetParam(t *testing.T, harnessPath, nooptHarnessPath, ppath, nooppath string) {
+	fname := "RegisterLivenessNamedRetParam"
+	expected := map[string]string{
+		"amd64": `1: out-param "result" at RET[0] loc="{ [0: S=0 RAX] }"`,
+		"arm64": ``,
+	}
+
+	// Test only optimized builds (non-optimized results are passed on the stack)
+	testCases := []struct {
+		name    string
+		harness string
+		binary  string
+	}{
+		{"optimized", harnessPath, ppath},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runHarness(t, tc.harness, tc.binary, "main."+fname)
+			want := expected[runtime.GOARCH]
+			if got != want {
+				t.Fatalf("return parameter 'result' has incorrect location in %s build:\ngot:\n%s\nwant:\n%s", tc.name, got, want)
+			}
+		})
+	}
+}
+
+func testLivenessForUnnamedRetParams(t *testing.T, harnessPath, nooptHarnessPath, ppath, nooppath string) {
+	// This test verifies that return parameters have precise location lists.
+	// Return parameters should only be valid in their ABI register after assignment,
+	// not throughout the entire function. The location list should start from the
+	// assignment point, not from function entry.
+
+	fname := "RegisterLivenessUnnamedRetParam"
+	expected := map[string]string{
+		"amd64": `1: out-param "~r0" at RET[0] loc="{ [0: S=0 RAX] }"`,
+		"arm64": ``,
+	}
+
+	// Test only optimized builds (non-optimized results are passed on the stack)
+	testCases := []struct {
+		name    string
+		harness string
+		binary  string
+	}{
+		{"optimized", harnessPath, ppath},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runHarness(t, tc.harness, tc.binary, "main."+fname)
+			want := expected[runtime.GOARCH]
+			if got != want {
+				t.Fatalf("return parameter 'result' has incorrect location in %s build:\ngot:\n%s\nwant:\n%s", tc.name, got, want)
+			}
+		})
+	}
+}
+
+func testManyArgsWithNamedReturns(t *testing.T, harnessPath, nooptHarnessPath, ppath, nooppath string) {
+	fname := "ManyArgsWithNamedReturns"
+	expected := map[string]string{
+		"amd64": `1: in-param "a" loc="{ [0: S=0 RAX] }"
+2: in-param "b" loc="{ [0: S=0 RBX] }"
+3: in-param "c" loc="{ [0: S=0 RCX] }"
+4: in-param "d" loc="{ [0: S=0 RDI] }"
+5: in-param "e" loc="{ [0: S=0 RSI] }"
+6: in-param "f" loc="{ [0: S=0 R8] }"
+7: in-param "g" loc="{ [0: S=0 R9] }"
+8: in-param "h" loc="{ [0: S=0 R10] }"
+9: in-param "i" loc="{ [0: S=0 R11] }"
+10: in-param "j" loc="addr=1000"
+11: in-param "k" loc="addr=1008"
+12: in-param "l" loc="addr=1010"
+13: in-param "m" loc="addr=1018"
+14: in-param "n" loc="addr=1020"
+15: in-param "o" loc="addr=1028"
+16: in-param "p" loc="addr=1030"
+17: out-param "sum" at RET[0] loc="{ [0: S=0 RAX] }"
+18: out-param "product" at RET[0] loc="{ [0: S=0 RBX] }"`,
+		"arm64": ``,
+	}
+
+	testCases := []struct {
+		name    string
+		harness string
+		binary  string
+	}{
+		{"optimized", harnessPath, ppath},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runHarness(t, tc.harness, tc.binary, "main."+fname)
+			want := expected[runtime.GOARCH]
+			if got != want {
+				t.Fatalf("return parameter 'result' has incorrect location in %s build:\ngot:\n%s\nwant:\n%s", tc.name, got, want)
+			}
+		})
+	}
+}
+
+func testMultipleReturnStmts(t *testing.T, harnessPath, nooptHarnessPath, ppath, nooppath string) {
+	fname := "multiReturnStmts"
+	expected := map[string]string{
+		"amd64": `1: in-param "i" loc="{ [0: S=0 RAX] }"
+2: out-param "~r0" at RET[0] loc="{ [0: S=0 RAX] }"
+2: out-param "~r0" at RET[1] loc="{ [0: S=0 RAX] }"`,
+		"arm64": ``,
+	}
+
+	// Test only optimized builds (non-optimized results are passed on the stack)
+	testCases := []struct {
+		name    string
+		harness string
+		binary  string
+	}{
+		{"optimized", harnessPath, ppath},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runHarness(t, tc.harness, tc.binary, "main."+fname)
+			want := expected[runtime.GOARCH]
+			if got != want {
+				t.Fatalf("return parameter 'result' has incorrect location in %s build:\ngot:\n%s\nwant:\n%s", tc.name, got, want)
+			}
+		})
 	}
 }
 
@@ -353,5 +630,29 @@ func TestDwarfVariableLocations(t *testing.T) {
 	t.Run("RuntimeThrow", func(t *testing.T) {
 		t.Parallel()
 		testRuntimeThrow(t, harnessPath, nooptHarnessPath, ppath)
+	})
+	t.Run("Issue65405", func(t *testing.T) {
+		t.Parallel()
+		testIssue65405(t, harnessPath, ppath)
+	})
+	t.Run("ReturnValueRegisters", func(t *testing.T) {
+		t.Parallel()
+		testReturnValueRegisters(t, harnessPath, ppath)
+	})
+	t.Run("RegisterLivenessNamedRetParam", func(t *testing.T) {
+		t.Parallel()
+		testRegisterLivenessNamedRetParam(t, harnessPath, nooptHarnessPath, ppath, nooppath)
+	})
+	t.Run("RegisterLivenessUnnamedRetParam", func(t *testing.T) {
+		t.Parallel()
+		testLivenessForUnnamedRetParams(t, harnessPath, nooptHarnessPath, ppath, nooppath)
+	})
+	t.Run("ManyArgsWithNamedReturns", func(t *testing.T) {
+		t.Parallel()
+		testManyArgsWithNamedReturns(t, harnessPath, nooptHarnessPath, ppath, nooppath)
+	})
+	t.Run("multiReturnStmts", func(t *testing.T) {
+		t.Parallel()
+		testMultipleReturnStmts(t, harnessPath, nooptHarnessPath, ppath, nooppath)
 	})
 }
