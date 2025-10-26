@@ -538,7 +538,6 @@ func readEntryPoint(meta metadata, notes noteMap) Address {
 			return Address(val)
 		}
 	}
-	return 0
 }
 
 func readFileMappings(meta metadata, notes noteMap) []namedMapping {
