@@ -1,6 +1,6 @@
 module golang.org/x/debug
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
