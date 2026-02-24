@@ -301,8 +301,8 @@ func readDWARFConstants(p *core.Process) (constsMap, error) {
 	return consts, nil
 }
 
-func readDWARFGlobals(p *core.Process, nRoots *int, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
-	d, err := p.DWARF()
+func readDWARFGlobals(p *Process, dwarfTypeMap map[dwarf.Type]*Type) ([]*Root, error) {
+	d, err := p.proc.DWARF()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DWARF: %v", err)
 	}
@@ -330,13 +330,13 @@ func readDWARFGlobals(p *core.Process, nRoots *int, dwarfTypeMap map[dwarf.Type]
 			continue
 		}
 		var a core.Address
-		if p.PtrSize() == 8 {
-			a = core.Address(p.ByteOrder().Uint64(loc[1:]))
+		if p.proc.PtrSize() == 8 {
+			a = core.Address(p.proc.ByteOrder().Uint64(loc[1:]))
 		} else {
-			a = core.Address(p.ByteOrder().Uint32(loc[1:]))
+			a = core.Address(p.proc.ByteOrder().Uint32(loc[1:]))
 		}
-		a = a.Add(int64(p.StaticBase()))
-		if !p.Writeable(a) {
+		a = a.Add(int64(p.proc.StaticBase()))
+		if !p.proc.Writeable(a) {
 			// Read-only globals can't have heap pointers.
 			// TODO: keep roots around anyway?
 			continue
@@ -357,7 +357,7 @@ func readDWARFGlobals(p *core.Process, nRoots *int, dwarfTypeMap map[dwarf.Type]
 			continue
 		}
 		typ := dwarfTypeMap[dt]
-		roots = append(roots, makeMemRoot(nRoots, nf.Val.(string), typ, nil, a))
+		roots = append(roots, p.makeMemRoot(nf.Val.(string), typ, nil, a))
 	}
 	return roots, nil
 }

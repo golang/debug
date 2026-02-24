@@ -41,19 +41,7 @@ func (r *Root) Addr() core.Address {
 }
 
 func (p *Process) makeMemRoot(name string, typ *Type, fr *Frame, addr core.Address) *Root {
-	return makeMemRoot(&p.nRoots, name, typ, fr, addr)
-}
-
-func makeMemRoot(nRoots *int, name string, typ *Type, fr *Frame, addr core.Address) *Root {
-	r := &Root{
-		Name:   name,
-		Type:   typ,
-		Frame:  fr,
-		pieces: []rootPiece{{size: typ.Size, kind: addrPiece, value: uint64(addr)}},
-		id:     *nRoots,
-	}
-	*nRoots += 1
-	return r
+	return p.makeCompositeRoot(name, typ, fr, []rootPiece{{size: typ.Size, kind: addrPiece, value: uint64(addr)}})
 }
 
 func (p *Process) makeCompositeRoot(name string, typ *Type, fr *Frame, pieces []rootPiece) *Root {

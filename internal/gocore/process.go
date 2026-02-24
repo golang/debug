@@ -74,7 +74,7 @@ type Process struct {
 	ridx             []int64
 	// Sorted list of all roots, sorted by id.
 	rootIdx []*Root
-	nRoots  int
+	nRoots  int // ID of next root.
 }
 
 type reverseEdge struct {
@@ -104,7 +104,7 @@ func Core(proc *core.Process) (p *Process, err error) {
 	if err != nil {
 		return nil, err
 	}
-	p.globals, err = readDWARFGlobals(proc, &p.nRoots, p.dwarfTypeMap)
+	p.globals, err = readDWARFGlobals(p, p.dwarfTypeMap)
 	if err != nil {
 		return nil, err
 	}
@@ -132,8 +132,8 @@ func Core(proc *core.Process) (p *Process, err error) {
 		return nil, err
 	}
 
-	// Fix up global roots that don't appear in DWARF, but still have live pointers.
-	p.globals, err = fixUpGlobals(proc, p.modules, p.globals, p.rtTypeByName["unsafe.Pointer"], &p.nRoots)
+	// Fix up global roots (p.globals] that don't appear in DWARF, but still have live pointers.
+	err = fixUpGlobals(p, p.rtTypeByName["unsafe.Pointer"])
 	if err != nil {
 		return nil, err
 	}
@@ -206,30 +206,31 @@ func forEachGlobalPtr(p *core.Process, modules []*module, f func(core.Address) b
 	}
 }
 
-func fixUpGlobals(p *core.Process, modules []*module, globals []*Root, unsafePtrType *Type, nRoots *int) ([]*Root, error) {
-	slices.SortFunc(globals, func(a, b *Root) int {
+func fixUpGlobals(p *Process, unsafePtrType *Type) error {
+	slices.SortFunc(p.globals, func(a, b *Root) int {
 		// Assume all globals have an address.
 		return cmp.Compare(a.Addr(), b.Addr())
 	})
 	var extraGlobals []*Root // Extra global roots not described by DWARF.
-	forEachGlobalPtr(p, modules, func(addr core.Address) bool {
-		if len(globals) > 0 {
+	forEachGlobalPtr(p.proc, p.modules, func(addr core.Address) bool {
+		if len(p.globals) > 0 {
 			// Skip over globals that are already accounted for.
-			i, ok := slices.BinarySearchFunc(globals, addr, func(a *Root, b core.Address) int {
+			i, ok := slices.BinarySearchFunc(p.globals, addr, func(a *Root, b core.Address) int {
 				return cmp.Compare(a.Addr(), b)
 			})
 			if i >= 0 && !ok {
 				i--
 			}
-			if i >= 0 && globals[i].Addr() != 0 && addr >= globals[i].Addr() && addr < globals[i].Addr().Add(globals[i].Type.Size) {
+			if i >= 0 && p.globals[i].Addr() != 0 && addr >= p.globals[i].Addr() && addr < p.globals[i].Addr().Add(p.globals[i].Type.Size) {
 				return true
 			}
 		}
-		root := makeMemRoot(nRoots, "unk", unsafePtrType, nil, addr)
+		root := p.makeMemRoot("unk", unsafePtrType, nil, addr)
 		extraGlobals = append(extraGlobals, root)
 		return true
 	})
-	return append(globals, extraGlobals...), nil
+	p.globals = append(p.globals, extraGlobals...)
+	return nil
 }
 
 // arena is a summary of the size of components of a heapArena.
