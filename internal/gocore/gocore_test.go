@@ -11,10 +11,13 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -36,8 +39,10 @@ func loadCore(t *testing.T, corePath, base, exePath string) *Process {
 	return p
 }
 
-// createAndLoadCore generates a core from a binary built with runtime.GOROOT().
-func createAndLoadCore(t *testing.T, srcFile string, buildFlags, env []string) *Process {
+// createAndLoadCore generates a core from a binary built with [runtime.GOROOT].
+// Returns the core as a [gocore.Process] and the crasher output (combined
+// stdout and stderr).
+func createAndLoadCore(t *testing.T, srcFile string, buildFlags, env []string) (proc *Process, output string) {
 	t.Helper()
 	testenv.MustHaveGoBuild(t)
 	switch runtime.GOOS {
@@ -56,12 +61,12 @@ func createAndLoadCore(t *testing.T, srcFile string, buildFlags, env []string) *
 	}
 
 	dir := t.TempDir()
-	file, output, err := generateCore(srcFile, dir, buildFlags, env)
-	t.Logf("crasher output: %s", output)
+	file, out, err := generateCore(srcFile, dir, buildFlags, env)
+	t.Logf("crasher output: %s", out)
 	if err != nil {
 		t.Fatalf("generateCore() got err %v want nil", err)
 	}
-	return loadCore(t, file, "", "")
+	return loadCore(t, file, "", ""), string(out)
 }
 
 func setupCorePattern(t *testing.T) func() {
@@ -140,7 +145,7 @@ func adjustCoreRlimit(t *testing.T) error {
 // doRunCrasher spawns the supplied cmd, propagating parent state (see
 // [exec.Cmd.Run]), and returns an error if the process failed to start or did
 // *NOT* crash.
-func doRunCrasher(cmd *exec.Cmd) (pid int, output []byte, err error) {
+func doRunCrasher(cmd *exec.Cmd) (pid int, outputt []byte, err error) {
 	var b bytes.Buffer
 	cmd.Stdout = &b
 	cmd.Stderr = &b
@@ -262,7 +267,7 @@ func TestVersions(t *testing.T) {
 		for _, test := range variations {
 			for _, src := range testSrcFiles(t) {
 				t.Run(test.String()+"/"+filepath.Base(src), func(t *testing.T) {
-					p := createAndLoadCore(t, src, test.buildFlags, test.env)
+					p, _ := createAndLoadCore(t, src, test.buildFlags, test.env)
 					checkProcess(t, p)
 				})
 			}
@@ -277,7 +282,7 @@ func TestObjects(t *testing.T) {
 		for _, test := range variations {
 			t.Run(test.String(), func(t *testing.T) {
 				t.Run("bigslice.go", func(t *testing.T) {
-					p := createAndLoadCore(t, "testdata/testprogs/bigslice.go", test.buildFlags, test.env)
+					p, _ := createAndLoadCore(t, "testdata/testprogs/bigslice.go", test.buildFlags, test.env)
 
 					// Statistics to check.
 					largeObjects := 0 // Number of objects larger than (or equal to largeObjectThreshold)
@@ -306,7 +311,7 @@ func TestObjects(t *testing.T) {
 					}
 				})
 				t.Run("large.go", func(t *testing.T) {
-					p := createAndLoadCore(t, "testdata/testprogs/large.go", test.buildFlags, test.env)
+					p, _ := createAndLoadCore(t, "testdata/testprogs/large.go", test.buildFlags, test.env)
 
 					// Statistics to check.
 					largeObjects := 0 // Number of objects larger than (or equal to largeObjectThreshold)
@@ -324,7 +329,7 @@ func TestObjects(t *testing.T) {
 					}
 				})
 				t.Run("trees.go", func(t *testing.T) {
-					p := createAndLoadCore(t, "testdata/testprogs/trees.go", test.buildFlags, test.env)
+					p, _ := createAndLoadCore(t, "testdata/testprogs/trees.go", test.buildFlags, test.env)
 
 					// Statistics to check.
 					n := 0
@@ -375,7 +380,7 @@ func TestGlobals(t *testing.T) {
 		for _, test := range variations {
 			t.Run(test.String(), func(t *testing.T) {
 				t.Run("globals.go", func(t *testing.T) {
-					p := createAndLoadCore(t, "testdata/testprogs/globals.go", test.buildFlags, test.env)
+					p, _ := createAndLoadCore(t, "testdata/testprogs/globals.go", test.buildFlags, test.env)
 					for _, g := range p.Globals() {
 						var want []bool
 						switch g.Name {
@@ -419,4 +424,207 @@ func typeName(c *Process, x Object) string {
 		}
 	}
 	return name
+}
+
+func TestReachable(t *testing.T) {
+	t.Run("goroot", func(t *testing.T) {
+		for _, test := range variations {
+			t.Run(test.String(), func(t *testing.T) {
+				p, output := createAndLoadCore(t, "testdata/testprogs/reachable.go", test.buildFlags, test.env)
+
+				// Find OBJPOINTER <addr> in output.
+				var addrStr string
+				for line := range strings.SplitSeq(output, "\n") {
+					if s, ok := strings.CutPrefix(line, "OBJPOINTER "); ok {
+						addrStr = s
+						break
+					}
+				}
+				if addrStr == "" {
+					t.Fatalf("OBJPOINTER not found in output")
+				}
+				addr, err := strconv.ParseUint(addrStr, 0, 64)
+				if err != nil {
+					t.Fatalf("can't parse %q as an object address: %v", addrStr, err)
+				}
+				obj, _ := p.FindObject(core.Address(addr))
+				if obj == 0 {
+					t.Fatalf("can't find object at address %s", addrStr)
+				}
+
+				var (
+					foundRoots     = make(map[string]int)
+					numPaths       int
+					numGlobalRoots int
+				)
+				for r, chain := range p.Reachable(obj) {
+					foundRoots[r.Name]++
+					numPaths++
+					if r.Frame == nil {
+						numGlobalRoots++ // Globals are roots without frames.
+					}
+
+					// Debug logging.
+					//
+					// This aims to be easy to read, without too much post-processing. For
+					// end-user output (e.g.: `reachable`), we may consider aggregating
+					// further.
+
+					// 1. Print a stack trace (if not global).
+					if r.Frame == nil {
+						t.Logf("[global]")
+					} else {
+						t.Logf("[goroutine]") // TODO(aktau): Print goroutine ID.
+					}
+					for _, fr := range slices.Backward(collectFrames(r.Frame)) {
+						// TODO: Print file/line information.
+						// TODO: We could print the binary PC (without load offset). But:
+						// Delve prints the PC with offset, `go tool objdump` without.
+						t.Logf("0x%x %s", fr.PC(), fr.Func().Name())
+					}
+
+					// 2. Print the object structure, starting with the root.
+					//
+					// NOTE: It's possible for two roots to have the exact same source
+					// offset: if there are multiple references in the source, but the
+					// compiler has physically deduplicated them.
+					var sb strings.Builder
+					fmt.Fprintf(&sb, "\t%s\t", r.Name)
+					for i, o := range chain {
+						if i == 0 {
+							loc := "[reg/imm]"
+							if r.HasAddress() {
+								loc = ""
+								if r.Frame != nil {
+									loc += fmt.Sprintf("[SP+0x%x]", r.Addr()-r.Frame.Min())
+								}
+								loc += fmt.Sprintf(" 0x%x", r.Addr())
+							}
+							fmt.Fprintf(&sb, "%s (%s%s)", loc, r.Type.String(), objRegionRaw(r.Type, 0, o.SrcOff))
+						}
+						fmt.Fprintf(&sb, " → 0x%x (%s%s)", p.Addr(o.Dst), typeName(p, o.Dst), objRegion(p, o.Dst, o.DstOff))
+						if i != 0 {
+							prev := chain[i-1]
+							// TODO(aktau): Make this follow a better format once we actually
+							// find multi-level objects. For example, if prev.dstOff ==
+							// o.srcOff, we can avoid repeating the same thing.
+							fmt.Fprintf(&sb, " | %s → %s", objField(p, prev.Dst, o.SrcOff), objRegion(p, o.Dst, o.DstOff))
+						}
+					}
+					t.Log(sb.String())
+				}
+
+				// TODO(aktau): Return all possible paths per root, not just the first one.
+				// TODO(aktau): Ensure "compoundWrapperVal" in complicatedRetain is found.
+				expectedRoots := map[string]int{
+					"main.gPlainMyObj": 1, // global
+					"ref":              6, // This is actually one too many, see TODOs in reachable.go's renameRetain.
+					"otherRef":         4,
+					"unk":              4, // TODO(aktau): these are: compoundWrapperRef, anyWrapperRef, multiWrapperRef, multiWrapperRefReuse. Fix type resolution.
+				}
+				var totalRoots int
+				for name, want := range expectedRoots {
+					if got := foundRoots[name]; got != want {
+						t.Errorf("root %q: got %d paths, want %d", name, got, want)
+					}
+					totalRoots += want
+				}
+				if numPaths != totalRoots {
+					t.Errorf("got %d total roots, want %d", numPaths, totalRoots)
+				}
+				if got, want := len(foundRoots), 4; got != want {
+					t.Errorf("got %d unique roots (%v), want %d", got, slices.Collect(maps.Keys(foundRoots)), want)
+				}
+				if numGlobalRoots != 1 {
+					t.Errorf("got %d global roots, want 1", numGlobalRoots)
+				}
+			})
+		}
+	})
+}
+
+func collectFrames(fr *Frame) []*Frame {
+	var frames []*Frame
+	for ; /* f := fr.Parent()*/ fr != nil; fr = fr.Parent() {
+		frames = append(frames, fr)
+	}
+	return frames
+}
+
+// typeFieldName returns the name of the field at offset off in t.
+func typeFieldName(t *Type, off int64) string {
+	switch t.Kind {
+	case KindBool, KindInt, KindUint, KindFloat:
+		return ""
+	case KindComplex:
+		if off == 0 {
+			return ".real"
+		}
+		return ".imag"
+	case KindIface, KindEface:
+		if off == 0 {
+			return ".type"
+		}
+		return ".data"
+	case KindPtr, KindFunc:
+		return ""
+	case KindString:
+		if off == 0 {
+			return ".ptr"
+		}
+		return ".len"
+	case KindSlice:
+		if off == 0 {
+			return ".ptr"
+		}
+		if off <= t.Size/2 {
+			return ".len"
+		}
+		return ".cap"
+	case KindArray:
+		s := t.Elem.Size
+		i := off / s
+		return fmt.Sprintf("[%d]%s", i, typeFieldName(t.Elem, off-i*s))
+	case KindStruct:
+		for _, f := range t.Fields {
+			if f.Off <= off && off < f.Off+f.Type.Size {
+				return "." + f.Name + typeFieldName(f.Type, off-f.Off)
+			}
+		}
+	}
+	return ".???"
+}
+
+// Returns the name of the field at offset off in x.
+func objField(c *Process, x Object, off int64) string {
+	t, r := c.Type(x)
+	if t == nil {
+		return fmt.Sprintf("f+0x%x", off)
+	}
+	s := ""
+	if r > 1 {
+		s = fmt.Sprintf("[%d]", off/t.Size)
+		off %= t.Size
+	}
+	return s + typeFieldName(t, off)
+}
+
+func objRegion(c *Process, x Object, off int64) string {
+	t, r := c.Type(x)
+	return objRegionRaw(t, r, off)
+}
+
+func objRegionRaw(t *Type, r, off int64) string {
+	if t == nil {
+		return fmt.Sprintf("+0x%x", off)
+	}
+	if off == 0 {
+		return ""
+	}
+	s := ""
+	if r > 1 {
+		s = fmt.Sprintf("[%d]", off/t.Size)
+		off %= t.Size
+	}
+	return s + typeFieldName(t, off)
 }

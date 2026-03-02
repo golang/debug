@@ -630,73 +630,40 @@ func runReachable(cmd *cobra.Command, args []string) {
 		exitf("can't find object at address %s\n", args[0])
 	}
 
-	// Breadth-first search backwards until we reach a root.
-	type hop struct {
-		i int64         // offset in "from" object (the key in the path map) where the pointer is
-		x gocore.Object // the "to" object
-		j int64         // the offset in the "to" object
-	}
-	depth := map[gocore.Object]int{}
-	depth[obj] = 0
-	q := []gocore.Object{obj}
-	done := false
-	for !done {
-		if len(q) == 0 {
-			panic("can't find a root that can reach the object")
+	for r, path := range c.Reachable(obj) {
+		if r.Frame == nil {
+			// Print global
+			fmt.Printf("%s", r.Name)
+		} else {
+			// Print stack up to frame in question.
+			var frames []*gocore.Frame
+			for f := r.Frame.Parent(); f != nil; f = f.Parent() {
+				frames = append(frames, f)
+			}
+			for k := len(frames) - 1; k >= 0; k-- {
+				fmt.Printf("%s\n", frames[k].Func().Name())
+			}
+			// Print frame + variable in frame.
+			fmt.Printf("%s.%s", r.Frame.Func().Name(), r.Name)
 		}
-		y := q[0]
-		q = q[1:]
-		c.ForEachReversePtr(y, func(x gocore.Object, r *gocore.Root, i, j int64) bool {
-			if r != nil {
-				// found it.
-				if r.Frame == nil {
-					// Print global
-					fmt.Printf("%s", r.Name)
-				} else {
-					// Print stack up to frame in question.
-					var frames []*gocore.Frame
-					for f := r.Frame.Parent(); f != nil; f = f.Parent() {
-						frames = append(frames, f)
-					}
-					for k := len(frames) - 1; k >= 0; k-- {
-						fmt.Printf("%s\n", frames[k].Func().Name())
-					}
-					// Print frame + variable in frame.
-					fmt.Printf("%s.%s", r.Frame.Func().Name(), r.Name)
-				}
-				fmt.Printf("%s → \n", typeFieldName(r.Type, i))
+		for i, z := range path {
+			if i == 0 {
+				// TODO: Perhaps also print destination "region", to unify format with
+				// non-Root:
+				//  fmt.Printf("%s → %s\n", typeFieldName(r.Type, z.SrcOff), objRegion(c, z.Dst, z.DstOff))
+				fmt.Printf("%s → \n", typeFieldName(r.Type, z.SrcOff))
+			} else {
+				prev := path[i-1]
+				fmt.Printf(" %s → %s\n", objField(c, prev.Dst, z.SrcOff), objRegion(c, z.Dst, z.DstOff))
+			}
+			fmt.Printf("%x %s", c.Addr(z.Dst), typeName(c, z.Dst))
+		}
+		fmt.Println()
 
-				z := y
-				for {
-					fmt.Printf("%x %s", c.Addr(z), typeName(c, z))
-					if z == obj {
-						fmt.Println()
-						break
-					}
-					// Find an edge out of z which goes to an object
-					// closer to obj.
-					c.ForEachPtr(z, func(i int64, w gocore.Object, j int64) bool {
-						if d, ok := depth[w]; ok && d < depth[z] {
-							fmt.Printf(" %s → %s", objField(c, z, i), objRegion(c, w, j))
-							z = w
-							return false
-						}
-						return true
-					})
-					fmt.Println()
-				}
-				done = true
-				return false
-			}
-			if _, ok := depth[x]; ok {
-				// we already found a shorter path to this object.
-				return true
-			}
-			depth[x] = depth[y] + 1
-			q = append(q, x)
-			return true
-		})
+		return // Exit after a single path.
 	}
+
+	panic("can't find a root that can reach the object")
 }
 
 // httpServer is the singleton http server, initialized by

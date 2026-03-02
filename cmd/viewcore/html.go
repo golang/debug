@@ -411,6 +411,21 @@ func objField(c *gocore.Process, x gocore.Object, off int64) string {
 	return s + typeFieldName(t, off)
 }
 
+// objRegion is like [objField], but doesn't print anything if pointing to the
+// start of typed objects.
+//
+// This is useful to avoid visual clutter when dealing with non-interior
+// pointers (offset 0), which could (in source code) be either a reference to
+// the entire object or to the first field. For example, suppose there is a
+// pointer to a struct like so:
+//
+//	type x struct {
+//	  mu sync.Mutex
+//	  el []byte
+//	}
+//
+// And there is user code holding a reference (&x), then objField(c, x, 0x0)
+// would return ".mu.state", while objRegion would return "".
 func objRegion(c *gocore.Process, x gocore.Object, off int64) string {
 	t, r := c.Type(x)
 	if t == nil {
