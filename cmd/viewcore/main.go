@@ -204,7 +204,7 @@ func useLine(c *cobra.Command) string {
 // with viewcore's unusual command structure.
 func commandPath(c *cobra.Command) string {
 	if c.HasParent() {
-		return commandPath(c) + " " + c.Name()
+		return commandPath(c.Parent()) + " " + c.Name()
 	}
 	return c.Use
 }
