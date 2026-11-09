@@ -194,6 +194,9 @@ func (p *Process) findItab() runtimeItab {
 
 // Type is the field representing either abi.ITab.Type or runtime.itab._type.
 func (r runtimeItab) Type() *Field {
+	if r.typ == nil {
+		return nil
+	}
 	return r.typ.field("Type")
 }
 
@@ -698,6 +701,9 @@ func (p *Process) typeObject(r valueReaderAt, t *Type, add func(core.Address, *T
 			return
 		}
 		if t.Kind == KindIface {
+			if p.findItab().Type() == nil {
+				return
+			}
 			typPtr = p.proc.ReadPtr(typPtr.Add(p.findItab().Type().Off))
 		}
 		// TODO: for KindEface, type typPtr. It might point to the heap
